@@ -347,17 +347,30 @@ export function contextSegments(ratio, breakdown) {
   ].filter((part) => part.fraction > 0);
 }
 
-/// 上下文 + 统计:底栏一颗药丸(上下文占比),点击弹出详情 popover。
+/// 后台任务状态 → 人读文案。对齐 Mac BackgroundJobPresentation.statusLabel。
+function jobStatusLabel(status) {
+  switch (status) {
+    case "running": return t("jobs.running");
+    case "stopping": return t("jobs.stopping");
+    case "completed": return t("jobs.completed");
+    case "killed": return t("jobs.killed");
+    case "failed": return t("jobs.failed");
+    default: return String(status ?? "");
+  }
+}
+
+/// 上下文 + 统计 + 后台任务:底栏一颗药丸(上下文占比),点击弹出详情 popover。
 /// 对齐 Mac 的 JobListAction —— 触发钮只给一个最小摘要,明细都在浮层里。
 export function mountStatsBar(trigger, menu, { onCompact } = {}) {
   const ring = trigger.querySelector(".stats-ring");
 
   return {
-    set({ contextPressure, sessionStats, tokenUsage, contextBreakdown, presetName }) {
+    set({ contextPressure, sessionStats, tokenUsage, contextBreakdown, presetName, jobs }) {
       const ratio = contextRatio(contextPressure);
       const rows = statsRows(sessionStats, tokenUsage);
-      // 两者都没有时整颗药丸消失,底栏不留空位。
-      trigger.hidden = ratio == null && rows.length === 0;
+      const jobList = Array.isArray(jobs) ? jobs : [];
+      // 上下文、统计、后台任务都没有时整颗药丸消失,底栏不留空位。
+      trigger.hidden = ratio == null && rows.length === 0 && jobList.length === 0;
       if (trigger.hidden) {
         menu.replaceChildren();
         menu.hidePopover?.();
@@ -440,6 +453,22 @@ export function mountStatsBar(trigger, menu, { onCompact } = {}) {
           list.append(dt, dd);
         }
         menu.append(list);
+      }
+      // ── 后台任务(对齐 Mac JobListAction 的明细列表)──
+      if (jobList.length) {
+        const section = el("div", "stats-jobs");
+        section.append(el("div", "stats-menu-title", t("jobs.title")));
+        for (const job of jobList) {
+          const row = el("div", "stats-job-row");
+          const live = job.status === "running" || job.status === "stopping";
+          row.classList.toggle("live", live);
+          row.append(el("span", "stats-job-label", job.label || job.kind || job.id || ""));
+          const status = el("span", "stats-job-status status-" + (job.status ?? "unknown"));
+          status.textContent = jobStatusLabel(job.status);
+          row.append(status);
+          section.append(row);
+        }
+        menu.append(section);
       }
     }
   };

@@ -11,23 +11,34 @@ export function createSessionListStore() {
   // 标记(或丢了细节的重放帧)仍按 approval 上报 —— 那是阻塞最硬的一种。
   const awaitingKinds = new Map();
   const draftSessionIds = new Set();
+  // sessionId → summary 索引表。侧栏行状态/标题/活跃排序是每帧事件驱动的,
+  // 之前都用 summaries.find(...) 线性查找,会话一多就成了 O(n²) 热点。
+  const byId = new Map();
 
   function notify() {
     for (const listener of listeners) listener(summaries);
   }
 
   function upsert(summary) {
-    const index = summaries.findIndex((item) => item.sessionId === summary.sessionId);
-    if (index === -1) {
+    const existing = byId.get(summary.sessionId);
+    if (!existing) {
       summaries = [...summaries, summary];
-    } else {
-      summaries = summaries.map((item, i) => (i === index ? { ...item, ...summary } : item));
+      byId.set(summary.sessionId, summary);
+      return;
     }
+    const merged = { ...existing, ...summary };
+    const index = summaries.indexOf(existing);
+    const next = summaries.slice();
+    next[index] = merged;
+    summaries = next;
+    byId.set(summary.sessionId, merged);
   }
 
   return {
     replaceAll(items) {
       summaries = [...(items ?? [])].sort(byUpdatedDesc);
+      byId.clear();
+      for (const item of summaries) byId.set(item.sessionId, item);
       notify();
     },
     upsertAndNotify(summary) {
@@ -35,7 +46,7 @@ export function createSessionListStore() {
       notify();
     },
     setStatus(sessionId, running) {
-      const target = summaries.find((item) => item.sessionId === sessionId);
+      const target = byId.get(sessionId);
       if (target && target.running !== running) {
         upsert({ ...target, running });
         notify();
@@ -45,7 +56,7 @@ export function createSessionListStore() {
     /// 「谁最近在动」一致(对齐 macOS 丢帧修复保留的 recordActivity 偷看)。
     /// 不在列表里的会话忽略 —— host/session-added 或下次 refreshList 会补上。
     recordActivity(sessionId, updatedAt = Date.now()) {
-      const target = summaries.find((item) => item.sessionId === sessionId);
+      const target = byId.get(sessionId);
       if (!target) return;
       if ((target.updatedAt ?? 0) >= updatedAt) return;
       upsert({ ...target, updatedAt });
@@ -55,7 +66,7 @@ export function createSessionListStore() {
     /// 后台会话的标题投影:写进 summary 的 projections.values.title ——
     /// 与 session.list 基线同形状,列表行读的就是这个位置。
     setTitle(sessionId, title) {
-      const target = summaries.find((item) => item.sessionId === sessionId);
+      const target = byId.get(sessionId);
       if (!target) return;
       if (target.projections?.values?.title === title) return;
       upsert({
@@ -69,6 +80,7 @@ export function createSessionListStore() {
     },
     remove(sessionId) {
       summaries = summaries.filter((item) => item.sessionId !== sessionId);
+      byId.delete(sessionId);
       awaitingKinds.delete(sessionId);
       draftSessionIds.delete(sessionId);
       notify();

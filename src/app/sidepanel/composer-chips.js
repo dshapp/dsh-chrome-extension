@@ -93,6 +93,12 @@ export function insertReference(draft, occurrences, span, reference) {
 /// 镜像层:把草稿逐段渲染,占位符渲染成胶囊 <span>。
 /// 只负责画,不接收事件(pointer-events 交给上层 textarea)。
 export function renderChipMirror(mirror, draft, occurrences) {
+  // 无占位符快速路径:没有胶囊要画,只保留一个零宽字符占住行高,
+  // 跳过全文遍历与逐字符切分(长草稿打字的主要热点之一)。
+  if (occurrences.length === 0 && draft.indexOf(PLACEHOLDER) === -1) {
+    mirror.replaceChildren(document.createTextNode("\u200b"));
+    return;
+  }
   mirror.replaceChildren();
   const byOffset = new Map(occurrences.map((o) => [o.offset, o]));
   let cursor = 0;

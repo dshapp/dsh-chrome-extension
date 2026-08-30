@@ -533,10 +533,28 @@ async function safeClickPoint(tabId, selector, { scroll = true } = {}) {
 
 // ---------------------------------------------------------------- tools
 
+/**
+ * Schemes the debugger can never attach to. Opening such a page still works —
+ * the tab navigates for real — but every CDP-powered tool (snapshot, click,
+ * network, screenshot) is unavailable on it, because chrome.debugger refuses
+ * to touch privileged browser UI.
+ */
+const PRIVILEGED_URL = /^(chrome|chrome-extension|chrome-untrusted|devtools|edge|edge-extension|view-source):/i
+
+/** Whether the debugger has any chance of attaching to a page at this URL. */
+function isDebuggableTarget(url) {
+  return !PRIVILEGED_URL.test(url)
+}
+
 const tools = {
   async navigate({ session, url, newTab, group_title: groupTitle }) {
-    if (!/^https?:\/\//.test(url || '')) {
-      throw new Error('url must be an absolute http(s) URL')
+    // Accept any URL the browser can open, not just http(s): file:, about:,
+    // data:, blob: and internal schemes like chrome: are all valid navigation
+    // targets. chrome.tabs.update validates the rest, and its rejection is
+    // surfaced verbatim to the caller.
+    const target = typeof url === 'string' ? url.trim() : ''
+    if (!target) {
+      throw new Error('url is required')
     }
     let tabId = sessionTabs.get(session)
     if (newTab || tabId == null) {
@@ -550,13 +568,35 @@ const tools = {
       tabId = created.id
       sessionTabs.set(session, tabId)
       await groupTab(session, tabId, groupTitle)
-      await attach(tabId)
-      await chrome.tabs.update(tabId, { url })
+      // about:blank is always debuggable, so this attach cannot fail for a
+      // legitimate reason; tolerate it anyway so a privileged target (where the
+      // debugger detaches on navigation) still opens.
+      try {
+        await attach(tabId)
+      } catch {
+        // Opening the privileged page still proceeds; only CDP tools are lost.
+      }
+      await chrome.tabs.update(tabId, { url: target })
     } else {
-      // An existing session tab is already attached, but make sure of it
-      // before navigating so its next page is recorded too.
-      await attach(tabId)
-      await chrome.tabs.update(tabId, { url })
+      // An existing session tab is usually already attached, but navigating
+      // from a privileged page (a prior chrome:// navigate) makes the debugger
+      // refuse. Navigate first, then re-attach the debuggable target, so a
+      // privileged origin cannot block an otherwise ordinary navigation.
+      let attachedNow = false
+      try {
+        await attach(tabId)
+        attachedNow = true
+      } catch {
+        // Current page is not debuggable (chrome://, etc.). Re-attach below.
+      }
+      await chrome.tabs.update(tabId, { url: target })
+      if (!attachedNow && isDebuggableTarget(target)) {
+        try {
+          await attach(tabId)
+        } catch {
+          // e.g. a file: target without "Allow access to file URLs".
+        }
+      }
     }
     await waitForLoad(tabId)
     const tab = await chrome.tabs.get(tabId)
@@ -2148,12 +2188,36 @@ let socket = null
 let state = 'disconnected'
 let currentUrl = ''
 
+// 断线期间暂存的可重放帧(工具结果)。连接恢复后按序重放,
+// 避免浏览器工具执行期间断线导致 tool_result 被静默丢弃。
+const pending = []
+const MAX_PENDING = 500
+
 function isConnected() {
   return state === 'connected'
 }
 
-function send(frame) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame))
+function flushPending() {
+  if (socket?.readyState !== WebSocket.OPEN || pending.length === 0) return
+  while (pending.length) {
+    const frame = pending.shift()
+    socket.send(JSON.stringify(frame))
+  }
+}
+
+// replayable: 断线时是否入队等待重放。hello/pong 每次连接重发即可,只有
+// 工具结果承载着不可再生的执行产出,值得排队重放。
+function send(frame, { replayable = false } = {}) {
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(frame))
+    return
+  }
+  if (!replayable) return
+  if (pending.length >= MAX_PENDING) {
+    // 队列溢出时丢最旧:保留最近的结果比保留最早的有价值。
+    pending.shift()
+  }
+  pending.push(frame)
 }
 
 function teardown() {
@@ -2202,6 +2266,7 @@ function connect(url) {
     state = 'connected'
     clearTimeout(guard)
     send({ type: 'hello', payload: { extensionVersion: chrome.runtime.getManifest().version } })
+    flushPending()
   })
 
   candidate.addEventListener('message', (event) => {
@@ -2248,18 +2313,18 @@ async function runToolCall(frame) {
       type: 'tool_result',
       responseToRequestId: requestId,
       payload: { error: `unknown tool: ${name}` },
-    })
+    }, { replayable: true })
     return
   }
   try {
     const data = await handler(payload.args || {})
-    send({ type: 'tool_result', responseToRequestId: requestId, payload: { data } })
+    send({ type: 'tool_result', responseToRequestId: requestId, payload: { data } }, { replayable: true })
   } catch (failure) {
     send({
       type: 'tool_result',
       responseToRequestId: requestId,
       payload: { error: failure?.message ?? String(failure) },
-    })
+    }, { replayable: true })
   }
 }
 

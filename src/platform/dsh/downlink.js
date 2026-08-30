@@ -18,6 +18,9 @@ export const DshStreamState = Object.freeze({
 
 // ---- iframe 中继载体 ----
 function createIframeCarrier(baseUrl, onFrame, onStreamDown) {
+  // 后端同源 origin:iframe 加载 ${baseUrl}/ 后其页面 origin 就是它,
+  // 中继帧必须来自这个 origin,否则任意页面都能伪装成中继向扩展注入帧。
+  const iframeOrigin = new URL(baseUrl).origin;
   const iframe = document.createElement("iframe");
   iframe.src = `${baseUrl}/`;
   iframe.hidden = true;
@@ -28,12 +31,13 @@ function createIframeCarrier(baseUrl, onFrame, onStreamDown) {
 
   const messageHandler = (event) => {
     if (event.source !== iframe.contentWindow) return;
-    if (!event.origin?.startsWith("chrome-extension://") ) { /* relay 消息 origin 是扩展页自己 */ }
+    // 中继帧只能来自后端同源页(iframe 自己),拒绝其余 origin 的伪造消息。
+    if (event.origin !== iframeOrigin) return;
     const data = event.data;
     if (data?.source !== "dsh-relay") return;
     if (data.type === "ready") {
       ready = true;
-      for (const stream of STREAMS) iframe.contentWindow.postMessage({ source: "dsh-relay-parent", type: "open", stream }, "*");
+      for (const stream of STREAMS) iframe.contentWindow.postMessage({ source: "dsh-relay-parent", type: "open", stream }, iframeOrigin);
       return;
     }
     if (data.type === "open") openedStreams.add(data.stream);
@@ -59,8 +63,8 @@ function createIframeCarrier(baseUrl, onFrame, onStreamDown) {
     stop() {
       window.removeEventListener("message", messageHandler);
       try {
-        iframe.contentWindow?.postMessage({ source: "dsh-relay-parent", type: "close", stream: "mux" }, "*");
-        iframe.contentWindow?.postMessage({ source: "dsh-relay-parent", type: "close", stream: "host" }, "*");
+        iframe.contentWindow?.postMessage({ source: "dsh-relay-parent", type: "close", stream: "mux" }, iframeOrigin);
+        iframe.contentWindow?.postMessage({ source: "dsh-relay-parent", type: "close", stream: "host" }, iframeOrigin);
       } catch { /* noop */ }
       iframe.remove();
     },
@@ -71,27 +75,36 @@ function createIframeCarrier(baseUrl, onFrame, onStreamDown) {
 // ---- 直连载体(测试/非扩展环境) ----
 function createDirectCarrier(baseUrl, onFrame, onStreamDown) {
   const sockets = new Map();
+  // 真正完成握手(OPEN)的流。sockets.size 在 new WebSocket 时就已经 +1,
+  // 用它判就绪会在握手尚未完成时误判连接成功,导致后续读取读到一个未就绪的流。
+  const openedStreams = new Set();
   const openSocket = (stream) => {
     const url = baseUrl.replace(/^http/, "ws") + `/api/events.${stream}`;
     const socket = new WebSocket(url);
     sockets.set(stream, socket);
+    socket.onopen = () => openedStreams.add(stream);
     socket.onmessage = (event) => onFrame(event.data, stream);
-    socket.onclose = () => { sockets.delete(stream); onStreamDown(stream); };
+    socket.onclose = () => {
+      sockets.delete(stream);
+      openedStreams.delete(stream);
+      onStreamDown(stream);
+    };
   };
   for (const stream of STREAMS) openSocket(stream);
   return {
     async opened(timeoutMs = STREAM_OPEN_TIMEOUT_MS) {
       const start = Date.now();
-      while (sockets.size < STREAMS.length) {
+      while (openedStreams.size < STREAMS.length) {
         if (Date.now() - start > timeoutMs) throw new Error("下行流直连打开超时");
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     },
     stop() {
-      for (const socket of sockets.values()) { socket.onclose = null; socket.close(); }
+      for (const socket of sockets.values()) { socket.onopen = null; socket.onclose = null; socket.close(); }
       sockets.clear();
+      openedStreams.clear();
     },
-    get openCount() { return sockets.size; }
+    get openCount() { return openedStreams.size; }
   };
 }
 
@@ -206,6 +219,11 @@ export function createDownlink(options) {
       this.stop();
       stopped = false;
       connect();
+    },
+    // 应用层请求重建连接(stream/error 帧触发)。与 restart 不同:走 teardown 的
+    // 指数退避阶梯,而不是立即 connect,这样突发错误帧只会调度一次重连。
+    forceReconnect() {
+      teardown();
     },
     get state() {
       return state;

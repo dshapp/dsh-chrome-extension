@@ -20,6 +20,8 @@ const notifier = createBackgroundNotifier({
 });
 
 async function pollSessions() {
+  // 先恢复持久化的运行集合:worker 可能刚被回收重启,漏了状态会漏报完成通知。
+  await notifier.loadRunning();
   try {
     const api = createApiClient({ baseUrl: await settings.getBackendUrl() });
     const value = await api.call("session.list", {});

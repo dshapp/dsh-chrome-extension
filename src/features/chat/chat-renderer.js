@@ -161,12 +161,14 @@ export function agentStatusLabel(snapshot, { awaitingTurnStart = false } = {}) {
   if (awaitingTurnStart) return t("statusPreparing");
   if (!snapshot.running) return null;
   const nodes = snapshot.nodes ?? [];
-  const last = nodes[nodes.length - 1];
+  const last = snapshot.lastNode ?? nodes[nodes.length - 1];
   if (!last || last.kind === NodeKind.user) return t("statusWaitingModel");
 
   // 有任何工具在跑就报它——工具行本身有运行态图标,这里给出同样的文案,
-  // 方便该行滚出可视区时仍能确认状态。
-  const runningTool = [...nodes].reverse().find((n) => n.kind === NodeKind.toolCall && n.result == null);
+  // 方便该行滚出可视区时仍能确认状态。优先读 store 缓存的标量,避免每帧
+  // 复制整个 nodes 数组反向扫描。
+  const runningTool = snapshot.runningTool
+    ?? [...nodes].reverse().find((n) => n.kind === NodeKind.toolCall && n.result == null);
   if (runningTool) return toolRowModel(runningTool).summary || t("working");
 
   if (last.kind === NodeKind.assistant) {
@@ -181,7 +183,7 @@ export function agentStatusLabel(snapshot, { awaitingTurnStart = false } = {}) {
 export function isThinking(snapshot) {
   if (!snapshot.running) return false;
   const nodes = snapshot.nodes ?? [];
-  const last = nodes[nodes.length - 1];
+  const last = snapshot.lastNode ?? nodes[nodes.length - 1];
   if (last?.kind !== NodeKind.assistant || !isNodeRunning(last)) return false;
   // 末块是 reasoning 且还没有任何文本产出 = 正在思考。
   const blocks = (last.blocks ?? []).filter(Boolean);

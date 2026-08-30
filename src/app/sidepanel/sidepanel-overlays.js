@@ -59,13 +59,25 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   });
   // 搜索:优先用宿主的全文索引(能搜到正文);索引未开启时回退到本地标题过滤。
   let searchToken = 0;
-  search.addEventListener("input", async () => {
+  let searchDebounceTimer = null;
+  // 历史浮层一次性渲染的行数上限,超出部分折叠为提示行(见 render)。
+  const MAX_RENDERED_ROWS = 500;
+  search.addEventListener("input", () => {
     const query = search.value.trim();
     const token = ++searchToken;
     // 搜索词一变,结果集就是新的 —— 高亮统一回到第一行。
     if (!query) { render(filterItems(""), { resetSelection: true }); return; }
     // 先用本地结果即时反馈,避免输入时列表空白。
     render(filterItems(query), { resetSelection: true });
+    // 远端全文搜索按 250ms 防抖:连续输入只发最后一次请求。
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null;
+      void runRemoteSearch(query, token);
+    }, 250);
+  });
+
+  async function runRemoteSearch(query, token) {
     try {
       const remote = await deps.sessions.search(query);
       if (token !== searchToken || !remote) return;   // 迟到的结果 / 索引未开启
@@ -77,7 +89,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         .filter(Boolean);
       if (merged.length) render(merged, { resetSelection: true });
     } catch { /* 搜索失败不打断输入 */ }
-  });
+  }
   // 工作目录菜单是独立的原生 popover,渲染在 top layer 里,不是 #history-popover
   // 的 DOM 子节点 —— 点它会被判成"点在历史浮层之外"而把历史关掉,连带菜单一起消失。
   const workspaceMenu = document.querySelector("#workspace-menu");
@@ -148,17 +160,19 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   }
 
   function render(items, { resetSelection = false } = {}) {
-    renderedItems = items;
+    const visible = items.length > MAX_RENDERED_ROWS ? items.slice(0, MAX_RENDERED_ROWS) : items;
+    const overflow = items.length - visible.length;
+    renderedItems = visible;
     if (resetSelection) selectedIndex = 0;
     // 列表内容变了,旧的下标可能越界 —— 夹回合法范围而不是留着悬空。
-    if (selectedIndex >= items.length) selectedIndex = items.length - 1;
+    if (selectedIndex >= visible.length) selectedIndex = visible.length - 1;
     if (selectedIndex < 0) selectedIndex = 0;
-    if (!items.length) {
+    if (!visible.length) {
       selectedIndex = -1;
       list.innerHTML = `<li class="history-empty">${escapeHtml(t("sessions.empty"))}</li>`;
       return;
     }
-    list.innerHTML = items.map((item, index) => {
+    list.innerHTML = visible.map((item, index) => {
       const hint = shortcutLabels && index < 9 ? shortcutLabels.historyItem(index + 1) : "";
       const trailing = resolveSessionRowTrailing({
         awaitingUser: listStore?.awaitingUser(item.sessionId) ?? null,
@@ -182,7 +196,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         `<button type="button" data-action="archive" title="${escapeHtml(t("session.archive"))}" aria-label="${escapeHtml(t("session.archive"))}">${HISTORY_ACTION_ICONS.archive}</button>`,
         `</span></li>`
       ].join("");
-    }).join("");
+    }).join("") + (overflow > 0
+      ? '<li class="history-more">' + escapeHtml(t("sessions.more", { n: String(overflow) })) + '</li>'
+      : "");
   }
 
   /// 移动高亮行。步进后在两端循环 —— 列表短的时候按到底再按一下能绕回开头,

@@ -24,6 +24,8 @@ const MAX_BLOCK_INDEX = 1024;
 const MAX_NESTING_DEPTH = 16;
 /// 每个 projection key 保留的版本数(重连对齐需要"不晚于基线的最新版本")。
 const MAX_PROJECTION_VERSIONS = 32;
+/// 事件窗口条数上限。超限时截断最旧事件并标记,由 service 从历史重载恢复完整窗口。
+const MAX_WINDOW_EVENTS = 20000;
 
 function isObject(value) {
   return value != null && typeof value === "object" && !Array.isArray(value);
@@ -52,6 +54,8 @@ export function createSessionStore() {
       // 按 seq 升序去重的原始事件窗口。乱序到达的事件插回它应有的位置并重折,
       // 而不是丢弃——丢弃会永久丢失这条事件承载的状态(见 applyEvent)。
       window: [],
+      // 窗口曾因超限被截断(replayWindow 完整性受损),需从历史重载恢复。
+      windowTruncated: false,
       // keyed contexts:key → context 记录
       contexts: new Map(),
       // "turn:step" → step/start 事件时间(TTFT 的分发边界)
@@ -195,6 +199,13 @@ export function createSessionStore() {
 
     const extendsTail = index === state.window.length;
     state.window.splice(index, 0, { event, view });
+
+    // 窗口超限:截断最旧事件(已折叠的 nodes 不受影响),并标记需重载 ——
+    // replayWindow 依赖完整窗口,截断后重折结果不再可靠。
+    if (state.window.length > MAX_WINDOW_EVENTS) {
+      state.window.splice(0, state.window.length - MAX_WINDOW_EVENTS);
+      state.windowTruncated = true;
+    }
 
     // 只有能延长尾部、且不改写历史投影的事件才允许向前折叠;
     // 其余一律重折整个窗口,让结果与按序重放完全一致。
@@ -1157,6 +1168,15 @@ export function createSessionStore() {
     keyed.sort((a, b) => (a.anchor - b.anchor) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     state.nodes = keyed.map((k) => k.node);
     state.nodesDirty = false;
+    // 派生缓存:流式期间每帧都要读尾节点与运行中的工具,这里一次性算好,
+    // 渲染层就不用每帧复制整个 nodes 数组反向扫描(那是 O(n) 且带分配)。
+    state.lastNode = state.nodes[state.nodes.length - 1] ?? null;
+    let runningTool = null;
+    for (let i = state.nodes.length - 1; i >= 0; i -= 1) {
+      const node = state.nodes[i];
+      if (node.kind === NodeKind.toolCall && node.result == null) { runningTool = node; break; }
+    }
+    state.runningTool = runningTool;
   }
 
   // ---- 对外快照 ----
@@ -1172,6 +1192,8 @@ export function createSessionStore() {
       currentTurn: state.currentTurn,
       lastSeq: state.lastSeq,
       nodes: state.nodes,
+      lastNode: state.lastNode ?? null,
+      runningTool: state.runningTool ?? null,
       todos: state.todos,
       goal: state.goal,
       tokenUsage: state.tokenUsage,
@@ -1209,6 +1231,8 @@ export function createSessionStore() {
       const ctx = state.contexts.get(toolKey(callId));
       return ctx?.type === "toolCall" ? ctx.node : null;
     },
-    getSnapshot: snapshot
+    getSnapshot: snapshot,
+    get windowTruncated() { return state.windowTruncated === true; },
+    clearWindowTruncated() { state.windowTruncated = false; }
   };
 }

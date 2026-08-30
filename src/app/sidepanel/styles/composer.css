@@ -693,7 +693,6 @@
 .trigger-item.highlighted,
 .trigger-item.highlighted:hover {
   background: color-mix(in oklab, var(--accent) 12%, transparent);
-  box-shadow: inset 2px 0 0 0 var(--accent);
 }
 /* 指令名称必须完整显示:不收缩、不省略;空间不足只压缩右侧描述 */
 .trigger-item-name {

@@ -22,6 +22,17 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   const store = createSessionStore();
   let currentSessionId = null;
   const runtimeListeners = new Set();
+  // loadHistory 的竞态令牌:并发加载时只有最后一次真正落进 store。
+  let loadToken = 0;
+  // stream/error 帧触发的重连去重:突发错误帧合并成一次退避重连(见 handleMuxFrame)。
+  let streamErrorReconnectTimer = null;
+  function scheduleStreamErrorReconnect() {
+    if (streamErrorReconnectTimer) return;
+    streamErrorReconnectTimer = setTimeout(() => {
+      streamErrorReconnectTimer = null;
+      connection.forceReconnect?.();
+    }, 100);
+  }
 
   function notifyRuntime() {
     const snapshot = store.getSnapshot();
@@ -93,7 +104,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     },
 
     async loadHistory(sessionId) {
+      const token = ++loadToken;
       const value = await connection.call(RPC.sessionHistory, { sessionId });
+      // 等待期间用户又切换了会话:迟到的历史不得覆盖新会话的 store。
+      if (token !== loadToken) return value;
       ensureStore(sessionId);
       store.reset(sessionId);
       for (const entry of value.events ?? []) {
@@ -162,6 +176,14 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       return value?.archivedSessionIds ?? [];
     },
 
+    /// 子代理目录:parentSessionId 的直属子代理(healthy child / diagnostic)。
+    async listSubagents(parentSessionId) {
+      return connection.call(RPC.subagentList, { parentSessionId });
+    },
+    /// 中断一个子代理。address = { parentSessionId, childSessionId, mode }。
+    async interruptSubagent(address) {
+      return connection.call(RPC.subagentInterrupt, address);
+    },
     /// 可选的 agent 预设列表与切换。
     async listAgentPresets() {
       return connection.call(RPC.agentPresetList, {});
@@ -209,6 +231,11 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
             return;
           }
           store.applyEvent(event, payload.view);
+          if (store.windowTruncated) {
+            // 窗口超限被截断:从历史重载恢复完整窗口。loadHistory 自带竞态令牌。
+            store.clearWindowTruncated();
+            void service.loadHistory(payload.sessionId).catch(() => {});
+          }
           notifyRuntime();
           break;
         }
@@ -257,6 +284,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           break;
         case MUX.streamError:
           console.warn("[dsh] stream error", payload.error);
+          scheduleStreamErrorReconnect();
           break;
         default:
           break;

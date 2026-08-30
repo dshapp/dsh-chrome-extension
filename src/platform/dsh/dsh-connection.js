@@ -51,6 +51,14 @@ export function createDshConnection(options) {
     get streamState() {
       return downlink?.state ?? DshStreamState.DISCONNECTED;
     },
+    // 应用层请求重建连接(stream/error 帧):委托给 downlink 的退避重连。
+    forceReconnect() {
+      downlink?.forceReconnect?.();
+    },
+    // 手动重连:立即重建(不走退避),用于用户点击重连。
+    restart() {
+      downlink?.restart?.();
+    },
     // 后端地址变更:更新设置、重建 client、刷新 DNR 规则、重开下行流。
     async setBackendUrl(url) {
       const normalized = await settings.setBackendUrl(url);

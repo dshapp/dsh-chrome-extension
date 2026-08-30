@@ -15,7 +15,13 @@ import { formatErrorDetails } from "../../shared/error-details.js";
 
 export function createSidepanelDependencies(options = {}) {
   const settings = options.settings || createSettings();
-  const connection = options.connection || createDshConnection({ settings });
+  // 重连收敛回调依赖 sessions,而 sessions 又以 connection 为参数 —— 用 deferred
+  // holder 打破组装顺序:回调在重连真正发生时读取 holder,那时 sessions 已就位。
+  const lifecycle = {};
+  const connection = options.connection || createDshConnection({
+    settings,
+    onGenerationReady: () => { void lifecycle.sessions?.resync?.(); }
+  });
   // 后台会话失败提醒:service worker 的轮询只报"完成",失败细节只存在于
   // 被丢弃的 turn/end 帧里,所以由侧栏的帧偷看喂给系统通知。
   const notifier = options.notifier
@@ -24,9 +30,9 @@ export function createSidepanelDependencies(options = {}) {
   return Object.freeze({
     settings,
     connection,
-    sessions: options.sessions || createSessionService(connection, {
+    sessions: options.sessions || (lifecycle.sessions = createSessionService(connection, {
       onBackgroundTurnFailure: (sessionId, message) => notifier.reportFailure(sessionId, message)
-    }),
+    })),
     models: options.models || createModelService(connection),
     skills: options.skills || createSkillService(connection),
     commands: options.commands || createCommandService(connection),

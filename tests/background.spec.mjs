@@ -129,17 +129,28 @@ function makeChromeMock() {
   const groupCalls = []
   const store = {}
   const debuggerEvents = []
+  const detachListeners = []
+  const attachCalls = []
   const timeline = []
+  let attachFails = false
   let nextTabId = 100
   return {
     cdpCalls,
     activations,
     groupCalls,
+    /** One record per chrome.debugger.attach attempt: { failed }. */
+    attachCalls,
+    /** Make subsequent chrome.debugger.attach calls reject with a CDP error. */
+    setAttachFails(fails) { attachFails = fails },
     /** Ordered log of the calls whose relative order matters. */
     timeline,
     /** Replay a CDP event at the worker, as Chrome would. */
     emit(tabId, method, params) {
       for (const listener of debuggerEvents) listener({ tabId }, method, params)
+    },
+    /** Replay a debugger detach, as Chrome emits on a privileged page. */
+    emitDetach(tabId) {
+      for (const listener of detachListeners) listener({ tabId })
     },
     api: {
       runtime: {
@@ -188,9 +199,12 @@ function makeChromeMock() {
       tabGroups: { async get() { return { id: 7, title: 'Task' } }, async update() {} },
       windows: { async update() {} },
       debugger: {
-        async attach() {},
+        async attach() {
+          attachCalls.push({ failed: attachFails })
+          if (attachFails) throw new Error('Another debugger is already attached to the tab')
+        },
         async detach() {},
-        onDetach: { addListener() {} },
+        onDetach: { addListener(listener) { detachListeners.push(listener) } },
         onEvent: { addListener(listener) { debuggerEvents.push(listener) } },
         async sendCommand(_target, method, params) {
           cdpCalls.push({ method, params })
@@ -390,6 +404,42 @@ test('navigate opens a tab and reports it', async () => {
   assert.equal(frame.payload.error, undefined)
   assert.equal(frame.payload.data.success, true)
   assert.ok(frame.payload.data.tabId)
+})
+
+test('navigate accepts any URL the browser can open, not just http(s)', async () => {
+  const targets = ['chrome://settings', 'file:///tmp/x.html', 'about:blank', 'data:text/html,hi']
+  for (let i = 0; i < targets.length; i += 1) {
+    const url = targets[i]
+    const frame = await callTool(`nurl${i}`, 'navigate', { session: `s-any${i}`, url })
+    assert.equal(frame.payload.error, undefined, `url "${url}" failed: ${JSON.stringify(frame)}`)
+    assert.equal(frame.payload.data.success, true)
+  }
+})
+
+test('navigate rejects an empty or whitespace url', async () => {
+  for (const [i, url] of ['', '   '].entries()) {
+    const frame = await callTool(`nempty${i}`, 'navigate', { session: `s-empty${i}`, url })
+    assert.match(frame.payload.error, /url is required/)
+  }
+})
+
+test('navigate tolerates a failed attach and re-attaches a debuggable target', async () => {
+  const opened = await callTool('priv0', 'navigate', { session: 's-priv', url: 'https://example.com' })
+  assert.equal(opened.payload.error, undefined)
+  // A privileged page detaches the debugger; the session tab is now unreachable.
+  mock.emitDetach(opened.payload.data.tabId)
+  const before = mock.attachCalls.length
+  mock.setAttachFails(true)
+  try {
+    const frame = await callTool('priv1', 'navigate', { session: 's-priv', url: 'https://example.com/two' })
+    assert.equal(frame.payload.error, undefined)
+    assert.equal(frame.payload.data.success, true)
+    // One pre-navigation attach (rejected by the privileged page) and one
+    // post-navigation re-attach on the debuggable target must both be tried.
+    assert.equal(mock.attachCalls.length - before, 2)
+  } finally {
+    mock.setAttachFails(false)
+  }
 })
 
 test('snapshot returns an indented outline whose refs name backend node ids', async () => {

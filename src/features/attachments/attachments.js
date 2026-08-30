@@ -44,15 +44,32 @@ export async function fileToContentPart(file) {
   return { type: "image", mediaType: file.type, data, name: file.name };
 }
 
+/// 把 ArrayBuffer 转成 base64。分块展开,避免 `String.fromCharCode(...bytes)`
+/// 一次性展开整个文件 —— 大文件会把参数列表撑爆(栈溢出)且内存峰值翻倍。
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const CHUNK = 0x8000; // 32768 字节/块,展开参数数远低于引擎上限
+  const parts = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    parts.push(String.fromCharCode(...bytes.subarray(i, i + CHUNK)));
+  }
+  return btoa(parts.join(""));
+}
+
 async function readAsBase64(file) {
   // 测试环境无 FileReader 时走 arrayBuffer 兜底。
   if (typeof FileReader === "undefined") {
     const buffer = await file.arrayBuffer();
-    return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    return arrayBufferToBase64(buffer);
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    // 用 indexOf + slice 代替 split(","):split 会额外分配一个字符串数组。
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
+      const comma = dataUrl.indexOf(",");
+      resolve(comma === -1 ? dataUrl : dataUrl.slice(comma + 1));
+    };
     reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
     reader.readAsDataURL(file);
   });

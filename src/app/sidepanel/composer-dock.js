@@ -173,9 +173,12 @@ export function createComposerDock({ elements, deps, state, showToast, format })
 
   // ---- 模型 + 推理档 ----
   async function refreshModelMenu() {
-    if (!state.sessionId) return;
+    const sessionId = state.sessionId;
+    if (!sessionId) return;
     try {
-      const sessionModels = await deps.connection.call(RPC.sessionModels, { sessionId: state.sessionId });
+      const sessionModels = await deps.connection.call(RPC.sessionModels, { sessionId });
+      // 等待期间切走了会话:迟到的响应不得更新当前(别的)会话的模型菜单。
+      if (state.sessionId !== sessionId) return;
       state.currentModel = sessionModels.current ?? null;
       // current 只带 {provider, model} 两个 id,展示名要回 groups 里查;
       // 查不到(目录里没有这个模型)才退回 id,总比空着强。

@@ -13,7 +13,7 @@ import { mountWorkspaceMenu } from "./workspace-menu.js";
 import { createComposerMenus } from "./composer-menus.js";
 import { createComposerDock } from "./composer-dock.js";
 import { mountTriggerMenu } from "./trigger-menu.js";
-import { projectDraft, reconcileEdit, renderChipMirror } from "./composer-chips.js";
+import { projectDraft, reconcileEdit, renderChipMirror, PLACEHOLDER } from "./composer-chips.js";
 import { collectElements } from "./sidepanel-elements.js";
 import { mountAttachmentControls } from "./composer-attachments.js";
 import { createSessionShortcutController, getSessionShortcutLabels } from "../../features/sessions/session-shortcuts.js";
@@ -75,8 +75,26 @@ export function createSidepanelApp(root, deps) {
   });
 
   // ---- 渲染 ----
+  // 流式帧按 animation frame 合并:一个帧周期内的多次 onRuntimeChange 只渲染一次,
+  // 避免高帧率流式(每 token 一帧)下每个事件都同步重建 DOM。
+  let renderScheduled = false;
+  let pendingSnapshot = null;
+
   deps.sessions.onRuntimeChange((snapshot) => {
     if (snapshot.sessionId !== state.sessionId) return;
+    pendingSnapshot = snapshot;
+    if (renderScheduled) return;
+    renderScheduled = true;
+    requestAnimationFrame(() => {
+      renderScheduled = false;
+      const snap = pendingSnapshot;
+      pendingSnapshot = null;
+      if (!snap || snap.sessionId !== state.sessionId) return;
+      applySnapshot(snap);
+    });
+  });
+
+  function applySnapshot(snapshot) {
     if (snapshot.running) awaitingTurnStart = false;
     state.cwd = snapshot.cwd ?? state.cwd;
     state.subagent = snapshot.subagent ?? null;
@@ -103,7 +121,7 @@ export function createSidepanelApp(root, deps) {
     autoScroll();
     historyDrawer?.setActive(state.sessionId, snapshot.title);
     updateSendState(snapshot.running);
-  });
+  }
 
   // ---- 交互接管 ----
   // 卡片挂在 composer 上方并隐藏输入框(对齐 Mac 的 ComposerTakeover)。
@@ -200,8 +218,13 @@ export function createSidepanelApp(root, deps) {
     const dot = elements.hdrStatus;
     dot.className = next === deps.DshStreamState.CONNECTED ? "ok"
       : next === deps.DshStreamState.CONNECTING ? "busy" : "err";
+    // 断开时可点击:状态点变成手动重连入口。
+    const clickable = next !== deps.DshStreamState.CONNECTED;
+    dot.style.cursor = clickable ? "pointer" : "";
+    dot.setAttribute("role", clickable ? "button" : "");
     dot.title = next === deps.DshStreamState.CONNECTED ? t("status.connected", { host: hostLabel() })
-      : next === deps.DshStreamState.CONNECTING ? t("status.connecting") : t("status.disconnected");
+      : next === deps.DshStreamState.CONNECTING ? t("status.connecting")
+      : t("status.disconnected") + " · " + t("srv.reconnect");
     updateSendState();
   }
 
@@ -302,13 +325,14 @@ export function createSidepanelApp(root, deps) {
         : text;
       if (promptText) content.push({ type: "text", text: promptText });
       for (const attachment of attachments) content.push(attachment.part);
+      // mode 决定这条消息是进队列还是插入当前轮。插队发的就是输入框这一条,
+      // 队列保持原样 —— 与 session/queue 的 steer(把队列条目提前)是两件事。
+      await deps.sessions.prompt(state.sessionId, content, { mode });
+      // 发送成功后才清空附件与元素:失败时它们原样保留,用户可直接重试。
       deps.attachments.clear();
       attachmentControls.render();
       // 元素随消息一并消费:发出去之后这一轮的指代就结束了。
       picker.clear();
-      // mode 决定这条消息是进队列还是插入当前轮。插队发的就是输入框这一条,
-      // 队列保持原样 —— 与 session/queue 的 steer(把队列条目提前)是两件事。
-      await deps.sessions.prompt(state.sessionId, content, { mode });
     } catch (error) {
       awaitingTurnStart = false;
       chatRenderer.setTyping(false);
@@ -421,6 +445,14 @@ export function createSidepanelApp(root, deps) {
   /// 草稿每次变化都要重算胶囊位置并重画镜像层。
   function syncChips() {
     const draft = elements.input.value;
+    // 无占位符快速路径:没有胶囊,reconcile 的全文 diff 与占位符扫描都省掉,
+    // 只让镜像层保持行高(长草稿打字的主要热点之一)。
+    if (occurrences.length === 0 && draft.indexOf(PLACEHOLDER) === -1) {
+      lastDraft = draft;
+      renderChipMirror(elements.inputMirror, draft, occurrences);
+      elements.inputMirror.scrollTop = elements.input.scrollTop;
+      return;
+    }
     occurrences = reconcileEdit(lastDraft, draft, occurrences);
     lastDraft = draft;
     renderChipMirror(elements.inputMirror, draft, occurrences);
@@ -489,6 +521,9 @@ export function createSidepanelApp(root, deps) {
   elements.input.addEventListener("keydown", (event) => {
     // 触发菜单开启时优先吃掉导航键。
     if (triggerMenu.handleKeyDown(event)) return;
+    // IME 组合输入确认候选时也会派发 Enter:那是选字不是发送,
+    // 也不该被当成插队快捷键(⌥⌘↩)。
+    if (event.isComposing) return;
     // 插队快捷键(⌥⌘↩)必须在普通 Enter 之前判:它也带 Enter,
     // 落到下面那条分支就会被当成普通发送而进队列。
     if (isSteerChord(event, { mac: isMac })) {
@@ -586,7 +621,11 @@ export function createSidepanelApp(root, deps) {
     return ["agent-busy", "session-not-found", "internal"].includes(error?.code);
   }
 
+  // 会话打开竞态令牌:快速切换时迟到的历史加载不得覆盖新会话。
+  let openSessionToken = 0;
+
   async function openSession(sessionId, { fresh = false, _retried = false } = {}) {
+    const token = ++openSessionToken;
     // 离开当前会话前存草稿。
     setDraft(state.sessionId, elements.input.value);
 
@@ -615,6 +654,9 @@ export function createSidepanelApp(root, deps) {
       }
       showToast(format(error));
     }
+
+    // 等待期间用户又切走了:迟到结果不得渲染到新会话上。
+    if (token !== openSessionToken) return;
 
     const snapshot = deps.sessions.getRuntimeSnapshot();
     elements.emptyHint.hidden = snapshot.nodes.length > 0;
@@ -698,6 +740,12 @@ export function createSidepanelApp(root, deps) {
     );
     startConnection();
     setInterval(() => setStreamState(deps.connection.streamState), 500);
+    // 断开时点击状态点手动重连。
+    elements.hdrStatus.addEventListener("click", () => {
+      if (state.streamState === deps.DshStreamState.CONNECTED) return;
+      setStreamState(deps.DshStreamState.CONNECTING);
+      deps.connection.restart();
+    });
     elements.hdrNew.addEventListener("click", newSession);
   }
 

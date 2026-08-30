@@ -7,6 +7,18 @@ import { t } from "../../../shared/i18n.js";
 import { section, row, stackedRow, textInput, button, statusLine, notice, escapeHtml } from "./settings-ui.js";
 import { RPC } from "../../../platform/dsh/rpc-methods.js";
 import { probeHost, ensureServerRunning } from "../../../platform/dsh/native-supervisor.js";
+import { normalizeBackendUrl } from "../../../platform/storage/settings.js";
+
+/// 后端地址必须为本机(loopback):扩展的中继脚本(dsh-relay.js)只在
+/// localhost/127.0.0.1 注入,远端地址会让下行流无法建立。
+function isLoopbackBackendUrl(raw) {
+  try {
+    const host = new URL(normalizeBackendUrl(raw)).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
 
 /// 每秒复查一次连接状态。与 header 状态点同频:重连是后台发生的,
 /// 页面开着时状态必须自己走,而不是等用户切 tab 才更新。
@@ -119,6 +131,10 @@ export function createServerPane({ host, deps, showToast, onBackendChanged }) {
     input?.addEventListener("input", (event) => { draftUrl = event.target.value; });
     host.querySelector("#srv-backend-save")?.addEventListener("click", async () => {
       try {
+        if (!isLoopbackBackendUrl(input.value)) {
+          showToast?.(t("srv.localOnly"));
+          return;
+        }
         await deps.connection.setBackendUrl(input.value);
         draftUrl = null;
         saveStatus = t("settings.saved");
