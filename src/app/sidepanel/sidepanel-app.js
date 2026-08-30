@@ -668,9 +668,11 @@ export function createSidepanelApp(root, deps) {
     // 等待期间用户又切走了:迟到结果不得渲染到新会话上。
     if (token !== openSessionToken) return;
 
-    const snapshot = deps.sessions.getRuntimeSnapshot();
-    elements.emptyHint.hidden = snapshot.nodes.length > 0;
-    historyDrawer?.setActive(sessionId, snapshot.title);
+    // 会话切换是一次性操作,直接同步渲染,不等 onRuntimeChange 的 rAF 合并:
+    // rAF 在侧栏不可见(visibilityState=hidden)时不会触发,renderScheduled 一旦卡在
+    // true,后续 notifyRuntime 全被「if (renderScheduled) return」吞掉,聊天记录永远不渲染。
+    // applySnapshot 内含 chatRenderer.render + emptyHint + setActive 等完整刷新。
+    applySnapshot(deps.sessions.getRuntimeSnapshot());
 
     const summary = deps.sessions.listStore.get().find((item) => item.sessionId === sessionId);
     if (summary?.cwd) {
