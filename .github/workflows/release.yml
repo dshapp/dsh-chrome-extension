@@ -80,7 +80,7 @@ jobs:
           {
             echo "## Changelog"
             echo
-            git log "$RANGE" --pretty=format:'### %s%n%n%b%n- Commit: [`%h`](https://github.com/${GITHUB_REPOSITORY}/commit/%H)%n- Author: %an%n'
+            git log "$RANGE" --pretty=format:'### %s%n%n%b%n- Commit: [`%h`](https://github.com/%H)%n- Author: %an%n' | sed "s#https://github.com/#https://github.com/${GITHUB_REPOSITORY}/commit/#"
             echo
             echo "## Installation"
             echo
