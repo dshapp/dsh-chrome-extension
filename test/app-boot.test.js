@@ -39,7 +39,11 @@ function stubDeps(overrides = {}) {
       onFrame: vi.fn(),
       sessions: {
         store: { toolCall: () => null },
-        listStore: { get: () => [{ sessionId: "s1", cwd: "/w" }] },
+        listStore: {
+          get: () => [{ sessionId: "s1", cwd: "/w" }],
+          subagentDescendants: () => ({ count: 0, runningCount: 0 }),
+          subagentChildren: () => new Map()
+        },
         onRuntimeChange: (listener) => { runtimeListener = listener; return () => {}; },
         getRuntimeSnapshot: () => snapshot,
         handleMuxFrame: vi.fn(), handleHostFrame: vi.fn(),
@@ -54,7 +58,9 @@ function stubDeps(overrides = {}) {
         search: vi.fn().mockResolvedValue(null),
         archive: vi.fn().mockResolvedValue([]),
         listAgentPresets: vi.fn().mockResolvedValue({ presets: [] }),
-        selectAgentPreset: vi.fn().mockResolvedValue("standard")
+        selectAgentPreset: vi.fn().mockResolvedValue("standard"),
+        listSubagents: vi.fn().mockResolvedValue({ entries: [], parentAvailable: true }),
+        loadSubagentHistory: vi.fn().mockResolvedValue({})
       },
       models: { refresh: vi.fn().mockResolvedValue([]) },
       skills: { skills: [], refresh: vi.fn().mockResolvedValue([]) },

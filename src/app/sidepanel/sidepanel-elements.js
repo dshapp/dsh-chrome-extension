@@ -13,6 +13,8 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   "input-mirror",
   // 停靠区与 agent 预设
   "goal-bar-slot", "todo-panel", "stats-btn", "stats-menu", "preset-btn", "preset-label", "preset-menu",
+  // 子代理目录:header chip + 树形 popover
+  "subagent-catalog-btn", "subagent-catalog-menu",
   // 新建会话页(empty hero)的选择区:工作目录 + Agent 预设
   "hero-workspace", "hero-workspace-label",
   // 页面元素选取
@@ -72,6 +74,8 @@ export function collectElements(root) {
     presetBtn: byId.get("preset-btn"),
     presetLabel: byId.get("preset-label"),
     presetMenu: byId.get("preset-menu"),
+    subagentCatalogBtn: byId.get("subagent-catalog-btn"),
+    subagentCatalogMenu: byId.get("subagent-catalog-menu"),
     elementPickerBtn: byId.get("element-picker-btn"),
     pickedChip: byId.get("picked-elements-chip"),
     pickedLabel: byId.get("picked-elements-label"),

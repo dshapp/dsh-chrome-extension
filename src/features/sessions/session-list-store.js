@@ -14,6 +14,9 @@ export function createSessionListStore() {
   // sessionId → summary 索引表。侧栏行状态/标题/活跃排序是每帧事件驱动的,
   // 之前都用 summaries.find(...) 线性查找,会话一多就成了 O(n²) 热点。
   const byId = new Map();
+  // 子代理名册缓存:每次写 summaries 都换新数组引用,用引用判断失效,名册变化才重建。
+  let subagentCache = null;
+  let subagentCacheFor = null;
 
   function notify() {
     for (const listener of listeners) listener(summaries);
@@ -106,6 +109,22 @@ export function createSessionListStore() {
     },
     hasDraft: (sessionId) => draftSessionIds.has(sessionId),
     get: () => summaries,
+    /// origin == "subagent" 的边,按 parentSessionId 分组(对齐 Mac subagentChildren)。
+    subagentChildren() {
+      if (subagentCacheFor !== summaries) {
+        subagentCache = indexSubagentChildren(summaries);
+        subagentCacheFor = summaries;
+      }
+      return subagentCache;
+    },
+    /// rootId 的整条子代理后裔统计(count + runningCount),visited 防环、普通 fork 停下。
+    subagentDescendants(rootId) {
+      if (subagentCacheFor !== summaries) {
+        subagentCache = indexSubagentChildren(summaries);
+        subagentCacheFor = summaries;
+      }
+      return walkSubagentChildren(subagentCache, rootId);
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -115,4 +134,45 @@ export function createSessionListStore() {
 
 function byUpdatedDesc(a, b) {
   return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
+
+// ---------- 子代理名册派生 ----------
+
+/// 仅保留 origin == "subagent" 的边(对齐 Mac SubagentChildren 的 stop-at-fork 规则)。
+/// @returns Map<parentSessionId, SessionSummary[]>
+export function indexSubagentChildren(summaries) {
+  const byParent = new Map();
+  for (const s of summaries ?? []) {
+    if (s.origin !== "subagent") continue;
+    const parent = s.parentSessionId;
+    if (!parent) continue;
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent).push(s);
+  }
+  return byParent;
+}
+
+/// 从已分组的父映射 walk 出 count/runningCount。visited 防环、子代理在普通 fork 边处停下。
+/// @param byParent Map<parentSessionId, SessionSummary[]>
+export function walkSubagentChildren(byParent, rootId) {
+  const result = { count: 0, runningCount: 0 };
+  if (!rootId || !byParent) return result;
+  const visited = new Set([rootId]);
+  const queue = [rootId];
+  while (queue.length) {
+    const parent = queue.pop();
+    for (const child of byParent.get(parent) ?? []) {
+      if (visited.has(child.sessionId)) continue;
+      visited.add(child.sessionId);
+      result.count += 1;
+      if (child.running) result.runningCount += 1;
+      queue.push(child.sessionId);
+    }
+  }
+  return result;
+}
+
+/// 一次性索引 + walk 的组合入口(单测/无缓存的调用方直接从这里拿)。
+export function indexSubagentDescendants(summaries, rootId) {
+  return walkSubagentChildren(indexSubagentChildren(summaries), rootId);
 }

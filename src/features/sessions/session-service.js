@@ -180,6 +180,27 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     async listSubagents(parentSessionId) {
       return connection.call(RPC.subagentList, { parentSessionId });
     },
+    /// 子代理转录:按 SubagentAddress 读取并填进 store(含只读 subagent 投影)。
+    /// 对齐 Mac 的 subagent.history —— continuable 子代理的 durable log 需要 parent + mode
+    /// 上下文,不能走 session.history。返回值形状与 loadHistory 相同(SubagentHistoryValue
+    /// 在 Mac 端就是 SessionHistoryValue 的 typealias)。
+    async loadSubagentHistory(address) {
+      const childId = address?.childSessionId;
+      if (!childId) return null;
+      const token = ++loadToken;
+      const value = await connection.call(RPC.subagentHistory, address);
+      if (token !== loadToken) return value;
+      ensureStore(childId);
+      store.reset(childId);
+      for (const entry of value.events ?? []) {
+        store.applyEvent(entry.event, entry.view);
+      }
+      for (const [key, projValue] of Object.entries(value.projections?.values ?? {})) {
+        store.applyProjection(key, projValue, value.projections?.seqs?.[key]);
+      }
+      notifyRuntime();
+      return value;
+    },
     /// 中断一个子代理。address = { parentSessionId, childSessionId, mode }。
     async interruptSubagent(address) {
       return connection.call(RPC.subagentInterrupt, address);
@@ -299,12 +320,17 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           listStore.setStatus(payload.sessionId, payload.running);
           if (isCurrent(payload.sessionId)) { store.setRunning(payload.running); notifyRuntime(); }
           break;
-        case HOST.sessionAdded:
-          listStore.upsertAndNotify({
+        case HOST.sessionAdded: {
+          // 子代理名册缓存靠 origin 区分子代理边与普通 fork,host 帧带 origin 时才写入;
+          // 不带就不覆盖 session.list 已有的 origin(避免 upsert 用 undefined 抹掉它)。
+          const added = {
             sessionId: payload.sessionId, updatedAt: Date.now(), running: false,
             blank: payload.blank, cwd: payload.cwd, parentSessionId: payload.parentSessionId
-          });
+          };
+          if (payload.origin) added.origin = payload.origin;
+          listStore.upsertAndNotify(added);
           break;
+        }
         case HOST.sessionRemoved:
           listStore.remove(payload.sessionId);
           break;

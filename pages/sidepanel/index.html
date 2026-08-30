@@ -33,6 +33,11 @@
       </svg>
       <kbd class="shortcut-hint" id="shortcut-history" aria-hidden="true"></kbd>
     </button>
+    <!-- 子代理目录入口:对齐 Mac SubagentCatalogAction —— 有子代理后代的会话才显示 -->
+    <button class="hdr-btn" id="subagent-catalog-btn" type="button" popovertarget="subagent-catalog-menu" hidden aria-haspopup="dialog">
+      <span class="subagent-dot" aria-hidden="true"></span>
+      <span class="subagent-label"></span>
+    </button>
     <button class="hdr-btn" id="hdr-open-folder" type="button" aria-label="打开工作目录" title="用系统打开工作目录">
       <!-- lucide: folder-open -->
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -78,6 +83,9 @@
        它必须留在 #history-popover 之外 —— 那层平时是 display:none,菜单若做它的
        子节点,历史浮层没打开时整棵子树都不渲染,hero chip 点了就毫无反应。 -->
   <div id="workspace-menu" popover="auto" aria-label="Workspace"></div>
+
+  <!-- 子代理目录树 popover(随 chip 打开) -->
+  <div id="subagent-catalog-menu" popover="auto" aria-label="子代理会话"></div>
 
   <!-- ── 主区域 ── -->
   <div id="main">

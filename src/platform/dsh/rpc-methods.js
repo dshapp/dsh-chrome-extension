@@ -50,6 +50,7 @@ export const RPC = Object.freeze({
   goalResume: "goal.resume",
   // ---- subagent ----
   subagentList: "subagent.list",
+  subagentHistory: "subagent.history",
   subagentInterrupt: "subagent.interrupt",
   // ---- settings ----
   settingsDescribe: "settings.describe",

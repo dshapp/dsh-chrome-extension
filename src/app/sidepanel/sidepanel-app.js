@@ -18,6 +18,7 @@ import { collectElements } from "./sidepanel-elements.js";
 import { mountAttachmentControls } from "./composer-attachments.js";
 import { createSessionShortcutController, getSessionShortcutLabels } from "../../features/sessions/session-shortcuts.js";
 import { mountGoalBar, mountTodoPanel, mountStatsBar } from "../../features/docks/session-docks.js";
+import { mountSubagentCatalog } from "../../features/subagents/subagent-catalog-view.js";
 import { createElementPicker } from "../../features/element-picker/element-picker.js";
 import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../../features/element-picker/element-picker-shortcut.js";
 import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER } from "../../features/prompt-queue/index.js";
@@ -112,6 +113,7 @@ export function createSidepanelApp(root, deps) {
     // 当前模式名由 dock 从 roster 解析(出厂预设走本地化文案,如 code → PTC 模式),
     // 显示在统计浮层顶部。
     statsBar.set({ ...snapshot, presetName: dock.currentPresetName() });
+    subagentCatalog.refresh();
     // 图片限制以宿主投影为准,composer 据此在本地就把超限文件挡下。
     deps.attachments.setLimits?.(snapshot.imageLimits);
     dock.renderPlanChip(snapshot.planMode);
@@ -386,6 +388,13 @@ export function createSidepanelApp(root, deps) {
     return deps.sessions.getRuntimeSnapshot().goal;
   }
 
+  // 子代理目录入口(header chip + 树形 popover,对齐 Mac SubagentCatalogAction)。
+  const subagentCatalog = mountSubagentCatalog(elements.subagentCatalogBtn, elements.subagentCatalogMenu, {
+    deps,
+    getSessionId: () => state.sessionId,
+    onOpenSubagent: (address) => { void openSubagent(address); }
+  });
+
   // ---- 页面元素选取 ----
   const isMac = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
   const picker = createElementPicker({
@@ -642,6 +651,7 @@ export function createSidepanelApp(root, deps) {
     elements.composer.hidden = false;
     elements.emptyHint.hidden = false;
     historyDrawer?.setActive(sessionId, null);
+    subagentCatalog.refresh();
 
     try {
       if (fresh) await deps.sessions.open(sessionId);
@@ -679,6 +689,64 @@ export function createSidepanelApp(root, deps) {
     dock.refreshModelMenu();
     // roster 是异步拉的,会落在本次渲染之后 —— 拿到后补画一次统计浮层,
     // 否则当前模式名要等下一帧才出现。
+    dock.refreshPresetMenu().then(() => {
+      statsBar.set({ ...deps.sessions.getRuntimeSnapshot(), presetName: dock.currentPresetName() });
+    });
+    refreshSlashSources();
+  }
+
+  /// 打开一个子代理会话(只读)。对齐 Mac selectSubagent:走 subagent.history 读转录
+  /// 而非 session.history;composer 只读由返回的 subagent 投影驱动(applySnapshot)。
+  async function openSubagent(address) {
+    const childId = address?.childSessionId;
+    if (!childId) return;
+    const token = ++openSessionToken;
+    setDraft(state.sessionId, elements.input.value);
+
+    state.sessionId = childId;
+    awaitingTurnStart = false;
+    chatRenderer.reset();
+    takeoverCard?.dispose?.();
+    takeoverCard?.remove();
+    takeoverCard = null;
+    renderedTakeoverKey = null;
+    elements.composerTakeover.replaceChildren();
+    elements.composerTakeover.hidden = true;
+    elements.composer.hidden = false;
+    elements.emptyHint.hidden = false;
+    historyDrawer?.setActive(childId, null);
+    subagentCatalog.refresh();
+
+    try {
+      await deps.sessions.loadSubagentHistory(address);
+    } catch (error) {
+      // 打开失败要回滚:上面已把 state/绘制拆到子代理态,不回滚会把用户
+      // 停在一个「标题还是父会话、但 chip 已按子代理算」的中间态。
+      state.sessionId = address.parentSessionId;
+      subagentCatalog.refresh();
+      showToast(format(error));
+      return;
+    }
+
+    if (token !== openSessionToken) return;
+
+    const snapshot = deps.sessions.getRuntimeSnapshot();
+    elements.emptyHint.hidden = snapshot.nodes.length > 0;
+    historyDrawer?.setActive(childId, snapshot.title);
+    subagentCatalog.refresh();
+
+    const summary = deps.sessions.listStore.get().find((item) => item.sessionId === childId);
+    if (summary?.cwd) {
+      state.cwd = summary.cwd;
+      workspaceMenu?.setActiveByCwd(summary.cwd);
+    }
+    picker.clear();
+    renderPickedChip();
+    setInputText("");
+    autoResizeInput();
+    updateSendState();
+
+    dock.refreshModelMenu();
     dock.refreshPresetMenu().then(() => {
       statsBar.set({ ...deps.sessions.getRuntimeSnapshot(), presetName: dock.currentPresetName() });
     });
@@ -728,7 +796,8 @@ export function createSidepanelApp(root, deps) {
       onChange: () => historyDrawer?.refresh()
     });
     historyDrawer = mountHistoryDrawer(deps, openSession, newSession, shortcutLabels, {
-      workspacePath: () => workspaceMenu?.activePath() ?? null
+      workspacePath: () => workspaceMenu?.activePath() ?? null,
+      workspaceSessionIds: () => workspaceMenu?.activeSessionIds() ?? null
     });
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
     mountSettings(

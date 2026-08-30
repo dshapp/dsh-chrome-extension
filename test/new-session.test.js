@@ -37,7 +37,8 @@ function deps() {
       ensureStarted: vi.fn().mockResolvedValue(), call: vi.fn().mockResolvedValue({}), respond: vi.fn() },
     onFrame: vi.fn(),
     sessions: {
-      store: { toolCall: () => null }, listStore: { get: () => [] },
+      store: { toolCall: () => null },
+      listStore: { get: () => [], subagentDescendants: () => ({ count: 0, runningCount: 0 }), subagentChildren: () => new Map() },
       onRuntimeChange: vi.fn(), getRuntimeSnapshot: () => snapshot,
       handleMuxFrame: vi.fn(), handleHostFrame: vi.fn(),
       refreshList: vi.fn().mockResolvedValue([]),

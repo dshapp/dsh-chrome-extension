@@ -37,7 +37,12 @@ function stubDeps() {
     onFrame: vi.fn(),
     sessions: {
       store: { toolCall: () => null },
-      listStore: { get: () => [{ sessionId: "s1", cwd: "/w" }], setDraft: vi.fn() },
+      listStore: {
+        get: () => [{ sessionId: "s1", cwd: "/w" }],
+        setDraft: vi.fn(),
+        subagentDescendants: () => ({ count: 0, runningCount: 0 }),
+        subagentChildren: () => new Map()
+      },
       onRuntimeChange: (listener) => { runtimeListener = listener; return () => {}; },
       getRuntimeSnapshot: () => snapshot,
       handleMuxFrame: vi.fn(), handleHostFrame: vi.fn(),
