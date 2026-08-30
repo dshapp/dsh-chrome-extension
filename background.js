@@ -17,6 +17,10 @@
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:3080'
 const BRIDGE_WS_PATH = '/chrome/ws'
+// The bridge runs as a standalone Rust daemon on its own fixed port, so the WS
+// URL no longer follows the dsh-web backend URL. `dsh_chrome_url` is the explicit
+// override; the default points straight at the daemon.
+const DEFAULT_BRIDGE_WS_URL = `ws://127.0.0.1:37086${BRIDGE_WS_PATH}`
 const RECONCILE_ALARM = 'dsh-chrome-reconcile'
 const STORAGE = {
   enabled: 'dsh_chrome_enabled',
@@ -59,9 +63,10 @@ async function getDesired() {
   const stored = await chrome.storage.local.get([STORAGE.enabled, STORAGE.url, STORAGE.backendUrl])
   return {
     enabled: stored[STORAGE.enabled] !== false,
-    // An explicit socket override wins; otherwise the bridge follows the same
-    // DSH server address the rest of the extension is configured with.
-    url: stored[STORAGE.url] || bridgeUrlFrom(stored[STORAGE.backendUrl] || DEFAULT_BACKEND_URL),
+    // An explicit socket override wins; otherwise the bridge connects to the
+    // standalone daemon on its fixed port (the backend URL drives only the
+    // native-host autostart of dsh web, not the WS connection).
+    url: stored[STORAGE.url] || DEFAULT_BRIDGE_WS_URL,
   }
 }
 
