@@ -228,6 +228,9 @@ export function createComposerDock({ elements, deps, state, showToast, format })
               await deps.connection.call(RPC.sessionSelectModel, {
                 sessionId: state.sessionId, provider: entry.provider, model: entry.model
               });
+              // 同步当前模型:推理档选择依赖 state.currentModel 来定位要修的模型,
+              // 不更新的话,切模型后立即选推理档会作用到上一份快照里的旧模型。
+              state.currentModel = { provider: entry.provider, model: entry.model };
               elements.modelLabel.textContent = entry.label;
             }
           } catch (error) {
