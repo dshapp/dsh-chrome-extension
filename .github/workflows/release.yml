@@ -75,8 +75,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          RANGE="${PREVIOUS_TAG:+${PREVIOUS_TAG}..}HEAD"
+          {
+            echo "## Changelog"
+            echo
+            git log "$RANGE" --pretty=format:'### %s%n%n%b%n- Commit: [`%h`](https://github.com/${GITHUB_REPOSITORY}/commit/%H)%n- Author: %an%n'
+            echo
+            echo "## Installation"
+            echo
+            echo "Download **${ASSET}**, unzip it, then load the extracted folder from Chrome extensions."
+          } > release-notes.md
           gh release create "$TAG" "$ASSET" \
             --target "$GITHUB_SHA" \
             --title "DSH Chrome Extension $TAG" \
-            --generate-notes \
+            --notes-file release-notes.md \
             --latest
