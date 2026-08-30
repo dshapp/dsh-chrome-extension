@@ -1,0 +1,80 @@
+name: Release extension
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: |
+          npm test
+          npx vitest run --exclude test/install-contract.test.js
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          if [[ "$VERSION" != "$MANIFEST_VERSION" ]]; then
+            echo "package.json version ($VERSION) differs from manifest.json ($MANIFEST_VERSION)" >&2
+            exit 1
+          fi
+          TAG="v${VERSION}-build.${GITHUB_RUN_NUMBER}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=dsh-chrome-extension-${TAG}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/dsh-chrome-extension"
+          mkdir -p "$STAGE"
+          cp -R \
+            manifest.json background.js install.sh \
+            content icons native-host pages scripts src sw \
+            "$STAGE/"
+          cd "$RUNNER_TEMP"
+          zip -r "$GITHUB_WORKSPACE/${{ steps.meta.outputs.asset }}" dsh-chrome-extension
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          ASSET: ${{ steps.meta.outputs.asset }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" "$ASSET" \
+            --target "$GITHUB_SHA" \
+            --title "DSH Chrome Extension $TAG" \
+            --generate-notes \
+            --latest
