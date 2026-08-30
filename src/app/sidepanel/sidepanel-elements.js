@@ -1,5 +1,5 @@
 // 侧栏 DOM 查询:把 index.html 的 id 收敛成一份具名引用表,缺元素立即抛错。
-const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-settings",
+const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-folder", "hdr-settings",
   "hdr-workspace", "hdr-workspace-label", "workspace-menu", "history-popover", "history-search",
   // 标题里的工作目录前缀("工作目录 / 会话标题"的前半段)
   "hdr-workspace-prefix",
@@ -29,6 +29,7 @@ export function collectElements(root) {
     hdrNew: byId.get("hdr-new"),
     hdrTitle: byId.get("hdr-title"),
     hdrTitleWrap: byId.get("hdr-title-wrap"),
+    hdrOpenFolder: byId.get("hdr-open-folder"),
     hdrWorkspace: byId.get("hdr-workspace"),
     hdrWorkspaceLabel: byId.get("hdr-workspace-label"),
     hdrWorkspacePrefix: byId.get("hdr-workspace-prefix"),

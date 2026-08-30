@@ -497,3 +497,50 @@ describe("标题中的工作目录前缀", () => {
     expect(titleSpan.textContent).toBe("重构头部布局");
   });
 });
+
+// 「打开工作目录」按钮的路径来源:与 #hdr-workspace-prefix 显示的是同一个目录。
+// displayedPath() 返回完整绝对路径而非显示名;与 activePath()(历史过滤器路径)
+// 的关键差别在孤儿目录——header 会显示该目录名,却不过滤历史。
+describe("打开目录按钮的路径(displayedPath)", () => {
+  it("连接前(无选择、无宿主 cwd)为 null", async () => {
+    const { menu } = setup({ hostCwd: null });
+    await menu.refresh();
+    expect(menu.displayedPath()).toBeNull();
+  });
+
+  it("未选目录且有宿主 cwd 时返回宿主 cwd(「临时目录」语义)", async () => {
+    const { menu } = setup();
+    await menu.refresh();
+    expect(menu.displayedPath()).toBe(HOST_CWD);
+  });
+
+  it("选中 workspace 时返回其 path", async () => {
+    const { elements, menu } = setup();
+    await menu.refresh();
+    clickItem(elements.workspaceMenu, "w2");
+    await vi.waitFor(() => expect(menu.displayedPath()).toBe("/Users/u/mono/web"));
+  });
+
+  it("选中「临时目录」时返回宿主 cwd", async () => {
+    const { elements, menu } = setup();
+    await menu.refresh();
+    clickItem(elements.workspaceMenu, "__temp__");
+    expect(menu.displayedPath()).toBe(HOST_CWD);
+    expect(menu.activePath()).toBe(HOST_CWD);
+  });
+
+  it("孤儿目录(cwd 不属于任何 workspace)返回该 cwd,而 activePath 仍为 null", async () => {
+    const { menu } = setup();
+    await menu.refresh();
+    menu.setActiveByCwd("/Users/u/code/teacher");
+    expect(menu.displayedPath()).toBe("/Users/u/code/teacher");
+    expect(menu.activePath()).toBeNull();
+  });
+
+  it("打开宿主 cwd 下的会话时返回宿主 cwd", async () => {
+    const { menu } = setup();
+    await menu.refresh();
+    menu.setActiveByCwd(HOST_CWD);
+    expect(menu.displayedPath()).toBe(HOST_CWD);
+  });
+});

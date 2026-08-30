@@ -106,12 +106,15 @@ a { color: var(--link); }
 /* 工作目录下拉:住在历史浮层的搜索行里,长目录名截断,给搜索框留出空间 */
 #hdr-workspace {
   flex-shrink: 0;
-  max-width: 7rem;
+  /* 目录名长短不一:不再用 7rem 硬截断,按搜索行六成自适应,让 label 尽量
+     完整展开,搜索框拿剩余空间;超长目录名仍由 label 省略兜底。 */
+  max-width: min(60%, 16rem);
   font-size: 13px;
   gap: 3px;
   anchor-name: --workspace-trigger;
 }
 #hdr-workspace-label {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -219,6 +222,8 @@ a { color: var(--link); }
   border-radius: 7px;
 }
 #hdr-title-wrap:hover { background: var(--border-soft); }
+/* 打开工作目录按钮:空间紧张时保持图标不塌缩。 */
+#hdr-open-folder { flex-shrink: 0; }
 /* 会话标题是主体信息:空间不够时先压前缀(shrink:2),它自己后让(shrink:1)。 */
 #hdr-title {
   flex-shrink: 1;
@@ -293,6 +298,8 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
 #history-search-icon { width: 14px; height: 14px; color: var(--text-faint); flex-shrink: 0; }
 #history-search {
   flex: 1;
+  /* 允许收缩,把宽裕空间让给左侧的工作目录 label,而不是独占整行。 */
+  min-width: 0;
   border: none;
   background: transparent;
   color: inherit;

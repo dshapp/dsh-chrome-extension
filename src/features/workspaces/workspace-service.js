@@ -1,4 +1,6 @@
 // 工作区:workspace.list / host.pickDirectory(原生目录选择)/ workspace.create。
+import { RPC } from "../../platform/dsh/rpc-methods.js";
+
 export function createWorkspaceService(connection) {
   let workspaces = [];
   const listeners = new Set();
@@ -31,6 +33,10 @@ export function createWorkspaceService(connection) {
       const path = await this.pickDirectory();
       if (!path) return null;
       return this.createForPath(path);
+    },
+    // 用宿主操作系统的默认方式打开某路径(系统文件管理器)。
+    async openPath(path) {
+      await connection.call(RPC.hostOpenPath, { path });
     }
   };
 }

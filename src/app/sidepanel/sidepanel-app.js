@@ -747,6 +747,16 @@ export function createSidepanelApp(root, deps) {
       deps.connection.restart();
     });
     elements.hdrNew.addEventListener("click", newSession);
+    // 工作目录入口:用系统打开 header 前缀当前代表的那个目录。
+    elements.hdrOpenFolder.addEventListener("click", async () => {
+      const path = workspaceMenu?.displayedPath();
+      if (!path) return;   // 连接前的极短窗口:尚无任何目录
+      try {
+        await deps.workspaces.openPath(path);
+      } catch (error) {
+        showToast(format(error));
+      }
+    });
   }
 
   async function startConnection() {
