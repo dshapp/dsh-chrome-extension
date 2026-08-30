@@ -1,0 +1,43 @@
+// CodeMax DSH 侧栏应用组合根:组装各功能域依赖。纯组装,不含业务逻辑。
+import { createSettings } from "../../platform/storage/settings.js";
+import { createDshConnection, DshStreamState } from "../../platform/dsh/dsh-connection.js";
+import { createSessionService } from "../../features/sessions/session-service.js";
+import { createBackgroundNotifier } from "../../features/notifications/background-notifier.js";
+import { createModelService } from "../../features/models/model-service.js";
+import { createSkillService } from "../../features/skills/skill-service.js";
+import { createCommandService } from "../../features/commands/command-service.js";
+import { createWorkspaceService } from "../../features/workspaces/workspace-service.js";
+import { createReferenceService } from "../../features/references/reference-service.js";
+import { createGoalService } from "../../features/goals/goal-service.js";
+import { createAttachmentTray } from "../../features/attachments/attachments.js";
+import { setLang, getLang } from "../../shared/i18n.js";
+import { formatErrorDetails } from "../../shared/error-details.js";
+
+export function createSidepanelDependencies(options = {}) {
+  const settings = options.settings || createSettings();
+  const connection = options.connection || createDshConnection({ settings });
+  // 后台会话失败提醒:service worker 的轮询只报"完成",失败细节只存在于
+  // 被丢弃的 turn/end 帧里,所以由侧栏的帧偷看喂给系统通知。
+  const notifier = options.notifier
+    || createBackgroundNotifier({ notifications: globalThis.chrome?.notifications, settings });
+
+  return Object.freeze({
+    settings,
+    connection,
+    sessions: options.sessions || createSessionService(connection, {
+      onBackgroundTurnFailure: (sessionId, message) => notifier.reportFailure(sessionId, message)
+    }),
+    models: options.models || createModelService(connection),
+    skills: options.skills || createSkillService(connection),
+    commands: options.commands || createCommandService(connection),
+    workspaces: options.workspaces || createWorkspaceService(connection),
+    references: options.references || createReferenceService(connection),
+    goals: options.goals || createGoalService(connection),
+    attachments: options.attachments || createAttachmentTray(),
+    DshStreamState,
+    formatErrorDetails,
+    setLang,
+    getLang,
+    onFrame: (listener) => connection.onFrame(listener)
+  });
+}

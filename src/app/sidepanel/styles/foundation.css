@@ -1,0 +1,409 @@
+/* CodeMax DSH 侧栏:视觉对齐原 extension(ChatGPT 风格黑白灰)。
+   主题变量与 header/composer/messages 布局沿用 extension/pages/sidepanel/styles 的设计。 */
+
+/* hidden 属性必须压过各组件的 display 规则(empty-hint/prompt-queue 等)。 */
+[hidden] { display: none !important; }
+
+/* ── 主题变量 ── */
+:root[data-theme="light"] {
+  --bg:              #ffffff;
+  --bg-raised:       #f9f9f9;
+  --bg-input:        #ffffff;
+  --bg-overlay:      rgba(255,255,255,0.96);
+  --border:          #e5e5e5;
+  --border-soft:     #efefef;
+  --text:            #0d0d0d;
+  --text-dim:        #5d5d5d;
+  --text-faint:      #afafaf;
+  --link:            #0969da;
+  --accent:          #0d0d0d;
+  --accent-hover:    #333;
+  --user-bubble:     rgba(13,13,13,0.06);
+  --danger:          #c0392b;
+  --ok:              #16a34a;
+  --warn:            #b7791f;
+  --shadow-composer: 0 2px 12px rgba(0,0,0,0.08);
+  --shadow-pop:      0 8px 28px rgba(0,0,0,0.14);
+  --code-bg:         #f7f7f7;
+  --code-toolbar-bg: #eeeeee;
+  --code-border:     #dddddd;
+  --code-text:       #242424;
+  --code-muted:      #666666;
+  --radius:          8px;
+  --radius-xl:       24px;
+  color-scheme: light;
+}
+/* 深色取值对齐原 extension 的实际生效样式(foundation.css 之上由 codex-foundation.css 覆盖)。 */
+:root[data-theme="dark"] {
+  --bg:              #181818;
+  --bg-raised:       #212121;
+  --bg-input:        #2b2b2b;
+  --bg-overlay:      rgba(43,43,43,0.98);
+  --border:          #3b3b3b;
+  --border-soft:     #303030;
+  --text:            #f2f2f2;
+  --text-dim:        #a8a8a8;
+  --text-faint:      #727272;
+  --link:            #58a6ff;
+  --accent:          #f2f2f2;
+  --accent-hover:    #ffffff;
+  --user-bubble:     #2b2b2b;
+  --danger:          #d05656;
+  --ok:              #4caf50;
+  --warn:            #e2b65c;
+  --shadow-composer: none;
+  --shadow-pop:      0 8px 28px rgba(0,0,0,0.5);
+  --code-bg:         #202020;
+  --code-toolbar-bg: #292929;
+  --code-border:     #3a3a3a;
+  --code-text:       #ececec;
+  --code-muted:      #a0a0a0;
+  --radius:          10px;
+  --radius-xl:       22px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+}
+body { display: flex; flex-direction: column; overflow: hidden; }
+button { font-family: inherit; cursor: pointer; }
+a { color: var(--link); }
+
+/* ── Header ── */
+#header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 20;
+}
+.hdr-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  padding: 5px 6px;
+  border-radius: 7px;
+  line-height: 1;
+  font-size: 15px;
+  transition: background .12s, color .12s;
+}
+.hdr-btn:hover { background: var(--border-soft); color: var(--text); }
+.hdr-btn svg { display: block; }
+
+/* 工作目录下拉:住在历史浮层的搜索行里,长目录名截断,给搜索框留出空间 */
+#hdr-workspace {
+  flex-shrink: 0;
+  max-width: 7rem;
+  font-size: 13px;
+  gap: 3px;
+  anchor-name: --workspace-trigger;
+}
+#hdr-workspace-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 触发钮已移进历史浮层的搜索行,不再是固定的 header 位置:
+   回退位按搜索行的实际高度给(header 42px + 搜索行约 36px)。 */
+#workspace-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  top: 78px;
+  left: 18px;
+  max-height: 60vh;
+  min-inline-size: 12rem;
+  max-inline-size: 22rem;
+  overflow-y: auto;
+}
+/* 支持锚点定位时直接吸附在触发钮下方,不依赖上面那组硬编码坐标。
+   两颗 chip(头部 / 新建会话页)共用这一个 popover,各自声明锚点名;
+   下面按"当前哪颗是打开它的那颗"切 position-anchor,菜单才会贴对地方。 */
+@supports (position-area: block-end) {
+  #workspace-menu {
+    position-anchor: --workspace-trigger;
+    position-area: block-end span-inline-end;
+    position-try-fallbacks: flip-block, flip-inline;
+    top: auto;
+    left: auto;
+    margin-block-start: 4px;
+  }
+  /* hero chip 打开时改锚到它自己;两颗 chip 不会同时可见,所以直接按
+     "hero 是否在场"切换即可。 */
+  #hero-workspace { anchor-name: --workspace-hero-trigger; }
+  body:has(#empty-hint:not([hidden])) #workspace-menu {
+    position-anchor: --workspace-hero-trigger;
+  }
+  /* 历史浮层开着时,头部那颗才是真正的触发钮,锚点切回去。 */
+  body:has(#history-popover.open) #workspace-menu {
+    position-anchor: --workspace-trigger;
+  }
+}
+/* 目录名不换行;路径提示吃掉剩余宽度并省略。长路径的尾部信息量更大,
+   所以用 rtl 把省略号放到开头(内容仍按 ltr 正常显示)。 */
+#workspace-menu .menu-item { align-items: center; }
+#workspace-menu .menu-item > span:first-child {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#workspace-menu .menu-item small {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+/* 连接状态点:只在异常时出现(busy=黄点脉冲 / err=红点)。
+   默认收起——JS 挂上 class 之前元素没有任何状态类,不收起会先闪一个灰点。 */
+#hdr-status {
+  display: none;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex-shrink: 0;
+}
+/* 连接正常是常态,不值得占一枚常驻指示灯:ok 不出现(沿用默认的收起),
+   只有连接中(busy)和断开(err)才现身。 */
+#hdr-status.busy { display: block; background: var(--warn); animation: pulse 1.2s infinite; }
+#hdr-status.err { display: block; background: var(--danger); }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* 标题里的工作目录前缀:呈现成"工作目录 / 会话标题"。
+   前缀比标题弱一档(更淡),让人一眼知道哪段才是会话名。
+   分隔符用 ::after 画,前缀为空时连同斜杠一起消失,不会留下一个孤零零的 "/"。 */
+#hdr-workspace-prefix {
+  flex-shrink: 2;
+  min-width: 2.5em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+#hdr-workspace-prefix::after {
+  content: "/";
+  margin-inline: 4px;
+  color: var(--text-faint);
+}
+#hdr-workspace-prefix:empty { display: none; }
+
+/* 目录前缀与会话标题现在同住这里,两段的宽度竞争在本容器内部解决(见各自的
+   flex-shrink),所以这里回到 flex:1 吃满剩余宽度即可。 */
+#hdr-title-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border-radius: 7px;
+}
+#hdr-title-wrap:hover { background: var(--border-soft); }
+/* 会话标题是主体信息:空间不够时先压前缀(shrink:2),它自己后让(shrink:1)。 */
+#hdr-title {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.dropdown-chevron { width: 12px; height: 12px; color: var(--text-faint); flex-shrink: 0; }
+
+/* 快捷键提示(按住 ⌘/Ctrl 时显示,对齐原 extension) */
+.shortcut-hint {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
+.shortcut-hint:empty { display: none !important; }
+
+/* ── 历史浮层 ── */
+#history-popover {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 10px;
+  right: 10px;
+  max-height: 60vh;
+  overflow: hidden auto;
+  background: var(--bg-overlay);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+  z-index: 30;
+  /* 顶部不留内边距:sticky 搜索行自带上留白。留了的话滚动内容会在行的
+     上方多出一条同高的缝,条目正好从那儿穿过去。 */
+  padding: 0 6px 6px;
+}
+#history-popover.open { display: block; }
+/* 搜索行钉在浮层顶部:列表滚动时它保持可见。
+   top 必须是 0 而不是 -6px —— 负值会在行的上方留出一条 6px 的窗口,
+   滚动中的条目正好从那里穿过去(实测能看到半截标题)。
+   配合 margin-top:-6px 把行拉到容器内边距之上,视觉上仍贴着顶。 */
+#history-search-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 左右负外边距把底色铺满浮层整宽;顶部不再负值,否则会与 top:0 之间留缝。 */
+  margin: 0 -6px 4px;
+  padding: 10px 14px 8px;
+  /* 不透明底色:--bg-overlay 带 0.98 alpha,滚动内容会从背后透出来。 */
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-soft);
+}
+#history-search-icon { width: 14px; height: 14px; color: var(--text-faint); flex-shrink: 0; }
+#history-search {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+#history-list-inner { list-style: none; }
+/* 单行布局:标题左侧(超长省略),时间/快捷键提示固定在同一行最右侧,不换行 —
+   对齐原 extension 的 .hist-item 单行样式,而不是标题、时间上下堆叠两行。 */
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+}
+.history-item:hover { background: var(--border-soft); }
+/* 键盘高亮行:与 :hover 同样的底色,保证鼠标和方向键指向同一处时观感一致。 */
+.history-item.selected { background: var(--border-soft); }
+.history-item.active { background: var(--user-bubble); }
+.history-item .h-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-item .h-when { font-size: 11px; color: var(--text-faint); }
+/* 行尾警示徽章:「待审批 / 待回答 / 草稿」共用一套着色 —— 与 macOS 的
+   tinted Capsule 同一个观感族,统一走 --warn,而不是各自写死一个色值。 */
+.history-item .h-badge {
+  font-size: 11px; line-height: 1.5;
+  padding: 1px 6px; border-radius: 999px;
+  white-space: nowrap; flex-shrink: 0;
+}
+.history-item .h-badge-warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+}
+.h-when-row { display: flex; align-items: center; gap: 5px; flex-shrink: 0; white-space: nowrap; }
+body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
+/* 悬浮时分叉/重命名按钮会盖住这一小块区域,先把时间/状态点隐去避免文字重叠。
+   键盘高亮行要走同一套 —— 否则方向键选中时按钮浮出来会和时间戳叠在一起。 */
+.history-item:hover .h-when-row,
+.history-item.selected .h-when-row,
+.history-item:hover .h-dot,
+.history-item.selected .h-dot { visibility: hidden; }
+.history-item .h-dot {
+  flex-shrink: 0;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ok); animation: pulse 1.2s infinite;
+}
+.history-item .h-actions {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: none; gap: 2px;
+}
+.history-item:hover .h-actions,
+.history-item.selected .h-actions { display: flex; }
+.h-actions button {
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--text-faint);
+  padding: 4px; border-radius: 6px; cursor: pointer;
+}
+/* 图标按 13px 渲染:比行高小一档,不喧宾夺主。 */
+.h-actions button svg { width: 13px; height: 13px; display: block; }
+.h-actions button:hover { color: var(--text); background: var(--bg-raised); }
+.history-empty { color: var(--text-faint); text-align: center; padding: 20px 0; font-size: 13px; }
+
+/* ── 主区域 ── */
+#main { flex: 1; display: flex; flex-direction: column; min-height: 0; container: sidepanel / inline-size; }
+#messages {
+  flex: 1; overflow-y: auto;
+  padding: 1.5rem 1.5rem 1rem;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+
+/* 空态 */
+#empty-hint {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.empty-lede { display: flex; flex-direction: column; gap: 8px; max-width: 82%; }
+.empty-lede b { font-size: 17px; font-weight: 600; }
+.empty-lede span { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+
+/* 新建会话页的选择区:工作目录 + Agent 预设(对齐 Mac EmptyHero 的 chip 行)。
+   居中排一行,窄侧栏放不下时换行。 */
+.hero-chips {
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: 6px; margin-top: 6px;
+}
+.hero-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-inline-size: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border-soft); border-radius: 999px;
+  background: var(--bg-raised); color: var(--text-dim);
+  font: inherit; font-size: 12px; line-height: 1.4;
+  cursor: pointer;
+}
+.hero-chip:hover { background: var(--user-bubble); color: var(--text); }
+.hero-chip svg { flex: none; }
+/* 长目录名截断,不要把 chip 撑破侧栏 */
+.hero-chip > span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

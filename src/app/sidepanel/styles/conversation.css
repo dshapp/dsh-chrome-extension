@@ -1,0 +1,467 @@
+/* ── 消息(结构与原 extension 的 conversation/codex 样式对齐) ── */
+#msg-list { display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start; }
+
+/* user 消息 */
+.msg-user {
+  max-inline-size: 100%;
+  margin: 0;
+  padding: 0.625rem 0.875rem;
+  border-radius: 1.25rem;
+  background: var(--user-bubble);
+  color: var(--text);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.msg-user-turn {
+  align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-inline-size: min(82%, 42rem);
+  margin-block: 0.375rem 0.75rem;
+}
+/* 长消息折叠:气泡里只有前 1000 字 + "查看全部",全文在弹窗里分片渲染 */
+.msg-user-preview { white-space: pre-wrap; }
+.msg-user-ellipsis { opacity: 0.55; }
+.msg-user-more {
+  display: block;
+  margin-block-start: 0.375rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #0a84ff);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.msg-user-more:hover { text-decoration: underline; }
+/* 全文弹窗正文:等宽 + 可选中,交给弹窗自身滚动 */
+.msg-full-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  user-select: text;
+}
+
+.msg-user .msg-imgs { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px; }
+.msg-user .msg-imgs img { max-width: 120px; max-height: 120px; border-radius: 10px; display: block; }
+
+/* assistant 消息 */
+.msg-turn {
+  align-self: flex-start;
+  inline-size: 100%;
+  max-inline-size: 100%;
+  padding-block: 0.125rem;
+  margin-block: 0.125rem 0.625rem;
+}
+/* 只发起工具调用、没有任何内容块的 step 会留下一个空 .msg-turn。它不可见,
+   却照样吃掉 padding/margin 和 #msg-list 的 gap,在工具卡上方顶出一段幽灵留白。 */
+.msg-turn:empty { display: none; }
+/* 工具紧跟正文时收紧操作栏下方留白,保持同一执行流的视觉连续性。 */
+.msg-turn:has(+ :is(.tool-row, .tool-group)) { margin-block-end: 0; padding-block-end: 0; }
+.msg-turn + :is(.tool-row, .tool-group) { margin-block-start: 0; }
+.msg-agent {
+  color: var(--text);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.msg-agent p { margin-block-end: 0.75rem; }
+.msg-agent p:last-child { margin-bottom: 0; }
+.msg-agent h1, .msg-agent h2, .msg-agent h3 { font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
+.msg-agent code {
+  background: var(--bg-raised);
+  padding: 0.125em 0.35em;
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.875em;
+}
+.msg-agent pre { background: var(--bg-raised); border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0; }
+.msg-agent pre code { background: none; border: 0; padding: 0; }
+.msg-agent ul, .msg-agent ol { padding-left: 18px; margin: 4px 0 8px; }
+.msg-agent li { margin-bottom: 2px; }
+.msg-agent strong { font-weight: 600; }
+.msg-agent a { text-decoration: underline; color: var(--link); }
+.msg-agent blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--border); color: var(--text-dim); }
+.msg-agent hr { margin-block: 1rem; border: 0; border-block-start: 1px solid var(--border); }
+.msg-agent .md-table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.msg-agent .md-table th, .msg-agent .md-table td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: left;
+  white-space: nowrap;
+}
+.msg-agent .md-table th { background: var(--bg-raised); font-weight: 600; }
+.msg-agent .md-table tbody tr:nth-child(even) td { background: var(--bg-raised); }
+
+/* 代码块(工具栏:语言 + 复制) */
+.code-block {
+  min-inline-size: 0;
+  margin-block: 0.75rem;
+  overflow: hidden;
+  border: 1px solid var(--code-border);
+  border-radius: 0.75rem;
+  background: var(--code-bg);
+}
+.code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-block-size: 2.25rem;
+  padding-inline: 0.75rem 0.375rem;
+  border-block-end: 1px solid var(--code-border);
+  background: var(--code-toolbar-bg);
+  color: var(--code-muted);
+  font-size: 0.75rem;
+}
+.code-language { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-copy-btn {
+  min-inline-size: 4.5rem;
+  min-block-size: 1.75rem;
+  padding-inline: 0.5rem;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+.code-copy-btn:hover { background: color-mix(in oklab, var(--code-text) 8%, transparent); color: var(--code-text); }
+.code-copy-btn:focus-visible { outline: 2px solid var(--code-muted); outline-offset: 1px; }
+.msg-agent .code-block pre {
+  max-inline-size: 100%;
+  margin: 0;
+  padding: 0.875rem 1rem;
+  overflow-x: auto;
+  border-radius: 0;
+  background: var(--code-bg);
+  color: var(--code-text);
+  scrollbar-width: thin;
+  scrollbar-color: var(--code-muted) transparent;
+}
+.msg-agent .code-block pre code {
+  display: block;
+  inline-size: max-content;
+  min-inline-size: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+/* 消息操作行(hover 浮现) */
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-block-size: 1.5rem;
+  margin-block-start: 0.25rem;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.msg-turn:hover .msg-actions, .msg-turn:focus-within .msg-actions,
+.msg-user-turn:hover .msg-actions, .msg-user-turn:focus-within .msg-actions { opacity: 1; }
+.msg-user-actions { justify-content: flex-end; }
+.act-btn {
+  display: grid;
+  place-items: center;
+  inline-size: 1.5rem;
+  min-inline-size: 1.5rem;
+  block-size: 1.5rem;
+  min-block-size: 1.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.375rem;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .1s, color .1s;
+}
+.act-btn svg { inline-size: 1rem; block-size: 1rem; }
+.act-btn:hover:not(:disabled) { background: var(--bg-raised); color: var(--text); }
+.act-btn:focus-visible { outline: 2px solid var(--text-dim); outline-offset: 1px; }
+.act-btn:disabled { background: transparent; color: var(--text-dim); cursor: default; opacity: 0.72; }
+.msg-timestamp {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-inline-start: 0.25rem;
+  padding: 0;
+}
+
+/* 错误消息 */
+.msg-error {
+  color: var(--danger);
+  background: none;
+  font-size: 13px;
+  padding: 6px 0;
+  align-self: flex-start;
+  max-width: 100%;
+}
+.msg-error-title { font-weight: 500; }
+.msg-error-details {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-width: 100%;
+  overflow-x: auto;
+  border-left: 2px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 等待动画 */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 2.625rem;
+  padding: 0.625rem 0;
+  border-block-end: 1px solid var(--border-soft);
+  color: var(--text-faint);
+  font-size: 13px;
+  align-self: stretch;
+}
+.typing-label, .typing-time { font-size: 0.8125rem; color: var(--text-dim); }
+.typing-time { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.typing-dots { display: flex; gap: 3px; align-items: center; }
+.typing-dots span {
+  width: 4px; height: 4px;
+  background: var(--text-faint);
+  border-radius: 50%;
+  animation: wave 1.2s ease-in-out infinite;
+}
+.typing-dots span:nth-child(2) { animation-delay: .15s; }
+.typing-dots span:nth-child(3) { animation-delay: .3s; }
+@keyframes wave {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+
+/* ══ 新增:节点行(steering / context / chip / turnTail / workflow / unknown) ══ */
+
+/* steering:插队消息,比普通用户气泡更轻 */
+.msg-user-turn.steering { margin-block: 0.25rem; }
+.msg-user.steering {
+  display: flex; align-items: center; gap: 0.375rem;
+  background: transparent;
+  border: 1px dashed var(--border);
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+}
+.steering-badge { color: var(--warn); }
+
+/* context:插件注入的上下文,记录里只留入口行 */
+.context-node {
+  align-self: flex-start; inline-size: 100%;
+  margin-block: 0.25rem;
+  font-size: 0.75rem; color: var(--text-dim);
+}
+.context-summary {
+  display: flex; gap: 0.5rem; align-items: center; inline-size: 100%;
+  cursor: pointer;
+  border: 0; background: none; color: inherit; font: inherit; text-align: start;
+  padding: 0.25rem 0.5rem; border-radius: var(--radius);
+}
+.context-summary:hover { background: var(--bg-raised); }
+.context-summary .tool-chevron { margin-inline-start: auto; }
+.context-label {
+  flex: none; padding: 0 0.375rem; border-radius: 999px;
+  background: var(--bg-raised); border: 1px solid var(--border-soft);
+  color: var(--text-faint); font-size: 0.6875rem;
+}
+.context-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 正文只在详情弹窗里出现:不自带高度上限,交给弹窗那一条滚动 */
+.context-body {
+  margin: 0; padding: 0.5rem;
+  background: var(--code-bg); border-radius: var(--radius);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 0.75rem; color: var(--code-text);
+}
+
+/* 被打断的 assistant step */
+.msg-interrupted {
+  font-size: 0.8125rem; color: var(--warn);
+  padding: 0.25rem 0; font-style: italic;
+}
+.msg-agent-img { max-width: 100%; border-radius: var(--radius); margin-block: 0.375rem; }
+
+/* 通用 chip 行:compaction / retry / maxTokens / command
+   与工具行同一套卡片语言(对齐 Mac 的 "the card family's one header structure
+   — icon + summary"):无边框、无填充底,只有图标 + 摘要,结论只靠颜色表达。 */
+.chip-row {
+  align-self: flex-start; inline-size: 100%;
+  display: flex; align-items: center; gap: 6px;
+  min-block-size: 2rem;
+  margin-block: 0.25rem;
+  padding: 0.375rem 0;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  font-size: 0.8125rem; color: var(--text-dim);
+}
+/* 可点开详情的 chip 行给出和工具行一致的 hover 反馈 */
+.chip-row:has(.chip-more):hover { background: var(--bg-raised); }
+.chip-icon { flex: none; color: var(--text-faint); }
+/* 摘要与工具行的 .tool-label 同构:单行截断,不换行撑高记录流 */
+.chip-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.retry-chip, .retry-chip .chip-icon { color: var(--warn); }
+/* 重试预算耗尽:与 msg-error 同一错误色;原因入口可截断,不撑高记录流 */
+.retry-chip.exhausted, .retry-chip.exhausted .chip-icon,
+.retry-chip.exhausted .chip-more { color: var(--danger); }
+.retry-chip.exhausted .chip-more {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.maxtokens-chip, .maxtokens-chip .chip-icon { color: var(--warn); }
+.command-chip.error, .command-chip.error .chip-icon { color: var(--danger); }
+/* 详情已统一由弹窗承载,chip 行内不再内联 <details>(旧规则已随之删除)。 */
+.compaction-body { margin-top: 0.25rem; font-size: 0.75rem; }
+
+/* turnTail:每轮页脚指标。跟 msg-actions 一样 hover 才浮现。
+   对齐 Mac 的 TurnTailIconActions:时间戳 + 指标是同一行里左对齐的一簇,
+   不独占整行、也不靠右——所以这里不设 width:100%,由内容自然定宽。 */
+.turn-tail-actions {
+  align-self: flex-start;
+  gap: 0.25rem;
+  margin-block: 0 0.625rem;
+}
+/* turnTail 是独立兄弟节点,落不进 .msg-turn 的 hover 区,而一个"只有悬停到
+   自己才显形"的隐形行等于没有命中目标。改由整个记录区触发:指针进入对话即浮现。 */
+#msg-list:hover .turn-tail-actions, #msg-list:focus-within .turn-tail-actions { opacity: 1; }
+/* 分叉不可用时保留按钮但压暗(对齐 Mac 的 opacity 0.4):
+   tooltip 还在,能解释为什么不能点。 */
+.act-btn.unavailable { opacity: 0.4; cursor: default; }
+.act-btn.unavailable:hover { background: none; }
+.turn-tail {
+  padding-inline: 0.125rem;
+  font-size: 0.6875rem; color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* workflow */
+.workflow-node {
+  align-self: flex-start; inline-size: 100%;
+  margin-block: 0.375rem; padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-raised); font-size: 0.75rem;
+}
+.workflow-header {
+  display: flex; align-items: center; gap: 0.375rem; inline-size: 100%;
+  border: 0; background: none; color: inherit; font: inherit; text-align: start;
+  cursor: pointer;
+}
+.workflow-count {
+  flex: none; padding: 0 0.375rem; border-radius: 999px;
+  background: var(--bg); color: var(--text-faint); font-size: 0.6875rem;
+}
+.workflow-status { margin-inline-start: auto; color: var(--text-faint); }
+.workflow-status.running { color: var(--warn); }
+.workflow-status.completed { color: var(--ok); }
+.workflow-status.failed { color: var(--danger); }
+.workflow-phase { margin-top: 0.375rem; padding-inline-start: 0.5rem; border-inline-start: 2px solid var(--border-soft); }
+.workflow-phase-label { color: var(--text-faint); margin-bottom: 0.125rem; }
+.workflow-member { display: flex; gap: 0.5rem; padding-block: 0.125rem; }
+.workflow-member-status { margin-inline-start: auto; color: var(--text-faint); }
+.workflow-member.failed .workflow-member-status { color: var(--danger); }
+.workflow-member.completed .workflow-member-status { color: var(--ok); }
+
+/* 未知事件兜底行 */
+.unknown-node {
+  align-self: flex-start; inline-size: 100%;
+  margin-block: 0.375rem; font-size: 0.75rem; color: var(--text-faint);
+}
+.unknown-summary {
+  display: flex; align-items: center; gap: 0.375rem; inline-size: 100%;
+  cursor: pointer; padding: 0.25rem 0.5rem; border-radius: var(--radius);
+  border: 0; background: none; color: inherit; font: inherit; text-align: start;
+}
+.unknown-summary:hover { background: var(--bg-raised); }
+.unknown-summary .tool-chevron { margin-inline-start: auto; }
+.unknown-node pre {
+  margin: 0; padding: 0.5rem;
+  background: var(--code-bg); border-radius: var(--radius);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.msg-error-code { font-size: 0.6875rem; color: var(--text-faint); margin-top: 0.125rem; }
+
+/* ══ 卡片详情弹窗 ══ */
+/* 记录流里所有卡片的唯一展开出口(对齐 Mac 的 CardDetailSheet:
+   标题 + 复制 + 关闭 + 分隔线 + 单一滚动正文)。 */
+/* 详情入口:与工具行的后缀同构(无边框、无药丸底),不再自成一枚按钮。 */
+.chip-more {
+  flex: none;
+  padding: 0; border: 0; background: transparent;
+  color: var(--text-faint); font: inherit; font-size: 0.6875rem;
+  cursor: pointer;
+}
+.chip-more:hover { color: var(--text); }
+
+dialog.card-detail {
+  /* 视口居中:top-layer 的 <dialog> 靠 inset:0 + margin:auto 在两个轴上都居中。
+     只写 margin:auto 而不铺满 inset,块轴会因为没有可分配的剩余空间而顶在上边。 */
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  inline-size: min(34rem, calc(100vw - 2rem));
+  max-block-size: min(80dvh, 44rem);
+  block-size: fit-content;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-input);
+  color: var(--text);
+  box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+dialog.card-detail::backdrop { background: rgba(0, 0, 0, 0.4); }
+dialog.card-detail[open] { display: flex; flex-direction: column; }
+.card-detail-head {
+  display: flex; align-items: center; gap: 0.5rem;
+  flex: none;
+  padding: 0.625rem 0.5rem 0.625rem 0.875rem;
+  border-block-end: 1px solid var(--border-soft);
+}
+.card-detail-title {
+  flex: 1 1 auto; min-inline-size: 0;
+  font-size: 0.8125rem; font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.card-detail-copy[hidden] { display: none; }
+/* 正文是整个弹窗唯一的滚动容器:内部卡片一律不自带滚动条 */
+.card-detail-body {
+  flex: 1 1 auto; min-block-size: 0;
+  padding: 0.875rem;
+  overflow-y: auto; overscroll-behavior: contain;
+  font-size: 0.75rem; color: var(--text-dim);
+}
+.card-detail-body pre {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.card-detail-body .tool-detail > * + * { margin-block-start: 0.625rem; }
+/* 弹窗只有一条滚动:内部块取消各自的高度上限,统一由 .card-detail-body 滚 */
+.card-detail-body .tool-args pre,
+.card-detail-body .tool-output pre,
+.card-detail-body .plan-inline,
+.card-detail-body .compaction-body,
+.card-detail-body .context-body { max-height: none; overflow: visible; }

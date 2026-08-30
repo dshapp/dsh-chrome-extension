@@ -1,0 +1,70 @@
+{
+  "manifest_version": 3,
+  "name": "Binance pacific",
+  "//key": "固定公钥,让 unpacked 扩展 ID 在所有机器上恒为 hjgcllfkbkhmggdopnfhhmaiaedacnpg。没有它时 Chrome 按安装路径派生 ID,安装脚本就只能停下来问用户粘贴 ID,且 native-messaging 的 allowed_origins 无法预置。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApl0BexhIJ1Ucd9vPLEPyE+ctb/racwSQHH3nevHTcn/O4V0TYfe51jQzORkfUr2NkVsPTi3Mo62XouGa0+nrn1XN1oqYvHbE992JcHAnGHq7UXlIs7HPcTrYRMOeZAXhj93uSESP4GKuiI2OZt2i5ksY3jn8Rzn1JzBS2ukmSgV/lOKmCof6StWKPGW8sl3jWvSrggzBXDdvOvwCKYFo8ZF2svAQXuGcm0xByxzVmqPpZwpS+OutpSAh+UhFPF3FPb/s4GK/Q5qgiyWzNnsqBE+TBY7G3pDeptw+ZKj1/fb3uUX2qT3Te1qnwpdfZBdda2WcpqA19KgvTuBgHXvBiwIDAQAB",
+  "version": "0.3.1",
+  "description": "Lets a DeepSeek Harness agent drive this browser through a local MCP daemon, and puts a DSH AI chat in the side panel.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "debugger",
+    "storage",
+    "alarms",
+    "tabGroups",
+    "windows",
+    "sidePanel",
+    "declarativeNetRequest",
+    "notifications",
+    "contextMenus",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "sw/index.js",
+    "type": "module"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "side_panel": {
+    "default_path": "pages/sidepanel/index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "content/dsh-relay.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "commands": {
+    "open_sidepanel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+D",
+        "mac": "Command+Shift+D"
+      },
+      "description": "打开 DSH AI 侧栏"
+    }
+  }
+}

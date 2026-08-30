@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CodeMax DSH</title>
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/foundation.css">
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/conversation.css">
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/tools.css">
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/composer.css">
+</head>
+<body>
+
+  <!-- ── Header(对齐原 extension:状态点 + 新建 + 标题下拉历史 + 设置) ── -->
+  <div id="header">
+    <div id="hdr-status" title=""></div>
+    <button class="hdr-btn" id="hdr-new" aria-label="New Chat" title="新建会话">
+      <!-- lucide: square-pen -->
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+        <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>
+      </svg>
+      <kbd class="shortcut-hint" id="shortcut-new" aria-hidden="true"></kbd>
+    </button>
+    <button id="hdr-title-wrap" type="button" aria-haspopup="dialog" aria-expanded="false">
+      <!-- "工作目录 / 会话标题"。两段分别由 workspace-menu 与历史浮层写入,
+           所以拆成两个 span —— 合成一个字符串会让两个写入方互相覆盖。
+           分隔符是 CSS ::after 画的,目录名为空时随前缀一起隐藏。 -->
+      <span id="hdr-workspace-prefix"></span>
+      <span id="hdr-title">New Chat</span>
+      <svg id="hdr-title-chevron" class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m6 9 6 6 6-6"/>
+      </svg>
+      <kbd class="shortcut-hint" id="shortcut-history" aria-hidden="true"></kbd>
+    </button>
+    <button class="hdr-btn" id="hdr-settings" type="button" aria-label="Settings" title="设置">
+      <!-- lucide: ellipsis-vertical -->
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="1"/>
+        <circle cx="12" cy="5" r="1"/>
+        <circle cx="12" cy="19" r="1"/>
+      </svg>
+    </button>
+
+    <!-- 历史浮层(下拉 popover,对齐原 extension) -->
+    <div id="history-popover" role="dialog" aria-label="History">
+      <div id="history-search-wrap">
+        <!-- 工作目录下拉:决定历史过滤范围与新建会话归属,所以贴着历史搜索框放 -->
+        <button class="hdr-btn" id="hdr-workspace" type="button" popovertarget="workspace-menu"
+                aria-label="Workspace" title="切换工作目录">
+          <!-- lucide: folder -->
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+          </svg>
+          <span id="hdr-workspace-label">全部</span>
+          <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m6 9 6 6 6-6"/>
+          </svg>
+        </button>
+        <!-- lucide: search -->
+        <svg id="history-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m21 21-4.34-4.34"/>
+          <circle cx="11" cy="11" r="8"/>
+        </svg>
+        <input id="history-search" type="text" placeholder="搜索历史…" autocomplete="off" spellcheck="false" />
+      </div>
+      <ul id="history-list-inner" role="list"></ul>
+    </div>
+  </div>
+
+  <!-- 工作目录菜单:头部那颗 chip 与新建会话页的 hero chip 共用同一个 popover。
+       它必须留在 #history-popover 之外 —— 那层平时是 display:none,菜单若做它的
+       子节点,历史浮层没打开时整棵子树都不渲染,hero chip 点了就毫无反应。 -->
+  <div id="workspace-menu" popover="auto" aria-label="Workspace"></div>
+
+  <!-- ── 主区域 ── -->
+  <div id="main">
+
+    <!-- 消息区 -->
+    <div id="messages">
+      <div id="empty-hint">
+        <div class="empty-lede">
+          <b>开始对话</b>
+          <!-- 新建会话的选择区:工作目录 + Agent 预设(对齐 Mac EmptyHero 的 chip 行)。
+               两者都是"下一个会话用什么"的暂存选择,所以只在空会话时出现。 -->
+          <div class="hero-chips">
+            <button class="hero-chip" id="hero-workspace" type="button" popovertarget="workspace-menu"
+                    aria-label="Workspace" title="切换工作目录">
+              <!-- lucide: folder -->
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+              </svg>
+              <!-- 首帧默认值:未选工作目录时新会话落在宿主分配的临时目录,
+                   挂载后由 workspace-menu 的 paint() 按当前选择覆盖。 -->
+              <span id="hero-workspace-label">临时目录</span>
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+            <button class="hero-chip" id="preset-btn" type="button" popovertarget="preset-menu" hidden>
+              <!-- lucide: layers -->
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/>
+                <path d="M2 12.18a1 1 0 0 0 .6.92l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 .6-.93"/>
+              </svg>
+              <span id="preset-label">—</span>
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+          </div>
+          <div id="preset-menu" popover="auto" aria-label="Agent 预设"></div>
+        </div>
+      </div>
+      <div id="msg-list"></div>
+      <div id="interactions"></div>
+    </div>
+
+    <!-- Composer -->
+    <div id="composer-wrap">
+      <ol id="prompt-queue" hidden aria-live="polite" aria-label="排队消息"></ol>
+
+      <!-- 会话停靠区:目标条 / 待办 / 上下文与统计 -->
+      <div id="goal-bar-slot" hidden></div>
+      <div id="todo-panel" hidden></div>
+
+      <!-- 交互接管区:审批/提问/计划审阅卡挂在这里,挂载时输入框被隐藏 -->
+      <div id="composer-takeover" hidden></div>
+
+      <div id="composer">
+        <!-- 图片预览条 -->
+        <div id="preview-strip"></div>
+
+        <!-- 已选取的页面元素 -->
+        <!-- 药丸本身是容器而非按钮:清空键要住在药丸里,而按钮不能嵌套按钮,
+             所以边框/底色画在 .picked-pill 上,里面并排放"展开"与"清空"两颗。 -->
+        <div id="picked-elements-chip" hidden>
+          <div class="picked-pill">
+            <button id="picked-elements-trigger" type="button" popovertarget="picked-elements-menu">
+              <span class="picked-dot" aria-hidden="true"></span>
+              <span id="picked-elements-label">已选取 0 个元素</span>
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+            <button id="picked-elements-clear" type="button" aria-label="清空已选元素" title="清空已选元素">×</button>
+          </div>
+          <div id="picked-elements-menu" popover="auto" aria-label="已选取的元素"></div>
+        </div>
+
+        <!-- 主输入。引用胶囊由 #input-mirror 画在 textarea 底下:
+             textarea 画不了行内元素,故正文透明、镜像层负责显示。 -->
+        <div id="input-wrap">
+          <div id="input-mirror" aria-hidden="true"></div>
+          <textarea id="input" rows="1" placeholder="发送消息…(Shift+Enter 换行)" aria-label="Message input"></textarea>
+        </div>
+
+        <!-- 底部控件行 -->
+        <!-- "/" 与 "@" 触发候选菜单(锚在输入框上方) -->
+        <div id="trigger-menu" hidden role="listbox" aria-label="候选"></div>
+
+        <div id="composer-bar">
+          <!-- 加号附件按钮 -->
+          <button id="attach-btn" aria-label="添加附件">＋</button>
+
+          <div id="attach-menu">
+            <div class="menu-item" id="attach-img">🖼 添加图片</div>
+          </div>
+
+          <!-- 页面元素选取:在当前网页上圈选元素,发送时随消息附上定位信息 -->
+          <button class="bar-btn state-off" id="element-picker-btn" type="button" aria-pressed="false" aria-label="选取页面元素">
+            <!-- lucide: square-dashed-mouse-pointer -->
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/>
+              <path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/>
+              <path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/>
+              <path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/>
+            </svg>
+          </button>
+
+          <!-- plan mode 药丸:仅在计划模式开启时显示,点击执行 /plan off -->
+          <button class="bar-btn plan-chip" id="plan-chip" type="button" hidden>
+            <span>Plan</span><span class="plan-chip-x" aria-hidden="true">×</span>
+          </button>
+
+          <!-- 技能/命令候选菜单:仅由输入框的 "/" 触发,底栏不再放入口按钮 -->
+          <div id="skills-menu" popover="auto" aria-label="Skills"></div>
+
+          <button class="bar-btn" id="perm-btn" type="button" popovertarget="perm-menu">
+            <span id="perm-label">—</span>
+            <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6"/>
+            </svg>
+          </button>
+          <div id="perm-menu" popover="auto" aria-label="权限模式"></div>
+
+          <div id="model-picker">
+            <button class="bar-btn" id="model-btn" type="button" popovertarget="model-menu" aria-label="Select model">
+              <span id="model-label">—</span>
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+            <div id="model-menu" popover="auto" aria-label="Select model"></div>
+          </div>
+
+          <!-- 统计/上下文:底栏药丸触发,点击弹出详情(对齐 Mac JobListAction 的 trigger→popover)-->
+          <button class="bar-btn" id="stats-btn" type="button" popovertarget="stats-menu" hidden>
+            <span class="stats-ring" aria-hidden="true"></span>
+          </button>
+          <div id="stats-menu" popover="auto" aria-label="上下文与统计"></div>
+
+          <button id="send" class="state-idle" disabled aria-label="Send">↑</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- file input(隐藏) -->
+    <input id="file-input" type="file" accept="image/*" multiple hidden />
+
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <!-- full-access 权限二次确认 -->
+  <dialog id="perm-confirm">
+    <h2 id="perm-confirm-title">启用完全访问?</h2>
+    <p id="perm-confirm-body">Agent 将可以不经询问地读写任意文件、执行任意命令。只在你信任当前任务时启用。</p>
+    <label class="toggle-row">
+      <input id="perm-confirm-ack" type="checkbox" />
+      <span id="perm-confirm-ack-label">我已了解风险</span>
+    </label>
+    <div class="dialog-actions">
+      <button class="btn" id="perm-confirm-cancel" type="button">取消</button>
+      <button class="btn primary" id="perm-confirm-enable" type="button" disabled>启用</button>
+    </div>
+  </dialog>
+
+  <!-- ── 设置视图(全屏覆盖)。五个 pane 照搬 Mac Settings:
+       通用 / 模型 / Agent 预设 / 插件 / 服务端。
+       tab 条是 role="tablist",每个 pane 的内容由 JS 渲染进 .settings-pane。 ── -->
+  <div id="view-settings">
+    <div id="settings-header">
+      <button id="settings-back" aria-label="Back">←</button>
+      <span id="settings-title">设置</span>
+    </div>
+    <div id="settings-tabs" role="tablist" aria-label="设置分区">
+      <button class="settings-tab" type="button" role="tab" id="settings-tab-general"
+              data-tab="general" aria-controls="settings-pane-general" aria-selected="true">通用设置</button>
+      <button class="settings-tab" type="button" role="tab" id="settings-tab-models"
+              data-tab="models" aria-controls="settings-pane-models" aria-selected="false">模型</button>
+      <button class="settings-tab" type="button" role="tab" id="settings-tab-presets"
+              data-tab="presets" aria-controls="settings-pane-presets" aria-selected="false">Agent 预设</button>
+      <button class="settings-tab" type="button" role="tab" id="settings-tab-plugins"
+              data-tab="plugins" aria-controls="settings-pane-plugins" aria-selected="false">插件</button>
+      <button class="settings-tab" type="button" role="tab" id="settings-tab-server"
+              data-tab="server" aria-controls="settings-pane-server" aria-selected="false">服务端</button>
+    </div>
+    <div id="settings-body">
+      <!-- 通用:照搬 Mac 通用 pane 的行序,整段由 JS 渲染。
+           后端地址与 CDP 桥都不在这里 —— 它们讲的是"连到哪台宿主 / 谁能控制这个
+           浏览器",都属于服务端页。 -->
+      <section class="settings-pane" id="settings-pane-general" role="tabpanel"
+               aria-labelledby="settings-tab-general">
+        <!-- 由 JS 渲染:Agent 预设 / 权限 / 语言 / 外观 / 通知 / Enter 行为 / 配置文件 -->
+        <div id="set-general-host"></div>
+      </section>
+      <section class="settings-pane" id="settings-pane-models" role="tabpanel"
+               aria-labelledby="settings-tab-models" hidden></section>
+      <section class="settings-pane" id="settings-pane-presets" role="tabpanel"
+               aria-labelledby="settings-tab-presets" hidden></section>
+      <section class="settings-pane" id="settings-pane-plugins" role="tabpanel"
+               aria-labelledby="settings-tab-plugins" hidden></section>
+      <section class="settings-pane" id="settings-pane-server" role="tabpanel"
+               aria-labelledby="settings-tab-server" hidden>
+        <!-- 由 JS 渲染:后端地址 / 连接态 / 宿主自报信息 -->
+        <div id="set-server-host"></div>
+        <!-- Bridge(CDP 桥)状态与总开关。工具栏图标直接开侧栏,不再有 popup。
+             这块是静态 DOM,刻意放在 #set-server-host 之外:服务端 pane 每次
+             refresh 都重写自己的渲染区,桥若写在里面,mountBridgeSettings 绑上的
+             监听器会被一起冲掉。 -->
+        <div class="set-section" id="set-bridge-section">
+          <div class="set-section-header">Agent 浏览器控制</div>
+          <div class="set-section-body">
+            <div class="set-row">
+              <div class="set-row-text">
+                <div class="set-row-label">允许 Agent 控制此浏览器</div>
+                <div class="set-row-hint" id="set-bridge-detail"></div>
+              </div>
+              <div class="set-row-control">
+                <span class="set-status err" id="set-bridge-state">
+                  <i aria-hidden="true" id="set-bridge-dot"></i>
+                  <span id="set-bridge-status">未连接</span>
+                </span>
+                <label class="set-switch">
+                  <input id="set-bridge-enabled" type="checkbox" aria-label="允许 Agent 控制此浏览器" />
+                  <span class="set-switch-track" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- 设置页里的模态:提供方编辑器 / 自定义提供方 / 预设查看 / 复制预设 / 确认 -->
+  <dialog id="settings-sheet">
+    <div id="settings-sheet-body"></div>
+  </dialog>
+
+  <script type="module" src="../../src/entries/sidepanel.js"></script>
+</body>
+</html>
