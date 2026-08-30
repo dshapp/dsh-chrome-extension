@@ -510,7 +510,7 @@ const MESSAGES = Object.freeze({
     "bridge.connected": "已连接",
     "bridge.disconnected": "未连接",
     "bridge.daemonAt": "Daemon: {url}",
-    "bridge.waiting": "等待 DSH 连接：请检查服务器地址并确认 dsh web 正在运行",
+    "bridge.waiting": "等待 chrome-daemon 连接：请确认 dsh web 正在运行（它会自动启动 daemon）",
     "bridge.off": "Agent 控制已关闭。",
     "error.rpc": "错误 {code}:{message}",
     "error.transport": "连接错误:{message}",
