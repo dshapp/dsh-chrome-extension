@@ -1,0 +1,70 @@
+name: Pull request checks
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test and build
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm install --global npm@10.8.2
+          npm ci --no-audit --no-fund
+
+      - name: Run tests
+        run: |
+          node --test --test-force-exit --test-timeout=15000 tests/background.spec.mjs
+          npx vitest run --exclude test/install-contract.test.js
+
+      - name: Validate versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          test "$PACKAGE_VERSION" = "$MANIFEST_VERSION"
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/dsh-chrome-extension"
+          mkdir -p "$STAGE"
+          cp -R \
+            manifest.json background.js install.sh \
+            content icons native-host pages scripts src sw \
+            "$STAGE/"
+          cd "$RUNNER_TEMP"
+          zip -r "$GITHUB_WORKSPACE/dsh-chrome-extension-pr.zip" dsh-chrome-extension
+          test -s "$GITHUB_WORKSPACE/dsh-chrome-extension-pr.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-chrome-extension-pr-${{ github.event.pull_request.number }}
+          path: dsh-chrome-extension-pr.zip
+          if-no-files-found: error
+          retention-days: 7
