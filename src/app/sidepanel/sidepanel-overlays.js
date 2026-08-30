@@ -255,6 +255,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   /// 供搜索框与全局快捷键复用。返回 true 表示按键已被消费。
   function handleKeyDown(event) {
     if (!popover.classList.contains("open")) return false;
+    // 输入法组字确认候选时也会派发 Enter/上下键:那是选字,不是操作列表。
+    if (event.isComposing) return false;
     switch (event.key) {
       case "ArrowDown": event.preventDefault(); moveSelection(1); return true;
       case "ArrowUp": event.preventDefault(); moveSelection(-1); return true;

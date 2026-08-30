@@ -164,6 +164,18 @@ describe("历史列表上下键导航", () => {
     expect(openSession).toHaveBeenCalledWith("s1");
   });
 
+  it("输入法组字确认候选的 Enter 不打开会话", async () => {
+    const { drawer, openSession } = setup();
+    drawer.show();
+    await drawer.refresh();
+    const prevented = vi.fn();
+    // isComposing 的 Enter 是选字确认,不是操作列表:应被忽略,不默认打开第一条。
+    const handled = drawer.handleKeyDown({ key: "Enter", isComposing: true, preventDefault: prevented });
+    expect(handled).toBe(false);
+    expect(prevented).not.toHaveBeenCalled();
+    expect(openSession).not.toHaveBeenCalled();
+  });
+
   it("空列表时回车不打开任何会话", async () => {
     const { drawer, doc, openSession } = setup({ sessions: [] });
     drawer.show();
