@@ -14,13 +14,8 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function setup(sessionModels) {
-  const call = vi.fn(async (method) => {
-    if (method === "session.models") return sessionModels;
-    if (method === "session.selectModel") return {};
-    return {};
-  });
-  const elements = {
+function baseElements() {
+  return {
     planChip: makeEl("button"),
     permBtn: makeEl("button"),
     permLabel: makeEl("span"),
@@ -32,6 +27,15 @@ function setup(sessionModels) {
     presetLabel: makeEl("span"),
     presetMenu: makeEl()
   };
+}
+
+function setup(sessionModels) {
+  const call = vi.fn(async (method) => {
+    if (method === "session.models") return sessionModels;
+    if (method === "session.selectModel") return {};
+    return {};
+  });
+  const elements = baseElements();
   const state = { sessionId: "s1", currentModel: null };
   const deps = {
     connection: { call },
@@ -79,5 +83,39 @@ describe("composer-dock 模型与推理档", () => {
     const effortCall = call.mock.calls.find(([m, p]) => m === "session.selectModel" && p?.reasoningEffort);
     expect(effortCall).toBeTruthy();
     expect(effortCall[1]).toMatchObject({ provider: "p1", model: "m2", reasoningEffort: "high" });
+  });
+});
+
+describe("composer-dock 预设菜单", () => {
+  beforeEach(() => setLang("en"));
+
+  it("切到 B 后应能再切回 A(当前预设引用不过期)", async () => {
+    const presets = [{ id: "a", name: "Preset A" }, { id: "b", name: "Preset B" }];
+    const selectAgentPreset = vi.fn(async (_sid, id) => id);
+    const elements = baseElements();
+    const state = { sessionId: "s1", currentModel: null };
+    const deps = {
+      connection: { call: vi.fn(async () => ({})) },
+      commands: { execute: vi.fn() },
+      sessions: {
+        listAgentPresets: vi.fn(async () => ({ presets })),
+        selectAgentPreset,
+        listStore: { get: () => [{ sessionId: "s1", agentPreset: "a" }] },
+        getRuntimeSnapshot: () => ({ agentPreset: "a" })
+      }
+    };
+    const dock = createComposerDock({ elements, deps, state, showToast: vi.fn(), format: (e) => String(e) });
+    await dock.refreshPresetMenu();
+
+    // 切到 B
+    elements.presetMenu.querySelector('[data-item-id="b"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    expect(selectAgentPreset).toHaveBeenCalledTimes(1);
+    expect(selectAgentPreset).toHaveBeenLastCalledWith("s1", "b");
+
+    // 再切回 A —— 必须再次调用 selectAgentPreset,而不是被“已是当前”的守卫吞掉
+    elements.presetMenu.querySelector('[data-item-id="a"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    expect(selectAgentPreset).toHaveBeenLastCalledWith("s1", "a");
   });
 });

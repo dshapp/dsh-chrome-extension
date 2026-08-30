@@ -267,7 +267,9 @@ export function createComposerDock({ elements, deps, state, showToast, format })
       if (!presets.length) { elements.presetBtn.hidden = true; return; }
       const snapshot = deps.sessions.getRuntimeSnapshot();
       const summary = deps.sessions.listStore.get().find((s) => s.sessionId === state.sessionId);
-      const currentId = snapshot.agentPreset ?? summary?.agentPreset
+      // 用 let:选中后要就地同步,否则再点回上一个预设会被 id === currentId 守卫
+      // 当成“已是当前”而静默忽略 —— 那个 currentId 还是渲染时刻的旧值。
+      let currentId = snapshot.agentPreset ?? summary?.agentPreset
         ?? presets.find((p) => p.isDefault)?.id ?? null;
       const currentPreset = presets.find((p) => p.id === currentId);
       elements.presetBtn.hidden = false;
@@ -283,6 +285,7 @@ export function createComposerDock({ elements, deps, state, showToast, format })
             const applied = await deps.sessions.selectAgentPreset(state.sessionId, id);
             const chosen = presets.find((p) => p.id === applied);
             elements.presetLabel.textContent = presetDisplayName(chosen) || applied;
+            currentId = applied;
           } catch (error) {
             showToast(format(error));
           }
