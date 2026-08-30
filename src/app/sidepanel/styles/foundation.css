@@ -371,6 +371,17 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 .h-actions button svg { width: 13px; height: 13px; display: block; }
 .h-actions button:hover { color: var(--text); background: var(--bg-raised); }
 .history-empty { color: var(--text-faint); text-align: center; padding: 20px 0; font-size: 13px; }
+/* 列表加载态:三点 wave 复用 conversation.css 的 .typing-dots,这里只有行内布局。 */
+.history-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-faint);
+  text-align: center;
+  padding: 20px 0;
+  font-size: 13px;
+}
 
 /* ── 主区域 ── */
 #main { flex: 1; display: flex; flex-direction: column; min-height: 0; container: sidepanel / inline-size; }

@@ -649,7 +649,10 @@ export function createSidepanelApp(root, deps) {
     elements.composerTakeover.replaceChildren();
     elements.composerTakeover.hidden = true;
     elements.composer.hidden = false;
-    elements.emptyHint.hidden = false;
+    // 加载期间:隐藏「新会话」空态,改用等待动画 —— 否则聊天区先闪成一片空白,
+    // 用户以为点错了会话。applySnapshot 完成后会用真实状态覆盖这个 typing。
+    elements.emptyHint.hidden = true;
+    chatRenderer.setTyping(true, t("sessions.loading"));
     historyDrawer?.setActive(sessionId, null);
     subagentCatalog.refresh();
 
@@ -715,7 +718,8 @@ export function createSidepanelApp(root, deps) {
     elements.composerTakeover.replaceChildren();
     elements.composerTakeover.hidden = true;
     elements.composer.hidden = false;
-    elements.emptyHint.hidden = false;
+    elements.emptyHint.hidden = true;
+    chatRenderer.setTyping(true, t("sessions.loading"));
     historyDrawer?.setActive(childId, null);
     subagentCatalog.refresh();
 
@@ -732,9 +736,7 @@ export function createSidepanelApp(root, deps) {
 
     if (token !== openSessionToken) return;
 
-    const snapshot = deps.sessions.getRuntimeSnapshot();
-    elements.emptyHint.hidden = snapshot.nodes.length > 0;
-    historyDrawer?.setActive(childId, snapshot.title);
+    applySnapshot(deps.sessions.getRuntimeSnapshot());
     subagentCatalog.refresh();
 
     const summary = deps.sessions.listStore.get().find((item) => item.sessionId === childId);
@@ -795,7 +797,7 @@ export function createSidepanelApp(root, deps) {
     workspaceMenu = mountWorkspaceMenu(elements, deps, {
       showToast,
       hostCwd: () => state.hostCwd,
-      onChange: () => historyDrawer?.refresh()
+      onChange: () => historyDrawer?.refresh({ showLoading: true })
     });
     historyDrawer = mountHistoryDrawer(deps, openSession, newSession, shortcutLabels, {
       workspacePath: () => workspaceMenu?.activePath() ?? null,

@@ -132,11 +132,23 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     return scoped.filter((item) => (item.projections?.values?.title || item.sessionId).toLowerCase().includes(q));
   }
 
-  async function refresh({ resetSelection = false } = {}) {
+  /// 列表正在刷新:显示加载态。切换工作目录 / 首次打开浮层时,旧列表不再适用,
+  /// 与其让用户盯着一片空白或上个目录的残留行,不如明确告诉他在加载。
+  function renderLoading() {
+    selectedIndex = -1;
+    renderedItems = [];
+    list.innerHTML = `<li class="history-loading" role="status" aria-live="polite"><span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>${escapeHtml(t("sessions.loading"))}</li>`;
+  }
+
+  async function refresh({ resetSelection = false, showLoading = false } = {}) {
+    if (showLoading) renderLoading();
     try {
       allItems = await deps.sessions.refreshList();
       render(filterItems(search.value), { resetSelection });
-    } catch { /* 后端不可达时保留旧列表 */ }
+    } catch {
+      // 后端不可达时保留旧列表(若刚显示过 loading,用旧 allItems 恢复)。
+      if (showLoading) render(filterItems(search.value), { resetSelection });
+    }
   }
 
   // 实时同步:后台帧的偷看只写 listStore(运行状态点、待审批/草稿徽章、
