@@ -21,7 +21,7 @@ const HISTORY_ACTION_ICONS = Object.freeze({
   archive: actionIcon('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>')
 });
 
-export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, { workspacePath = () => null } = {}) {
+export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, { workspacePath = () => null, workspaceSessionIds = () => null } = {}) {
   // 挂起请求/草稿的权威来源 —— session.list 的摘要里没有这两样。
   const listStore = deps.sessions?.listStore ?? null;
   const popover = document.querySelector("#history-popover");
@@ -95,7 +95,11 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   const workspaceMenu = document.querySelector("#workspace-menu");
   document.addEventListener("click", (event) => {
     if (popover.contains(event.target) || titleWrap.contains(event.target)) return;
-    if (workspaceMenu?.contains(event.target)) return;
+    // 菜单项点击会触发 handleSelect → renderMenu,而 renderMenu 重建 innerHTML,
+    // 把被点的按钮从 DOM 里摘掉 —— 冒泡到这里时 event.target 已 disconnect,
+    // workspaceMenu.contains(event.target) 会误判 false 从而连历史浮层一起关掉。
+    // composedPath 在事件产生时就固定了传播路径,不依赖 target 仍挂在树上。
+    if (workspaceMenu && event.composedPath().includes(workspaceMenu)) return;
     popover.classList.remove("open");
     titleWrap.setAttribute("aria-expanded", "false");
   });
@@ -107,9 +111,22 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   }
 
   function filterItems(query) {
-    // 先按工作目录收窄(session.list 只给 cwd,没有 workspaceId),再按搜索词。
+    // 先按工作目录收窄,再按搜索词。
+    // 选中具体 workspace 时,优先用宿主给的 sessionIds(权威成员名单)过滤;
+    // 只比对 item.cwd === path 太脆 —— cwd 可能缺失,也可能与 workspace 的
+    // canonical 路径拼写不一致(symlink/尾斜杠),导致切目录后列表整片消失。
+    // 「临时目录」(未挂 workspace)没有 sessionIds,仍按 cwd === path 过滤。
+    const sessionIds = workspaceSessionIds();
     const path = workspacePath();
-    const scoped = path ? allItems.filter((item) => item.cwd === path) : allItems;
+    let scoped;
+    if (sessionIds) {
+      const members = new Set(sessionIds);
+      scoped = allItems.filter((item) => members.has(item.sessionId) || (path != null && item.cwd === path));
+    } else if (path) {
+      scoped = allItems.filter((item) => item.cwd === path);
+    } else {
+      scoped = allItems;
+    }
     const q = query.trim().toLowerCase();
     if (!q) return scoped;
     return scoped.filter((item) => (item.projections?.values?.title || item.sessionId).toLowerCase().includes(q));

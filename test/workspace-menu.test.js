@@ -8,8 +8,8 @@ import { mountHistoryDrawer } from "../src/app/sidepanel/sidepanel-overlays.js";
 import { setLang, t } from "../src/shared/i18n.js";
 
 const WORKSPACES = [
-  { workspaceId: "w1", path: "/Users/u/dsh-chrome", title: "dsh-chrome" },
-  { workspaceId: "w2", path: "/Users/u/mono/web", title: "web" }
+  { workspaceId: "w1", path: "/Users/u/dsh-chrome", title: "dsh-chrome", sessionIds: ["s1", "s3"] },
+  { workspaceId: "w2", path: "/Users/u/mono/web", title: "web", sessionIds: ["s2"] }
 ];
 
 // jsdom 未实现 Popover API,菜单只需要 hidePopover 存在。
@@ -106,6 +106,17 @@ describe("workspace 下拉菜单", () => {
     await vi.waitFor(() => expect(menu.activePath()).toBeNull());
   });
 
+  it("activeSessionIds 选中 workspace 时返回其 sessionIds,否则为 null", async () => {
+    const { elements, menu } = setup();
+    await menu.refresh();
+    expect(menu.activeSessionIds()).toBeNull();
+    clickItem(elements.workspaceMenu, "w1");
+    await vi.waitFor(() => expect(menu.selected()?.workspaceId).toBe("w1"));
+    expect(menu.activeSessionIds()).toEqual(["s1", "s3"]);
+    clickItem(elements.workspaceMenu, "__temp__");
+    expect(menu.activeSessionIds()).toBeNull();
+  });
+
   it("setActiveByCwd 按 cwd 反查并高亮对应项,不触发 onChange", async () => {
     const { menu, onChange } = setup();
     await menu.refresh();
@@ -188,7 +199,7 @@ const SESSIONS = [
   { sessionId: "s3", cwd: "/Users/u/dsh-chrome", updatedAt: 1, projections: { values: { title: "桥" } } }
 ];
 
-function historySetup(workspacePath) {
+function historySetup(workspacePath, workspaceSessionIds = () => null) {
   const dom = new JSDOM(`<!DOCTYPE html><body>
     <button id="hdr-title-wrap"></button><span id="hdr-title"></span>
     <div id="history-popover"><input id="history-search" />
@@ -200,7 +211,7 @@ function historySetup(workspacePath) {
     sessions: { refreshList: vi.fn(async () => SESSIONS), fork: vi.fn(), rename: vi.fn() },
     formatErrorDetails: (e) => String(e)
   };
-  const drawer = mountHistoryDrawer(deps, vi.fn(), vi.fn(), null, { workspacePath });
+  const drawer = mountHistoryDrawer(deps, vi.fn(), vi.fn(), null, { workspacePath, workspaceSessionIds });
   return { drawer, doc: dom.window.document };
 }
 
@@ -236,6 +247,21 @@ describe("历史列表按工作目录过滤", () => {
     await drawer.refresh();
     expect(listedIds(doc)).toEqual([]);
     expect(doc.querySelector("#history-list-inner").textContent).toContain(t("sessions.empty"));
+  });
+
+  it("选中 workspace 时优先按 sessionIds 过滤,path 拼写不一致也不消失", async () => {
+    // 关键回归:workspace.path 是 canonical 路径(带尾斜杠示意拼写差异),会话的
+    // cwd 与之不严格相等。老逻辑按 item.cwd === path 会整片清空 —— 这就是
+    // 「点击切换工作目录后会话列表消失」的根因。现在应改按成员名单命中。
+    const { drawer, doc } = historySetup(() => "/Users/u/dsh-chrome/", () => ["s1", "s3"]);
+    await drawer.refresh();
+    expect(listedIds(doc)).toEqual(["s1", "s3"]);
+  });
+
+  it("workspace 没有 sessionIds 时回落到按 cwd 过滤", async () => {
+    const { drawer, doc } = historySetup(() => "/Users/u/mono/web", () => []);
+    await drawer.refresh();
+    expect(listedIds(doc)).toEqual(["s2"]);
   });
 });
 

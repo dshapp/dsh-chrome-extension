@@ -240,6 +240,14 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
       if (tempSelected) return hostCwd?.() ?? null;
       return null;
     },
+    // 供历史列表按会话归属过滤:选中具体 workspace 时,宿主给的 sessionIds 是权威
+    // 成员名单。不要用它替代 activePath() 去猜 —— cwd 可能缺失、也可能与 workspace
+    // 的 canonical 路径拼写不一致(symlink/尾斜杠),直接比 cwd 会让切目录后整片消失。
+    // null 表示「不是某个具体 workspace」(全部 / 临时目录),回落到按路径过滤。
+    activeSessionIds() {
+      const current = selected();
+      return current ? current.sessionIds ?? [] : null;
+    },
     // 头部那颗「打开目录」按钮要打开的路径 —— 与 #hdr-workspace-prefix 显示的
     // 是同一个目录:选中 workspace → 其 path;孤儿目录 → 该 cwd;否则回落宿主 cwd
     // (即「临时目录」所代表的路径)。只有连接前啥都没有时才为 null。
