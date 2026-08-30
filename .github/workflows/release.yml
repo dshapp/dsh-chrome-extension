@@ -35,7 +35,7 @@ jobs:
 
       - name: Run tests
         run: |
-          npm test
+          node --test --test-force-exit --test-timeout=15000 tests/background.spec.mjs
           npx vitest run --exclude test/install-contract.test.js
 
       - name: Resolve release metadata
