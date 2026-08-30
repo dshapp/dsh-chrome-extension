@@ -6,9 +6,10 @@ import { applyFenceRules, clearFenceRules } from "./fence-rules.js";
 
 export { DshRpcError, DshTransportError, DshStreamState };
 
-const frameListeners = new Set();
-
 export function createDshConnection(options) {
+  // 每个连接的帧订阅必须私有:若放在模块顶层,第二个连接的 dispose() 会清空
+  // 第一个连接的订阅,新实例的帧还会漏给旧实例的订阅者。
+  const frameListeners = new Set();
   const settings = options.settings;
   const dnr = options.dnr || (typeof chrome !== "undefined" ? chrome.declarativeNetRequest : undefined);
   let backendUrl = options.baseUrl || null;
