@@ -14,7 +14,8 @@ function setup({ sessions = SESSIONS } = {}) {
   const dom = new JSDOM(`<!DOCTYPE html><body>
     <button id="hdr-title-wrap"></button><span id="hdr-title"></span>
     <div id="history-popover"><input id="history-search" />
-    <ul id="history-list-inner"></ul></div></body></html>`);
+    <ul id="history-list-inner"></ul></div>
+    <div id="workspace-menu"></div></body></html>`);
   globalThis.document = dom.window.document;
   globalThis.requestAnimationFrame = (fn) => fn();
   globalThis.prompt = () => null;
@@ -79,6 +80,32 @@ describe("历史行内操作图标", () => {
       expect(button.getAttribute("aria-label")).toBeTruthy();
       expect(button.getAttribute("type")).toBe("button");
     }
+  });
+});
+
+describe("点击工作目录菜单不关闭历史浮层", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("菜单项在冒泡中被 renderMenu 重建(摘掉 target)后,历史浮层仍保持打开", () => {
+    const { drawer, doc, dom } = setup();
+    drawer.show();
+    const popover = doc.querySelector("#history-popover");
+    expect(popover.classList.contains("open")).toBe(true);
+
+    const menu = doc.querySelector("#workspace-menu");
+    const button = doc.createElement("button");
+    button.type = "button";
+    menu.appendChild(button);
+
+    // 模拟 handleSelect → renderMenu:点击菜单项后重建 innerHTML,
+    // 被点击的 button 在冒泡到 document 前就从 DOM 里摘掉了。
+    menu.addEventListener("click", () => { menu.innerHTML = ""; });
+
+    button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+
+    // contains(event.target) 对已 disconnect 的 target 返回 false,会把浮层误关;
+    // 修复后改用 event.composedPath() 判断(事件产生时固定的传播路径),浮层应保持打开。
+    expect(popover.classList.contains("open")).toBe(true);
   });
 });
 
