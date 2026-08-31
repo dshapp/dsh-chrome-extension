@@ -246,6 +246,9 @@ const MESSAGES = Object.freeze({
     "picker.needsPage": "Open a normal web page before selecting elements",
     "picker.limitReached": "Up to {n} elements can be selected",
     "picker.instruction": "(see above — act on these selected elements)",
+    "pageCtx.toggle": "Attach current page context",
+    "pageCtx.on": "Current tab id will be attached to your next message",
+    "pageCtx.off": "Page context off",
     // ── 设置页(照搬 Mac Settings 五个 pane)──
     "set.tab.general": "General",
     "set.tab.models": "Models",
@@ -695,6 +698,9 @@ const MESSAGES = Object.freeze({
     "picker.needsPage": "请先打开一个普通网页再选取元素",
     "picker.limitReached": "最多只能选取 {n} 个元素",
     "picker.instruction": "(见上,请处理这些选取的元素)",
+    "pageCtx.toggle": "携带当前页面上下文",
+    "pageCtx.on": "下一条消息将附带当前页面 tabId",
+    "pageCtx.off": "已关闭页面上下文",
     // ── 设置页(照搬 Mac Settings 五个 pane)──
     "set.tab.general": "通用设置",
     "set.tab.models": "模型",

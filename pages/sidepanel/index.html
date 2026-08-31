@@ -192,6 +192,17 @@
             </svg>
           </button>
 
+          <!-- 当前页面上下文:开启后每条消息自动附带当前标签页的 tabId 与页面快照 -->
+          <button class="bar-btn state-off" id="page-context-btn" type="button" aria-pressed="false" aria-label="携带当前页面上下文">
+            <!-- lucide: panel-top -->
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="18" height="18" x="3" y="3" rx="2"/>
+              <path d="M3 9h18"/>
+              <path d="M8 14h8"/>
+              <path d="M8 17.5h5"/>
+            </svg>
+          </button>
+
           <!-- plan mode 药丸:仅在计划模式开启时显示,点击执行 /plan off -->
           <button class="bar-btn plan-chip" id="plan-chip" type="button" hidden>
             <span>Plan</span><span class="plan-chip-x" aria-hidden="true">×</span>

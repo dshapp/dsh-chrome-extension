@@ -21,6 +21,7 @@ import { mountGoalBar, mountTodoPanel, mountStatsBar } from "../../features/dock
 import { mountSubagentCatalog } from "../../features/subagents/subagent-catalog-view.js";
 import { createElementPicker } from "../../features/element-picker/element-picker.js";
 import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../../features/element-picker/element-picker-shortcut.js";
+import { createPageContext } from "../../features/page-context/page-context.js";
 import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER } from "../../features/prompt-queue/index.js";
 
 export function createSidepanelApp(root, deps) {
@@ -319,11 +320,16 @@ export function createSidepanelApp(root, deps) {
     chatRenderer.setTyping(true, t("statusPreparing"));
     try {
       const content = [];
-      // 选取的元素以语义化 XML 拼在最前面,后接 [指令] 分隔用户原话,
-      // 让模型能稳定解析出"用户指代了哪些元素"以及各自的定位符。
+      // 两块上下文拼在最前面,后接 [指令] 分隔用户原话。
+      // 顺序:页面 tabId(在哪)→ 选取的元素(指哪个,语义化 XML)→ 指令。
+      // capture 内部吞掉所有异常,取不到 tab 只会少一行,不会连累消息发不出去。
+      // 关态时 context() 同步返回空串,await 一个非 Promise 不额外欠 tick,
+      // 发送时序与没有这个功能时完全一致。
+      const pageCtx = await pageContext.context();
       const pickedContext = pickedElements.length ? picker.context(pickedElements) : "";
-      const promptText = pickedContext
-        ? `${pickedContext}\n\n[指令] ${text || t("picker.instruction")}`
+      const prefix = [pageCtx, pickedContext].filter(Boolean).join("\n\n");
+      const promptText = prefix
+        ? `${prefix}\n\n[指令] ${text || t("picker.instruction")}`
         : text;
       if (promptText) content.push({ type: "text", text: promptText });
       for (const attachment of attachments) content.push(attachment.part);
@@ -443,6 +449,22 @@ export function createSidepanelApp(root, deps) {
     });
   }
 
+  // ---- 当前页面上下文 ----
+  // 与元素选取并列的一颗开关:开启后每条消息自动附带当前标签页的 tabId 与页面快照。
+  const pageContext = createPageContext({
+    showToast, t,
+    onChange: () => renderPageContextButton()
+  });
+
+  function renderPageContextButton() {
+    const button = elements.pageContextBtn;
+    const on = pageContext.enabled;
+    button.classList.toggle("state-on", on);
+    button.classList.toggle("state-off", !on);
+    button.setAttribute("aria-pressed", String(on));
+    button.title = t("pageCtx.toggle");
+  }
+
   const menus = createComposerMenus({ elements, deps, state, showToast, format });
   const dock = createComposerDock({ elements, deps, state, showToast, format });
   const { refreshSlashSources } = menus;
@@ -504,6 +526,11 @@ export function createSidepanelApp(root, deps) {
     void picker.toggle();
   }, true);
   picker.attach();
+
+  // 页面上下文开关:状态跨侧栏开关持久化,启动时读回一次。
+  elements.pageContextBtn.addEventListener("click", () => void pageContext.toggle());
+  renderPageContextButton();
+  void pageContext.load();
 
   const attachmentControls = mountAttachmentControls({
     elements, deps, showToast, onChange: () => updateSendState()

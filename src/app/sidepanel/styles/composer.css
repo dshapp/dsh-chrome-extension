@@ -933,11 +933,15 @@
 
 /* ══ 新增:页面元素选取 ══ */
 
-/* 入口按钮:开态实心、关态描边(与发送按钮同一套状态类命名)*/
-#element-picker-btn.state-on {
+/* 入口按钮:开态实心、关态描边(与发送按钮同一套状态类命名)。
+   页面上下文开关沿用同一套状态类 —— 两颗都是"底栏上的开关",
+   视觉上没有理由分家,合并成一条规则也免得配色两处维护。 */
+#element-picker-btn.state-on,
+#page-context-btn.state-on {
   background: var(--accent); color: var(--bg); border-color: var(--accent);
 }
-#element-picker-btn.state-off { background: transparent; }
+#element-picker-btn.state-off,
+#page-context-btn.state-off { background: transparent; }
 
 /* 已选元素条 */
 /* 靠内容撑宽,不铺满整行:药丸只标注"选了几个元素",没有理由占满一行。

@@ -19,7 +19,9 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   "hero-workspace", "hero-workspace-label",
   // 页面元素选取
   "element-picker-btn", "picked-elements-chip", "picked-elements-label",
-  "picked-elements-menu", "picked-elements-clear"];
+  "picked-elements-menu", "picked-elements-clear",
+  // 当前页面上下文开关
+  "page-context-btn"];
 
 export function collectElements(root) {
   const byId = new Map(IDS.map((id) => [id, root.querySelector(`#${id}`)]));
@@ -80,6 +82,7 @@ export function collectElements(root) {
     pickedChip: byId.get("picked-elements-chip"),
     pickedLabel: byId.get("picked-elements-label"),
     pickedMenu: byId.get("picked-elements-menu"),
-    pickedClear: byId.get("picked-elements-clear")
+    pickedClear: byId.get("picked-elements-clear"),
+    pageContextBtn: byId.get("page-context-btn")
   };
 }

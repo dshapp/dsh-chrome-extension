@@ -93,10 +93,13 @@ export function insertReference(draft, occurrences, span, reference) {
 /// 镜像层:把草稿逐段渲染,占位符渲染成胶囊 <span>。
 /// 只负责画,不接收事件(pointer-events 交给上层 textarea)。
 export function renderChipMirror(mirror, draft, occurrences) {
-  // 无占位符快速路径:没有胶囊要画,只保留一个零宽字符占住行高,
+  // 无占位符快速路径:没有胶囊要画,正文整段塞进一个文本节点即可,
   // 跳过全文遍历与逐字符切分(长草稿打字的主要热点之一)。
+  // 注意:正文必须画出来 —— 上层 textarea 的文字是透明的,
+  // 这里只画零宽字符会让用户看起来"输入框里什么都没有"。
+  // 末尾再补零宽字符,避免尾部换行不产生行盒导致镜像比 textarea 矮。
   if (occurrences.length === 0 && draft.indexOf(PLACEHOLDER) === -1) {
-    mirror.replaceChildren(document.createTextNode("\u200b"));
+    mirror.replaceChildren(document.createTextNode(draft + "\u200b"));
     return;
   }
   mirror.replaceChildren();
