@@ -124,6 +124,7 @@ export function createPlanReviewCard(question, review, { onRespond }) {
 
   function onKeyDown(event) {
     if (busy) return;
+    if (event.isComposing) return; // 反馈框用输入法时,确认候选的 Enter 不是提交计划
     if (event.key === "Escape") {
       event.preventDefault();
       discuss.click();

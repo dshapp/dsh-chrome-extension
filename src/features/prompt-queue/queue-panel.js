@@ -139,6 +139,7 @@ export function createQueuePanel(items, { onAction, running = false, mutable = t
     const input = event.target.closest(".queue-edit-input");
     if (!input) return;
     const row = input.closest("[data-item-id]");
+    if (event.isComposing) return; // 组字确认候选的 Enter 不提交编辑
     if (event.key === "Enter") { event.preventDefault(); commitEdit(row.dataset.itemId, input); }
     else if (event.key === "Escape") { event.preventDefault(); editingId = null; render(); }
   });

@@ -142,7 +142,7 @@ export function createQuestionCard(question, { onRespond }) {
     // 每次按键都写回状态机:提交时读的是它,不能等到 blur。
     custom.addEventListener("input", () => { flow = flowSetCustom(flow, custom.value); syncFooter(); });
     custom.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter") return;
+      if (event.key !== "Enter" || event.isComposing) return; // 组字确认候选不推进
       event.preventDefault();
       settle(flowContinue(flow));
     });

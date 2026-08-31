@@ -120,6 +120,18 @@ describe("行内编辑", () => {
     expect(onAction).toHaveBeenCalledWith("a", { kind: "edit", text: "改过了" });
   });
 
+  it("输入法组字确认候选的 Enter 不保存", () => {
+    const onAction = vi.fn();
+    const panel = mount([item("a")], { onAction });
+    panel.querySelector('[data-action="edit"]').click();
+    const input = panel.querySelector(".queue-edit-input");
+    input.value = "改过了";
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
+    Object.defineProperty(event, "isComposing", { value: true, configurable: true });
+    input.dispatchEvent(event);
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it("Escape 与取消都退出编辑且不派发", () => {
     const onAction = vi.fn();
     const panel = mount([item("a")], { onAction });

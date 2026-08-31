@@ -68,6 +68,7 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
       };
       // Enter 提交、Escape 取消(对齐 Mac 的编辑器按键)。
       input.addEventListener("keydown", (e) => {
+        if (e.isComposing) return; // 输入法组字确认候选的 Enter 是选字,不是提交
         if (e.key === "Enter") { e.preventDefault(); commit(); }
         else if (e.key === "Escape") { e.preventDefault(); editing = false; error = null; render(); }
       });

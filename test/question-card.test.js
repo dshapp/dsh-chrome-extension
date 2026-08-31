@@ -30,6 +30,12 @@ function multiQuestion() {
   };
 }
 const answersOf = (call) => call[1].value.answer.answers;
+/// 派发 isComposing=true 的 keydown(jsdom 构造器不接收 isComposing,手动补属性)。
+function keydownComposing(target, key = "Enter") {
+  const event = new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+  Object.defineProperty(event, "isComposing", { value: true, configurable: true });
+  target.dispatchEvent(event);
+}
 
 describe("问答卡:单题单选", () => {
   it("点击选项即结算整批", async () => {
@@ -75,6 +81,15 @@ describe("问答卡:单题单选", () => {
     input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await Promise.resolve();
     expect(answersOf(onRespond.mock.calls[0])).toEqual([{ id: "q1", selected: [], custom: "我的答案" }]);
+  });
+
+  it("自由文本输入法组字确认候选不提交", async () => {
+    const onRespond = vi.fn().mockResolvedValue({ accepted: true });
+    const card = createQuestionCard(single(), { onRespond });
+    const input = card.querySelector(".question-custom");
+    keydownComposing(input, "Enter");
+    await Promise.resolve();
+    expect(onRespond).not.toHaveBeenCalled();
   });
 
   it("Esc 取消走 cancelled 契约", async () => {
@@ -245,6 +260,18 @@ describe("计划审阅卡", () => {
     await Promise.resolve();
     const answer = answersOf(onRespond.mock.calls[0])[0];
     expect(answer).toEqual({ id: "q1", selected: [], custom: "换个方案" });
+    card.dispose();
+  });
+
+  it("反馈框输入法组字确认候选不触发提交/批准", async () => {
+    const onRespond = vi.fn().mockResolvedValue({ accepted: true });
+    const card = build(onRespond);
+    const input = card.querySelector(".plan-feedback");
+    input.value = "换个方案";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    keydownComposing(input, "Enter");
+    await Promise.resolve();
+    expect(onRespond).not.toHaveBeenCalled();
     card.dispose();
   });
 

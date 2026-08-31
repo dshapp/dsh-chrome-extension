@@ -91,6 +91,20 @@ describe("目标条", () => {
     expect(h.onEdit).toHaveBeenCalledWith("改成这个");
   });
 
+  it("编辑:输入法组字确认候选的 Enter 不提交", async () => {
+    const c = mount();
+    const h = handlers();
+    mountGoalBar(c, h).set(goal());
+    [...c.querySelectorAll(".goal-btn")].find((b) => b.title === "Edit goal").click();
+    const input = c.querySelector(".goal-edit-input");
+    input.value = "改成这个";
+    const event = new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true });
+    Object.defineProperty(event, "isComposing", { value: true, configurable: true });
+    input.dispatchEvent(event);
+    await Promise.resolve();
+    expect(h.onEdit).not.toHaveBeenCalled();
+  });
+
   it("编辑:Escape 取消且不提交", () => {
     const c = mount();
     const h = handlers();
