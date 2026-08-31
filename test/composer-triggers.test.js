@@ -235,4 +235,14 @@ describe("引用候选映射", () => {
     expect(s.value).toBe("@[标题](dsh-session:XX)");
     expect(s.description).toContain("/w");
   });
+  it("缺失或非法 createdAt 不抛异常,会话仍可引用", () => {
+    const [a, b] = sessionCandidates([
+      { mention: "@[A](dsh-session:1)", sessionId: "s1", label: "A", cwd: "/w" },
+      { mention: "@[B](dsh-session:2)", sessionId: "s2", label: "B", cwd: null, createdAt: "not-a-date" }
+    ]);
+    expect(a.value).toBe("@[A](dsh-session:1)");
+    expect(a.description).toContain("/w");
+    expect(b.value).toBe("@[B](dsh-session:2)");
+    expect(b.description).not.toContain("Invalid");
+  });
 });

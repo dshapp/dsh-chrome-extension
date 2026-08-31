@@ -45,10 +45,13 @@ export function sessionCandidates(items) {
   return (items ?? []).map((item) => {
     const location = item.cwd ?? t("reference.noCwd");
     const idPrefix = item.label === item.sessionId ? "" : `${item.sessionId} · `;
-    const date = new Date(item.createdAt).toISOString();
+    // 一个无法解析的 createdAt(宿主漏发/非法)不能让整个 '@' 会话候选源
+    // 因 toISOString 抛 RangeError 而全军覆没:坏日期只丢日期段,会话仍可引用。
+    const created = new Date(item.createdAt);
+    const date = Number.isFinite(created.getTime()) ? created.toISOString() : "";
     return {
       name: `${t("reference.session")} · ${item.label}`,
-      description: `${idPrefix}${location} · ${date}`,
+      description: `${idPrefix}${location}${date ? ` · ${date}` : ""}`,
       value: item.mention,
       insertLabel: item.label
     };
