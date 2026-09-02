@@ -1,2 +1,0 @@
-#!/bin/bash
-exec "/opt/homebrew/bin/node" "/Users/user/RustroverProjects/bifrost-context/codemax-chrome/dsh-chrome/native-host/dsh-native-host.js"

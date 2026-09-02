@@ -37,7 +37,7 @@ function assistantWith(blocks, over = {}) {
 
 describe("tool-presentation", () => {
   it("归一化工具名:mcp 前缀、dsh 前缀", () => {
-    expect(normalizeToolName("mcp__codemax__fetch")).toBe("fetch");
+    expect(normalizeToolName("mcp__acme__fetch")).toBe("fetch");
     expect(normalizeToolName("dsh-read")).toBe("read");
     expect(normalizeToolName("bash")).toBe("bash");
     expect(normalizeToolName("")).toBe("tool");

@@ -1,15 +1,24 @@
 // 侧边栏 Session 快捷键的纯状态机。只处理按键判定，具体 UI/会话操作由调用方注入。
 // 对齐 extension/src/features/sessions/session-shortcuts.js。
 
+import { COMMANDS, chordFor, chordLabel, platformOf } from "../shortcuts/command-table.js";
+
 export function isMacPlatform(platform = "") {
   return /mac/i.test(platform);
 }
+/// 文案不再手写:从命令表派生,免得这里和参考表各说一套(它们曾经就不一致 ——
+/// 这里的 newSession 拼作「⌘⇧K」,而 Apple 的修饰键顺序是「⇧⌘」)。
 export function getSessionShortcutLabels(platform = "") {
-  const primary = isMacPlatform(platform) ? "⌘" : "Ctrl";
+  const kind = platformOf(platform) === "mac" ? "mac" : "win";
+  const labelOf = (id) => {
+    const command = COMMANDS.find((entry) => entry.id === id);
+    return chordLabel(chordFor(command, kind), kind);
+  };
+  const history = labelOf("toggleHistory");
   return {
-    history: `${primary}K`,
-    newSession: `${primary}⇧K`,
-    historyItem: position => `${primary}K${position}`
+    history,
+    newSession: labelOf("newSession"),
+    historyItem: position => `${history} ${position}`
   };
 }
 export function createSessionShortcutController({

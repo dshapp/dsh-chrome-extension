@@ -2,6 +2,8 @@
 // 独立于 session-shortcuts.js 的「修饰键 + K/数字」和弦状态机——"." 与那套语义无关,
 // 合并会污染该状态机的 hints/chord 状态。
 
+import { COMMANDS, chordFor, chordLabel } from "../shortcuts/command-table.js";
+
 const TOGGLE_KEY = ".";
 
 /**
@@ -19,7 +21,9 @@ export function isElementPickerToggleChord(event, { mac = false } = {}) {
   return mac ? Boolean(event.metaKey) && !event.ctrlKey : Boolean(event.ctrlKey) && !event.metaKey;
 }
 
-/** 入口按钮 title 用的快捷键文案。 */
+/** 入口按钮 title 用的快捷键文案。取自命令表,不在这里手写字形。 */
 export function elementPickerShortcutLabel(mac = false) {
-  return mac ? "⌘." : "Ctrl+.";
+  const kind = mac ? "mac" : "win";
+  const command = COMMANDS.find((entry) => entry.id === "toggleElementPicker");
+  return chordLabel(chordFor(command, kind), kind);
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 设置页接线:用真实 index.html + 真实 mountSettings,配一个假宿主,
-// 验证五个 tab 能切、各 pane 真的渲染出内容、写回真的发出了对应 RPC。
+// 验证六个 tab 能切、各 pane 真的渲染出内容、写回真的发出了对应 RPC。
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -99,12 +99,35 @@ function stubDeps(overrides = {}) {
   };
 }
 
+/**
+ * Stub the two worker channels the server pane reads.
+ *
+ * - sendNativeMessage → probeHost(): supplies the log directory and the
+ *   "reused the server already running" phrase.
+ * - sendMessage → get_state: supplies the CDP bridge row.
+ *
+ * Both matter for rows the design shows, so a test that asserts on them
+ * without this helper would be vacuous (the rows are simply absent).
+ */
+function stubNativeHost({
+  host = { ok: true, logDir: "/Users/user/Library/Logs/DSHMac", dsh: "/usr/local/bin/dsh" },
+  bridge = { connected: true, shouldConnect: true, url: "ws://127.0.0.1:37086/chrome/ws" }
+} = {}) {
+  const sendNativeMessage = vi.fn().mockResolvedValue(host);
+  const sendMessage = vi.fn().mockResolvedValue(bridge);
+  globalThis.chrome = {
+    ...(globalThis.chrome ?? {}),
+    runtime: { ...(globalThis.chrome?.runtime ?? {}), sendNativeMessage, sendMessage }
+  };
+  return { sendNativeMessage, sendMessage };
+}
+
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function open(overrides) {
   mountDom();
   const stub = stubDeps(overrides);
-  const settings = mountSettings(stub.deps, vi.fn());
+  const settings = mountSettings(stub.deps);
   document.querySelector("#hdr-settings").click();
   await flush(); await flush(); await flush();
   return { ...stub, settings };
@@ -116,6 +139,9 @@ function clickTab(name) {
 
 beforeEach(() => {
   setLang("zh");
+  // 每个用例自己决定要不要 stubNativeHost():留着上一个用例的 chrome mock 会让
+  // 「启动器没装」那条路径永远测不到。
+  delete globalThis.chrome;
   // 这套 jsdom 没提供 localStorage(见 theme.test 的同名告警),而设置页把
   // "上次看的 tab" 记在里面 —— 补一个内存实现,顺带证明存取真的走了它。
   const store = new Map();
@@ -128,10 +154,11 @@ beforeEach(() => {
 });
 
 describe("tab 骨架", () => {
-  it("五个 tab 都在,默认选中通用", async () => {
+  it("六个 tab 都在,默认选中通用", async () => {
     await open();
     const tabs = [...document.querySelectorAll(".settings-tab")].map((tab) => tab.dataset.tab);
-    expect(tabs).toEqual(["general", "models", "presets", "plugins", "server"]);
+    // Git 不在设置页:它的入口在聊天区右上角(对齐 Mac WorkspaceGitAction)。
+    expect(tabs).toEqual(["general", "models", "presets", "plugins", "server", "shortcuts"]);
     expect(document.querySelector(".settings-tab.active").dataset.tab).toBe("general");
     expect(document.querySelector("#settings-pane-general").hidden).toBe(false);
     expect(document.querySelector("#settings-pane-models").hidden).toBe(true);
@@ -161,7 +188,7 @@ describe("tab 骨架", () => {
     await open();
     clickTab("plugins");
     await flush(); await flush();
-    expect(localStorage.getItem("codemax_dsh_settings_tab")).toBe("plugins");
+    expect(localStorage.getItem("dsh_settings_tab")).toBe("plugins");
   });
 
   it("语言切换后 tab 文案跟着换", async () => {
@@ -424,10 +451,10 @@ describe("模型 pane", () => {
 
   it("自定义提供方:写回用 path 数组嵌进 providers 下,不是带斜杠的字面量键", async () => {
     // 回归:曾经用 settings.update 传 patch 键 "providers/<id>",而 update 的键是
-    // 字面量键名不是路径,结果在命名空间根上建了个名叫 "providers/codemax2" 的
+    // 字面量键名不是路径,结果在命名空间根上建了个名叫 "providers/acme2" 的
     // 兄弟键 —— settings.yaml 里看得到,宿主却完全不认这个提供方。
     const { calls } = await openCustomSheet({ discovered: [{ id: "glm-5.1" }] });
-    typeInto("#cst-route", "codemax2");
+    typeInto("#cst-route", "acme2");
     typeInto("#cst-baseurl", "https://gw/v1");
     typeInto("#cst-key", "sk-1");
     await settle(800);
@@ -438,7 +465,7 @@ describe("模型 pane", () => {
     expect(calls.find(([m]) => m === "settings.update")).toBeUndefined();
     const mutate = calls.find(([m, p]) => m === "settings.mutate" && p.ns === "llm-pi-ai");
     expect(mutate[1].ops).toEqual([
-      { op: "set", path: ["providers", "codemax2"], value: expect.objectContaining({ baseURL: "https://gw/v1" }) }
+      { op: "set", path: ["providers", "acme2"], value: expect.objectContaining({ baseURL: "https://gw/v1" }) }
     ]);
     // 路径必须是分段的,任何一段都不能自己带斜杠。
     for (const segment of mutate[1].ops[0].path) expect(segment).not.toContain("/");
@@ -626,55 +653,159 @@ describe("插件 pane", () => {
 });
 
 describe("服务端 pane", () => {
-  it("显示后端地址、连接态与宿主自报信息", async () => {
+  it("按稿铺开:状态 / 服务地址 / Harness 主目录 / 重启", async () => {
     await open();
     clickTab("server");
     await flush(); await flush(); await flush();
     const pane = document.querySelector("#settings-pane-server");
-    expect(pane.querySelector("#srv-backend").value).toBe("http://127.0.0.1:3080");
     expect(pane.textContent).toContain("已连接");
-    expect(pane.textContent).toContain("1.2.3");
+    expect(pane.textContent).toContain("服务地址");
+    expect(pane.textContent).toContain("http://127.0.0.1:3080");
+    // host.describe 回了 home,所以主目录行连按钮一起出现。
+    expect(pane.textContent).toContain("Harness 主目录");
+    expect(pane.querySelector("#srv-reveal-home")).toBeTruthy();
   });
 
-  it("换后端后作废其余 pane 的缓存并重拉当前页", async () => {
-    // 回归:换后端等于换了一整台宿主。旧实现里 general 已被标记 loaded,
-    // 切回去只会看到上一台机器的数据(甚至在陈旧 revision 上写回)。
-    const { calls } = await open();
-    // 先让 general 完成一次加载,再去服务端页改地址。
-    const before = calls.filter(([m]) => m === "agentPreset.list").length;
-    expect(before).toBeGreaterThan(0);
-    clickTab("server");
-    await flush(); await flush(); await flush();
-    const input = document.querySelector("#srv-backend");
-    input.value = "http://127.0.0.1:4000";
-    input.dispatchEvent(new Event("input"));
-    document.querySelector("#srv-backend-save").click();
-    await flush(); await flush(); await flush();
-    clickTab("general");
-    await flush(); await flush(); await flush();
-    expect(calls.filter(([m]) => m === "agentPreset.list").length).toBeGreaterThan(before);
-  });
-
-  it("后端地址与 CDP 桥都在服务端页", async () => {
+  it("启动器 probe 成功后画出日志行", async () => {
+    stubNativeHost();
     await open();
     clickTab("server");
     await flush(); await flush(); await flush();
     const pane = document.querySelector("#settings-pane-server");
-    expect(pane.querySelector("#srv-backend")).toBeTruthy();
-    expect(pane.querySelector("#set-bridge-section")).toBeTruthy();
-    expect(pane.querySelector("#set-bridge-enabled")).toBeTruthy();
+    // 路径按 native-host 的约定拼:logDir + /dsh-web.log。
+    expect(pane.textContent).toContain("/Users/user/Library/Logs/DSHMac/dsh-web.log");
+    expect(pane.querySelector("#srv-view-log")).toBeTruthy();
   });
 
-  it("重拉服务端页不会冲掉桥的 DOM(它在渲染区之外)", async () => {
-    // 回归:桥是静态 DOM 且自带监听器,若被写进每次 refresh 重写的渲染区,
-    // 开关点一次之后就再也不响应了。
+  it("状态行只报连接状态,不缀服务来源说明", async () => {
+    // 曾经缀一句「—— 复用了已在运行的服务」。它讲的是本次是谁拉起了服务,
+    // 而这一行要回答的是"现在通不通" —— 两件事挤一行,读的人得先分辨。
+    stubNativeHost();
     await open();
     clickTab("server");
     await flush(); await flush(); await flush();
-    const before = document.querySelector("#set-bridge-enabled");
-    document.querySelector("#srv-backend-save").click();
+    const state = document.querySelector("#srv-state");
+    expect(state.textContent.trim()).toBe("已连接");
+    expect(document.querySelector("#settings-pane-server").textContent)
+      .not.toContain("复用了已在运行的服务");
+  });
+
+  it("查看日志走 host.openPath,带拼好的日志文件路径", async () => {
+    stubNativeHost();
+    const { calls } = await open();
+    clickTab("server");
     await flush(); await flush(); await flush();
-    expect(document.querySelector("#set-bridge-enabled")).toBe(before);
+    document.querySelector("#srv-view-log").click();
+    await flush(); await flush();
+    const opened = calls.filter(([m]) => m === "host.openPath");
+    expect(opened.length).toBe(1);
+    expect(opened[0][1]).toEqual({ path: "/Users/user/Library/Logs/DSHMac/dsh-web.log" });
+  });
+
+  it("启动器没装时,日志行不画(不编造路径)", async () => {
+    // 没有 chrome.runtime.sendNativeMessage → probeHost 直接回 ok:false。
+    await open();
+    clickTab("server");
+    await flush(); await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-server");
+    expect(pane.querySelector("#srv-view-log")).toBeNull();
+    expect(pane.textContent).not.toContain("dsh-web.log");
+  });
+
+  it("连不上本地 daemon 时,重启段整段不画", async () => {
+    // 测试环境里没有 chrome-daemon,serverOps.version() 会失败 → dshUnsupported。
+    // 此时画一个按不动的「重启服务」比不画更糟:它承诺了一个做不到的操作。
+    await open();
+    clickTab("server");
+    await flush(); await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-server");
+    expect(pane.querySelector("#srv-dsh-restart")).toBeNull();
+    expect(pane.textContent).not.toContain("重启会中断进行中的会话");
+  });
+
+  it("服务地址按链接色渲染,但不是可点的 <a>", async () => {
+    // 扩展页打不开 file:,做成 <a> 只会给出一个哪儿都到不了的手势。
+    await open();
+    clickTab("server");
+    await flush(); await flush(); await flush();
+    const url = document.querySelector("#settings-pane-server .srv-url");
+    expect(url).toBeTruthy();
+    expect(url.tagName).toBe("SPAN");
+  });
+
+  it("不再有后端地址输入框与宿主代理开关(版式以稿为准)", async () => {
+    await open();
+    clickTab("server");
+    await flush(); await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-server");
+    for (const id of ["#srv-backend", "#srv-backend-save", "#srv-launcher-test", "#srv-host-disable"]) {
+      expect(pane.querySelector(id), id).toBeNull();
+    }
+  });
+
+  it("Agent 浏览器控制并进服务信息卡的最后一行,不再单独占一张卡", async () => {
+    stubNativeHost();
+    await open();
+    clickTab("server");
+    await flush(); await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-server");
+    // 桥曾经是一张自带表头、只有一行的独立卡片(#set-bridge-section)。
+    expect(pane.querySelector("#set-bridge-section")).toBeNull();
+    const state = pane.querySelector("#set-bridge-state");
+    expect(state).toBeTruthy();
+    // 它现在住在"日志"那一行所在的同一张卡里,并且是最后一行。
+    const card = state.closest(".set-section");
+    const labels = [...card.querySelectorAll(".set-row-label")].map((el) => el.textContent.trim());
+    expect(labels).toContain("日志");
+    expect(labels[labels.length - 1]).toBe("Agent 浏览器控制");
+  });
+
+  it("桥只报连接状态,没有开关(Agent 控制不可关闭)", async () => {
+    stubNativeHost();
+    await open();
+    clickTab("server");
+    await flush(); await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-server");
+    // 开关一旦存在,用户就能把自己关进"装了却不工作"的故障态里。
+    expect(pane.querySelector("#set-bridge-enabled")).toBeNull();
+    expect(pane.querySelector(".set-switch")).toBeNull();
+    expect(pane.querySelector('input[type="checkbox"]')).toBeNull();
+  });
+
+  it("桥的状态每秒自刷,且不重画整页(不换掉按钮)", async () => {
+    // 回归:桥那一行现在由 pane 渲染,它的刷新必须只补那一行。
+    // 整页重画会把用户正按着的按钮换成新节点。
+    vi.useFakeTimers();
+    try {
+      stubNativeHost();
+      const stub = stubDeps();
+      mountDom();
+      mountSettings(stub.deps);
+      document.querySelector("#hdr-settings").click();
+      await vi.advanceTimersByTimeAsync(10);
+      clickTab("server");
+      await vi.advanceTimersByTimeAsync(50);
+      const restart = document.querySelector("#srv-dsh-restart");
+      const state = document.querySelector("#set-bridge-state");
+      expect(state).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(2500);
+      // 桥行还在,重启按钮还是同一个节点。
+      expect(document.querySelector("#set-bridge-state")).toBeTruthy();
+      expect(document.querySelector("#srv-dsh-restart")).toBe(restart);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("这个部署没有桥半部时,整行不画(不画一盏永不亮的灯)", async () => {
+    // 没有 chrome.runtime.sendMessage → available:false。
+    globalThis.chrome = { runtime: { sendNativeMessage: async () => ({ ok: false }) } };
+    await open();
+    clickTab("server");
+    await flush(); await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-server");
+    expect(pane.querySelector("#set-bridge-state")).toBeNull();
+    expect(pane.textContent).not.toContain("Agent 浏览器控制");
   });
 
   it("连接状态点区分三态:已连接 / 连接中 / 未连接", async () => {
@@ -689,7 +820,7 @@ describe("服务端 pane", () => {
         CONNECTED: "connected", CONNECTING: "connecting", DISCONNECTED: "disconnected"
       };
       mountDom();
-      mountSettings(stub.deps, vi.fn());
+      mountSettings(stub.deps);
       document.querySelector("#hdr-settings").click();
       await flush(); await flush();
       clickTab("server");
@@ -709,34 +840,34 @@ describe("服务端 pane", () => {
         CONNECTED: "connected", CONNECTING: "connecting", DISCONNECTED: "disconnected"
       };
       mountDom();
-      mountSettings(stub.deps, vi.fn());
+      mountSettings(stub.deps);
       document.querySelector("#hdr-settings").click();
       await vi.advanceTimersByTimeAsync(10);
       clickTab("server");
       await vi.advanceTimersByTimeAsync(10);
-      const input = document.querySelector("#srv-backend");
+      const restart = document.querySelector("#srv-dsh-restart");
       expect(document.querySelector("#srv-state .set-status").className).toContain("busy");
       // 后台连上了:不切 tab、不重开页面,状态点也应自己转绿。
       stub.deps.connection.streamState = "connected";
       await vi.advanceTimersByTimeAsync(1200);
       expect(document.querySelector("#srv-state .set-status").className).toContain("ok");
-      // 输入框是同一个节点 —— 没被整页重画冲掉。
-      expect(document.querySelector("#srv-backend")).toBe(input);
+      // 重启按钮是同一个节点 —— 每秒的状态自刷没有整页重画。
+      expect(document.querySelector("#srv-dsh-restart")).toBe(restart);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("保存后端地址走 connection.setBackendUrl", async () => {
-    const { deps } = await open();
+  it("在 Finder 中查看走 host.openPath,带 host.describe 给的 home", async () => {
+    const { deps, calls } = await open();
     clickTab("server");
     await flush(); await flush(); await flush();
-    const input = document.querySelector("#srv-backend");
-    input.value = "http://127.0.0.1:4000";
-    input.dispatchEvent(new Event("input"));
-    document.querySelector("#srv-backend-save").click();
+    document.querySelector("#srv-reveal-home").click();
     await flush(); await flush();
-    expect(deps.connection.setBackendUrl).toHaveBeenCalledWith("http://127.0.0.1:4000");
+    const opened = calls.filter(([m]) => m === "host.openPath");
+    expect(opened.length).toBe(1);
+    expect(opened[0][1]).toEqual({ path: "/Users/u" });
+    expect(deps).toBeTruthy();
   });
 });
 
@@ -781,7 +912,7 @@ describe("模型目录变更的同步与发现", () => {
     mountDom();
     const stub = stubDeps();
     const onModelsChanged = vi.fn();
-    mountSettings(stub.deps, vi.fn(), { onModelsChanged });
+    mountSettings(stub.deps, { onModelsChanged });
     document.querySelector("#hdr-settings").click();
     await flush(); await flush(); await flush();
     clickTab("models");
@@ -798,5 +929,73 @@ describe("模型目录变更的同步与发现", () => {
     // 全局目录要重拉,底栏菜单也要被通知 —— 两者缺一都会让用户看到旧模型。
     expect(stub.deps.models.refresh).toHaveBeenCalled();
     expect(onModelsChanged).toHaveBeenCalled();
+  });
+});
+describe("快捷键 pane", () => {
+  it("渲染分区与和弦,且不发任何宿主 RPC", async () => {
+    const { calls } = await open();
+    const before = calls.length;
+    clickTab("shortcuts");
+    await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-shortcuts");
+    expect(pane.hidden).toBe(false);
+    // 命令表是纯前端数据,这一页不该跟宿主说话。
+    expect(calls.length).toBe(before);
+    expect(pane.querySelectorAll(".set-section").length).toBeGreaterThan(0);
+    expect(pane.querySelectorAll("kbd.sc-key").length).toBeGreaterThan(0);
+    expect(pane.textContent).toContain("发送消息");
+  });
+
+  it("列出命令表里的每一条命令", async () => {
+    const { COMMANDS } = await import("../src/features/shortcuts/command-table.js");
+    await open();
+    clickTab("shortcuts");
+    await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-shortcuts");
+    expect(pane.querySelectorAll(".set-row").length).toBe(COMMANDS.length);
+  });
+
+  // 这条是实测补的:曾经每个和弦只画一个键帽("⌃⌘L" 挤成一块),
+  // 因为渲染去按 "+" 拆 chordLabel,而 mac 的字形是连写的。
+  it("每个修饰键与主键各自成一个键帽", async () => {
+    await open();
+    clickTab("shortcuts");
+    await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-shortcuts");
+    const rowOf = (title) => [...pane.querySelectorAll(".set-row")]
+      .find((row) => row.querySelector(".set-row-label")?.textContent === title);
+    const capsOf = (title) => [...rowOf(title).querySelectorAll("kbd.sc-key")].map((cap) => cap.textContent);
+    // mac(jsdom 默认 platform 非 mac,故断言 win 档),⌥⌘↩ → Ctrl+Alt+Enter
+    expect(capsOf("把草稿插入正在运行的轮次")).toEqual(["Ctrl", "Alt", "Enter"]);
+    expect(capsOf("发送消息")).toEqual(["Enter"]);
+    expect(capsOf("停止生成")).toEqual(["Esc"]);
+    // 真正的不变量:一个键帽只承载一个键 —— 不塞多个 mac 修饰键字形,
+    // 也不残留 "+"。"Backspace" 这类长键名是合法的,所以不能用长度当判据。
+    for (const cap of pane.querySelectorAll("kbd.sc-key")) {
+      const text = cap.textContent;
+      expect(text, text).not.toMatch(/\+/);
+      expect(text.match(/[⌘⌥⌃⇧]/g)?.length ?? 0, text).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("没有和弦的条目用文字说明代替(⌘K 再按数字)", async () => {
+    await open();
+    clickTab("shortcuts");
+    await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-shortcuts");
+    expect(pane.querySelector(".sc-chord-note").textContent).toContain("1–9");
+  });
+
+  it("跟随语言切换重画", async () => {
+    const { settings } = await open();
+    clickTab("shortcuts");
+    await flush(); await flush();
+    setLang("en");
+    settings.relabel();
+    await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-shortcuts");
+    expect(pane.textContent).toContain("Send message");
+    expect(document.querySelector('[data-tab="shortcuts"]').textContent).toBe("Shortcuts");
+    setLang("zh");
   });
 });

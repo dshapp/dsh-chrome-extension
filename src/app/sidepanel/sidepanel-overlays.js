@@ -3,27 +3,37 @@
 import { t } from "../../shared/i18n.js";
 import { escapeHtml } from "../../shared/md-to-html.js";
 import {
-  resolveSessionRowTrailing, isAwaitingUserTrailing, formatRelativeTime,
+  resolveSessionRowTrailing, formatRelativeTime,
   SessionRowTrailingKind, SessionAwaitingKind
 } from "../../features/sessions/session-row-trailing.js";
+import {
+  resolveSessionRowStatus, shouldShowSessionRowStatus, SessionRowStatus
+} from "../../features/sessions/session-row-status.js";
+import { mountHistoryOrdering } from "./history-ordering.js";
+import { HISTORY_ACTION_ICONS } from "./history-icons.js";
 
-// 行内操作图标取自 Lucide(https://github.com/lucide-icons/lucide,ISC),沿用官方 24×24 网格的
-// 原始路径,stroke-width 从 2 调到 1.7 以适配 13px 的渲染尺寸。之前这里用的是 Unicode 字形
-// (⑂ ✎ 🗄)—— 字形随系统字体变化、基线对不齐,🗄 在部分平台还会被渲染成彩色 emoji。
-const actionIcon = (body) =>
-  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
-const HISTORY_ACTION_ICONS = Object.freeze({
-  // lucide: git-fork
-  fork: actionIcon('<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>'),
-  // lucide: pencil-line
-  rename: actionIcon('<path d="M13 21h8"/><path d="m15 5 4 4"/><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/>'),
-  // lucide: archive
-  archive: actionIcon('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>')
+// 行首状态灯的无障碍/tooltip 文案。warning 一档不会真的渲染
+//(shouldShowSessionRowStatus 会挡掉它,因为 trailing 已经把话说了),
+// 但表里留着它,保持与 SessionRowStatus 同形、日后不会漏。
+const STATUS_HELP_KEY = Object.freeze({
+  [SessionRowStatus.ongoing]: "session.stateOngoing",
+  [SessionRowStatus.error]: "session.stateError",
+  [SessionRowStatus.done]: "session.stateCompleted",
+  [SessionRowStatus.warning]: "session.awaitingApprovalHelp"
 });
 
-export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, { workspacePath = () => null, workspaceSessionIds = () => null } = {}) {
+export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, {
+  workspacePath = () => null,
+  workspaceSessionIds = () => null,
+  workspaceId = () => null,
+  orderStore = null
+} = {}) {
   // 挂起请求/草稿的权威来源 —— session.list 的摘要里没有这两样。
   const listStore = deps.sessions?.listStore ?? null;
+  // 排序控制器。在下面才创建(它要用到 render/filterItems),而 filterItems
+  // 又要问它当前是哪一档 —— 所以这里先留个引用,由那些函数在**调用时**读取,
+  // 而不是在定义时捕获。未就绪前按默认档,首帧不会因此出错。
+  let ordering = null;
   const popover = document.querySelector("#history-popover");
   const titleWrap = document.querySelector("#hdr-title-wrap");
   const list = popover.querySelector("#history-list-inner");
@@ -44,7 +54,10 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     titleWrap.setAttribute("aria-expanded", "true");
     search.value = "";
     // 高亮由 refresh() → render(reset) 落到第一行,这样浮层一开回车就能开首条。
-    refresh({ resetSelection: true });
+    // showLoading:refreshList 是一次 RPC,慢的时候浮层会挂着**上一次**的行不动 ——
+    // 那批行属于打开之前的时刻(甚至是上个工作目录),看着像已经加载完了。
+    // 先落加载态,列表回来再整体换掉,与切工作目录那条路径同一套处理。
+    refresh({ resetSelection: true, showLoading: true });
     // 浮层刚从 display:none 切出来,同一帧里 focus() 在部分浏览器上不生效。
     requestAnimationFrame(() => search.focus());
   }
@@ -128,8 +141,12 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       scoped = allItems;
     }
     const q = query.trim().toLowerCase();
-    if (!q) return scoped;
-    return scoped.filter((item) => (item.projections?.values?.title || item.sessionId).toLowerCase().includes(q));
+    const matched = q
+      ? scoped.filter((item) => (item.projections?.values?.title || item.sessionId).toLowerCase().includes(q))
+      : scoped;
+    // 排序放在过滤之后:手动序与状态序都只对**当前可见的这批**行成立
+    //(见 session-order-store 的"交集安全")。
+    return listStore?.sortBy ? listStore.sortBy(matched, ordering?.orderBy()) : matched;
   }
 
   /// 列表正在刷新:显示加载态。切换工作目录 / 首次打开浮层时,旧列表不再适用,
@@ -150,6 +167,19 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       if (showLoading) render(filterItems(search.value), { resetSelection });
     }
   }
+
+  // ── 排序切换条与行拖拽。整块住在 history-ordering.js:
+  // 本文件在这项功能之前就已经 409 行,再内联进来会超过 400 行的硬上限。
+  ordering = mountHistoryOrdering({
+    popover,
+    list,
+    orderStore,
+    workspaceId,
+    workspaces: deps.workspaces,
+    visibleRows: () => renderedItems,
+    fullRows: () => filterItems(search.value),
+    rerender: (options) => render(filterItems(search.value), options)
+  });
 
   // 实时同步:后台帧的偷看只写 listStore(运行状态点、待审批/草稿徽章、
   // 标题投影、活跃排序),浮层开着时跟着重画,不用等下一次 open()。
@@ -188,6 +218,16 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     }
   }
 
+  /// 行首状态槽位。永远渲染一个等宽的 span,即使不点灯 ——
+  /// 有灯和没灯的行标题必须左对齐,否则列表会随状态变化左右跳动
+  /// (对齐 macOS 用 Color.clear 占住 statusSlotWidth 的做法)。
+  function statusHtml(status, show) {
+    if (!show) return '<span class="h-state h-state-idle" aria-hidden="true"></span>';
+    const help = t(STATUS_HELP_KEY[status] ?? "session.stateOngoing");
+    const safe = escapeHtml(help);
+    return `<span class="h-state h-state-${status}" role="img" title="${safe}" aria-label="${safe}"></span>`;
+  }
+
   function render(items, { resetSelection = false } = {}) {
     const visible = items.length > MAX_RENDERED_ROWS ? items.slice(0, MAX_RENDERED_ROWS) : items;
     const overflow = items.length - visible.length;
@@ -201,6 +241,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       list.innerHTML = `<li class="history-empty">${escapeHtml(t("sessions.empty"))}</li>`;
       return;
     }
+    // 状态档的顺序是算出来的,拖了也会被下一次渲染算回去 —— 索性不让拖。
+    const draggable = ordering?.isDraggable() ?? true;
     list.innerHTML = visible.map((item, index) => {
       const hint = shortcutLabels && index < 9 ? shortcutLabels.historyItem(index + 1) : "";
       const trailing = resolveSessionRowTrailing({
@@ -211,14 +253,26 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         hasDraft: listStore?.hasDraft(item.sessionId) ?? false,
         updatedAt: item.updatedAt ?? Date.now()
       });
-      // 状态点与警示徽章二选一:徽章已经把「这行要你处理」说清楚了,
-      // 再点一个绿点只是噪声(对齐 macOS 的 showStatus 抑制)。
-      const showDot = item.running && !isAwaitingUserTrailing(trailing);
+      // 行首状态灯的判定全在 session-row-status.js 里,与 macOS 同一份语义:
+      // 挂起 > 失败 > 自身在跑 > 子代理在跑 > 空闲,且徽章已报「卡住」时不点灯。
+      const status = resolveSessionRowStatus({
+        awaitingUser: listStore?.awaitingUser(item.sessionId) ?? null,
+        running: Boolean(item.running),
+        errored: listStore?.isErrored?.(item.sessionId) ?? false,
+        runningSubagentRoot: listStore?.isRunningSubagentRoot?.(item.sessionId) ?? false
+      });
+      const showStatus = shouldShowSessionRowStatus({
+        status,
+        completed: listStore?.isCompleted?.(item.sessionId) ?? false,
+        trailing,
+        isArchived: Boolean(item.archived),
+        isBlank: Boolean(item.blank)
+      });
       return [
-        `<li class="history-item${item.sessionId === activeSessionId ? " active" : ""}${index === selectedIndex ? " selected" : ""}" data-session-id="${escapeHtml(item.sessionId)}" data-index="${index}">`,
+        `<li class="history-item${item.sessionId === activeSessionId ? " active" : ""}${index === selectedIndex ? " selected" : ""}" data-session-id="${escapeHtml(item.sessionId)}" data-index="${index}"${draggable ? ' draggable="true"' : ""}>`,
+        statusHtml(status, showStatus),
         `<span class="h-title">${escapeHtml(itemTitle(item))}</span>`,
         `<span class="h-when-row"><kbd class="shortcut-hint hist-shortcut-hint" aria-hidden="true">${escapeHtml(hint)}</kbd>${trailingHtml(trailing)}</span>`,
-        showDot ? '<span class="h-dot" title="running"></span>' : "",
         `<span class="h-actions">`,
         `<button type="button" data-action="fork" title="${escapeHtml(t("fork"))}" aria-label="${escapeHtml(t("fork"))}">${HISTORY_ACTION_ICONS.fork}</button>`,
         `<button type="button" data-action="rename" title="${escapeHtml(t("rename"))}" aria-label="${escapeHtml(t("rename"))}">${HISTORY_ACTION_ICONS.rename}</button>`,
@@ -324,6 +378,11 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     setActive(sessionId, sessionTitle) {
       activeSessionId = sessionId;
       title.textContent = sessionTitle || t("new_session");
+      // 未读提醒的清除挂在这里,而不是在 openSession 里再调一次:
+      // 打开会话与新建会话两条路径都已经走过 setActive(见 sidepanel-app),
+      // 挂在这个汇聚点上就不会漏掉任何一条,以后新增入口也自动继承。
+      // listStore 自己判断有没有真的清掉东西,没变就不会白 notify。
+      listStore?.setSelected?.(sessionId);
     },
     // 快捷键(⌘K)复用标题下拉的开关逻辑,保证搜索框聚焦/列表刷新行为一致。
     toggle() { titleWrap.click(); },
@@ -339,31 +398,6 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   };
 }
 
-// popover 菜单构建(模型/权限/技能共用)。
-export function renderMenuItems(container, entries, { selectedId, onSelect, groupBy, emptyText }) {
-  if (!entries.length) {
-    container.innerHTML = emptyText
-      ? `<div class="menu-empty">${escapeHtml(emptyText)}</div>`
-      : "";
-    container.onclick = null;
-    return;
-  }
-  const groups = new Map();
-  for (const entry of entries) {
-    const key = groupBy ? groupBy(entry) : "";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(entry);
-  }
-  container.innerHTML = [...groups.entries()].map(([group, items]) => (
-    (group ? `<div class="menu-group-label">${escapeHtml(group)}</div>` : "")
-    + items.map((item) => (
-      `<button type="button" class="menu-item${item.id === selectedId ? " selected" : ""}" data-item-id="${escapeHtml(item.id)}">`
-      + `<span>${escapeHtml(item.label)}</span>${item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}`
-      + `</button>`
-    )).join("")
-  )).join("");
-  container.onclick = (event) => {
-    const button = event.target.closest("[data-item-id]");
-    if (button) onSelect(button.dataset.itemId);
-  };
-}
+// 通用 popover 菜单渲染器住在 menu-items.js。这里再导出,让既有调用方
+//(composer-dock / composer-menus / workspace-menu)的 import 路径保持不变。
+export { renderMenuItems } from "./menu-items.js";

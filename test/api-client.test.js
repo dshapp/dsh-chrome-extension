@@ -82,3 +82,28 @@ describe("settings", () => {
     expect(toWebSocketUrl("https://h.example", "/api/events.mux")).toBe("wss://h.example/api/events.mux");
   });
 });
+
+describe("畸形响应信封", () => {
+  const mk = (result) => createApiClient({
+    baseUrl: "http://x",
+    fetch: async () => okResponse({ type: "server-response", rpcId: "fixed", result }),
+    makeRpcId: () => "fixed"
+  });
+
+  // 裸取 result.ok / result.error.code 会抛 TypeError,而 error-details 靠
+  // instanceof 分流,裸 TypeError 全落到兜底 —— 用户看到的是一句没有意义的
+  // JS 内部报错,而不是"信封无效"。
+  it("缺 result 时抛 DshTransportError,不是 TypeError", async () => {
+    await expect(mk(undefined).call("m", {})).rejects.toBeInstanceOf(DshTransportError);
+  });
+
+  it("ok:false 但缺 error 时抛 DshRpcError,不是 TypeError", async () => {
+    const error = await mk({ ok: false }).call("m", {}).catch((e) => e);
+    expect(error).toBeInstanceOf(DshRpcError);
+    expect(error.code).toBe("unknown");
+  });
+
+  it("result 不是对象时也按信封无效处理", async () => {
+    await expect(mk("nope").call("m", {})).rejects.toBeInstanceOf(DshTransportError);
+  });
+});

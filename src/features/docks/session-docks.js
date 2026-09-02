@@ -217,9 +217,14 @@ export function formatTokens(n) {
 export function formatDuration(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return "0s";
   const sec = ms / 1000;
-  if (sec < 60) return `${sec.toFixed(sec < 10 ? 1 : 0)}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m${Math.round(sec % 60) ? ` ${Math.round(sec % 60)}s` : ""}`;
+  // 先按目标精度取整,再选分支。反过来做的话,59.6s 会先落进"秒"分支、再被
+  // toFixed(0) 进位成 60,输出非法的 "60s";59m59.6s 同理变成 "59m 60s"。
+  if (sec < 10) return `${sec.toFixed(1)}s`;
+  const wholeSec = Math.round(sec);
+  if (wholeSec < 60) return `${wholeSec}s`;
+  const min = Math.floor(wholeSec / 60);
+  const restSec = wholeSec % 60;
+  if (min < 60) return `${min}m${restSec ? ` ${restSec}s` : ""}`;
   return `${Math.floor(min / 60)}h${min % 60 ? ` ${min % 60}m` : ""}`;
 }
 
@@ -271,8 +276,10 @@ export function statsText(stats, usage) {
 export function formatStatsDuration(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return "0s";
   const seconds = ms / 1000;
-  if (seconds < 60) {
-    const tenths = Math.round(seconds * 10);
+  // 同样先取整再选分支:59.99s 按原值属于"秒"分支,但取整到一位小数后是 60.0,
+  // 直接输出会得到非法的 "60s"。
+  const tenths = Math.round(seconds * 10);
+  if (tenths < 600) {
     return tenths % 10 === 0 ? `${tenths / 10}s` : `${Math.floor(tenths / 10)}.${tenths % 10}s`;
   }
   const whole = Math.round(seconds);

@@ -114,16 +114,16 @@
   pointer-events: none;
   color: var(--text);
 }
-/* 引用胶囊:对齐 Mac drawReferenceChips() —— 圆角 6px、
-   systemBlue 20% 填充、标签用 medium 字重随正文字号。 */
+/* 引用胶囊:圆角 + accent 20% 填充。
+   ⚠️ 不许加任何改变宽度的样式(padding / 字重 / letter-spacing / nowrap):
+   胶囊就是草稿里那段真实字符(含两侧 NBSP 留白),镜像与 textarea 必须
+   逐像素同宽,否则光标与胶囊后的文字全部错位。跨行折行时底色按行分段。 */
 .composer-chip {
-  display: inline-block;
   border-radius: 6px;
-  padding: 0 6px;
   background: color-mix(in oklab, var(--accent) 20%, transparent);
   color: var(--text);
-  font-weight: 500;
-  white-space: nowrap;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 /* Mac .chipInvalid:红色 + 删除线 + 整体 0.7 不透明度 */
 .composer-chip.invalid {
@@ -158,7 +158,7 @@
 #perm-label.warn { color: var(--warn); }
 .bar-btn:hover #perm-label.warn { color: var(--warn); }
 
-/* 加号附件按钮 + 菜单 */
+/* 加号按钮:打开候选浮层(#trigger-menu),与输入 "@" 是同一个 */
 #attach-btn {
   display: flex; align-items: center; justify-content: center;
   inline-size: 2rem; block-size: 2rem;
@@ -171,21 +171,8 @@
   transition: background .12s, border-color .12s;
 }
 #attach-btn:hover { background: var(--bg-raised); color: var(--text); }
-#attach-menu {
-  display: none;
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 1.25rem;
-  background: var(--bg-overlay);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.24);
-  z-index: 70;
-  padding: 0.375rem;
-  min-inline-size: 10rem;
-}
-#attach-menu.open { display: block; }
-#attach-menu .menu-item { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; }
+/* 浮层开着时保持按下态,让用户看得出这颗按钮正开着东西 */
+#attach-btn[aria-expanded="true"] { background: var(--bg-raised); color: var(--text); }
 
 /* 底部浮层(模型/权限/技能):定位对齐原 extension —— 触发钮声明 anchor-name,
    菜单用 CSS 锚点定位吸附在触发钮正上方;不支持锚点定位的浏览器退回 composer 上方固定位。 */
@@ -196,6 +183,7 @@
 /* 预设入口已移到新建会话页(hero),不再贴着 composer,自带一个锚点。 */
 #preset-btn { anchor-name: --preset-trigger; }
 #subagent-catalog-btn { anchor-name: --subagent-catalog-trigger; }
+#git-entry-btn { anchor-name: --git-entry-trigger; }
 
 [popover] {
   position: fixed;
@@ -219,6 +207,9 @@
 #stats-menu { inset: auto 1rem 4.75rem auto; inline-size: min(17rem, calc(100vw - 2rem)); }
 /* 子代理目录:挂在 header chip 正下方;不支持锚点定位时退回右上角。 */
 #subagent-catalog-menu { inset: auto 1rem auto auto; inline-size: min(24rem, calc(100vw - 2rem)); }
+/* Git 入口同理:它也在 header 顶部,默认那条 `inset: auto auto 4.75rem 1rem`
+   会把菜单甩到 composer 上方的左下角,离入口很远。 */
+#git-entry-menu { inset: auto 1rem auto auto; inline-size: min(17rem, calc(100vw - 2rem)); }
 /* 不支持锚点定位时:预设菜单居中挂在视口中部,而不是沿用 composer 上方的默认位。 */
 #preset-menu { inset: 50% auto auto 50%; translate: -50% 0; }
 
@@ -280,6 +271,18 @@
     inset: auto;
     inline-size: min(24rem, calc(100vw - 2rem));
     margin-block-start: 0.5rem;
+  }
+  #git-entry-menu {
+    position: fixed;
+    position-anchor: --git-entry-trigger;
+    /* 紧挨在入口正下方展开。span-inline-start 让菜单朝左铺开:入口靠 header
+       右端,朝右会溢出侧栏。 */
+    position-area: block-end span-inline-start;
+    position-try-fallbacks: flip-block, flip-inline;
+    inset: auto;
+    inline-size: min(17rem, calc(100vw - 2rem));
+    /* 4px:比其它菜单的 0.5rem 更贴,读起来是"从入口长出来的"而不是浮在附近。 */
+    margin-block-start: 4px;
   }
 }
 /* 标题占满剩余宽度,勾贴行尾。带描述的菜单(命令/技能)描述另起一行:
@@ -707,6 +710,14 @@
 .trigger-item.highlighted:hover {
   background: color-mix(in oklab, var(--accent) 12%, transparent);
 }
+/* 行最左的类型标识小胶囊(如 wiki 候选的「会议/日报」):定宽感、不收缩 */
+.trigger-item-badge {
+  flex: 0 0 auto;
+  font-size: 0.625rem; line-height: 1.4;
+  padding: 0 0.375rem; border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  color: var(--text-dim);
+}
 /* 指令名称必须完整显示:不收缩、不省略;空间不足只压缩右侧描述 */
 .trigger-item-name {
   flex: 0 0 auto;
@@ -933,15 +944,11 @@
 
 /* ══ 新增:页面元素选取 ══ */
 
-/* 入口按钮:开态实心、关态描边(与发送按钮同一套状态类命名)。
-   页面上下文开关沿用同一套状态类 —— 两颗都是"底栏上的开关",
-   视觉上没有理由分家,合并成一条规则也免得配色两处维护。 */
-#element-picker-btn.state-on,
-#page-context-btn.state-on {
+/* 入口按钮:开态实心、关态描边(与发送按钮同一套状态类命名)。 */
+#element-picker-btn.state-on {
   background: var(--accent); color: var(--bg); border-color: var(--accent);
 }
-#element-picker-btn.state-off,
-#page-context-btn.state-off { background: transparent; }
+#element-picker-btn.state-off { background: transparent; }
 
 /* 已选元素条 */
 /* 靠内容撑宽,不铺满整行:药丸只标注"选了几个元素",没有理由占满一行。
@@ -1084,6 +1091,39 @@
 .set-row-control.wide { width: 100%; }
 .set-inline { display: flex; gap: 6px; width: 100%; }
 
+/* 快捷键页:和弦画成键帽。Mac 的 ShortcutsWindow 用等宽字体右对齐一列,
+   这里用 <kbd> 键帽 —— 侧栏窄,键帽比纯文本更容易在一行里被扫到。 */
+.sc-hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.5;
+  padding: 0 2px 12px;
+}
+.sc-chord { display: flex; align-items: center; gap: 3px; flex-wrap: nowrap; }
+.sc-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 4px 6px;
+  min-width: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+.sc-plus { font-size: 10px; color: var(--text-faint); }
+/* 没有单一和弦的条目(如「⌘K 再按数字」)用说明文字,不假装是一个键。 */
+.sc-chord-note {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  text-align: right;
+  max-width: 148px;
+  line-height: 1.4;
+}
+
 .set-input, .set-select {
   padding: 6px 9px;
   border: 1px solid var(--border);
@@ -1210,6 +1250,10 @@
 .set-danger { color: var(--danger); }
 .set-strong { font-weight: 600; }
 .set-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-faint); }
+
+/* 服务地址按链接色渲染(仍是纯文本:扩展页打不开 http 之外的东西,
+   做成可点的 <a> 只会给出一个哪儿都到不了的手势)。 */
+.srv-url { color: var(--link); }
 .set-spacer { flex: 1; }
 .set-form-footer { display: flex; align-items: center; gap: 6px; padding: 9px 11px; border-top: 1px solid var(--border-soft); }
 
@@ -1335,6 +1379,64 @@
   padding: 0.25rem;
 }
 
+/* Git 入口。两行竖排(分支名 / ±行数)照 Mac WorkspaceGitAction 的 VStack:
+   两行短文本比一行长文本占的横向宽度小得多,这是长分支名不至于把计数挤到
+   截断的原因。分支名是唯一允许让位的部分,且只以截断的方式让位。 */
+#git-entry-btn {
+  gap: 5px;
+  color: var(--text-dim);
+  max-inline-size: 11rem;
+}
+#git-entry-btn .git-entry-text {
+  display: flex; flex-direction: column; align-items: flex-start;
+  line-height: 1.15; min-inline-size: 0;
+}
+#git-entry-btn .git-entry-branch {
+  font-size: 0.75rem;
+  max-inline-size: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#git-entry-btn .git-entry-stat {
+  display: flex; gap: 4px;
+  font-size: 0.6875rem;
+  /* 定宽数字:+3,2… 会被读成另一个数,而不是一个被缩写的数,所以不允许缩。 */
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+#git-entry-btn .git-entry-added { color: var(--ok); }
+#git-entry-btn .git-entry-removed { color: var(--danger); }
+#git-entry-btn .git-entry-icon { flex: none; display: inline-flex; }
+
+/* 尺寸与内距在这里;定位在上面的 @supports 块里(锚定到入口下方)。
+   这里刻意不再写 inset/position —— 那会覆盖掉锚点定位,把菜单甩回左下角。 */
+#git-entry-menu { padding: 0.25rem; }
+/* popover 内的行:与 composer 各菜单同一套行高与内距,避免新造一套设计语言。 */
+.git-row {
+  display: flex; align-items: center; gap: 8px;
+  min-block-size: 1.875rem;
+  padding: 0 0.5rem;
+  border-radius: 0.5rem;
+  inline-size: 100%;
+  background: none; border: none; color: inherit;
+  font: inherit; text-align: start; cursor: pointer;
+}
+.git-row:hover:not([disabled]) { background: var(--bg-hover); }
+.git-row[disabled] { cursor: default; opacity: 0.55; }
+.git-row .git-row-name {
+  flex: 1 1 auto; min-inline-size: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.git-row .git-row-trailing {
+  flex: none; font-size: 0.6875rem; color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.git-row .git-row-check { flex: none; color: var(--accent); }
+.git-list { display: flex; flex-direction: column; max-block-size: 20rem; overflow-y: auto; }
+.git-sep { block-size: 1px; background: var(--border); margin: 0.25rem 0; }
+.git-search { padding: 0.25rem 0.375rem; }
+.git-search input { inline-size: 100%; }
+.git-empty { padding: 0.375rem 0.5rem; font-size: 0.75rem; color: var(--text-faint); }
+
 .subagent-level { display: flex; flex-direction: column; }
 .subagent-child-level {
   margin-inline-start: 7px; padding-inline-start: 9px;
@@ -1379,4 +1481,71 @@
   padding: 3px 8px; cursor: pointer; font-size: 12px; line-height: 1;
 }
 .subagent-retry:hover { background: var(--bg-raised); }
+
+/* ══ 拖放落点覆盖层 ══ */
+
+/* 盖住整个侧栏,z-index 高过 #trigger-menu(30)与底部浮层。
+   pointer-events: none 是关键:覆盖层自己不能成为 drop 目标,
+   否则它一出现就挡在 body 前面,dragleave 立刻触发、覆盖层闪一下就没了。 */
+#drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: color-mix(in oklab, var(--bg) 72%, transparent);
+  backdrop-filter: blur(2px);
+}
+#drop-overlay[hidden] { display: none; }
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.25rem 1.75rem;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-xl, 1rem);
+  background: var(--bg-overlay);
+  color: var(--text);
+  font-size: 0.8125rem;
+  box-shadow: var(--shadow-pop);
+}
+.drop-overlay-card svg { color: var(--accent); }
+
+/* ── 历史列表:排序下拉 + 拖拽落点提示 ── */
+/* 住在搜索行最右侧,与左端的工作目录 chip 成对。
+   窄侧栏(约 340px)里这一行要塞下四样:工作目录 chip、搜索图标、搜索框、
+   排序钮。实测三者都不肯让步时搜索框会被压到 45px —— 已经没法用了。
+   所以这里让排序钮**只显示图标**,文字标签藏起来:当前档位仍由菜单里的
+   选中态表达,而搜索框拿回它需要的宽度。 */
+#history-order-btn {
+  flex-shrink: 0;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+#history-order-btn:hover { color: var(--text); }
+#history-order-label {
+  white-space: nowrap;
+  /* 空间够时才显示文字。阈值取 380px:低于它就退成纯图标钮。 */
+  display: none;
+}
+@container history-search (min-width: 380px) {
+  #history-order-label { display: inline; }
+}
+/* 容器查询要有个 container 才生效;搜索行自己就是那个容器。 */
+#history-search-wrap {
+  container-type: inline-size;
+  container-name: history-search;
+}
+/* 拖拽中的行淡出,落点用一条线提示。线用 box-shadow 画而不是 border:
+   border 会改变行高,列表在拖动过程中会上下抖动。 */
+.history-item.dragging { opacity: 0.4; }
+.history-item.drop-before { box-shadow: inset 0 2px 0 0 var(--link); }
+.history-item.drop-after { box-shadow: inset 0 -2px 0 0 var(--link); }
+.history-item[draggable="true"] { cursor: grab; }
+.history-item[draggable="true"]:active { cursor: grabbing; }
 

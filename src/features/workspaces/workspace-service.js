@@ -37,6 +37,39 @@ export function createWorkspaceService(connection) {
     // 用宿主操作系统的默认方式打开某路径(系统文件管理器)。
     async openPath(path) {
       await connection.call(RPC.hostOpenPath, { path });
+    },
+
+    /// 工作区排序。beforeWorkspaceId 省略 = 移到末尾。
+    ///
+    /// 顺序必须记在宿主上,不能只在本地重排:refresh() 每次都用 workspace.list
+    /// 的结果整个替换 workspaces,纯本地的移动会在下一次刷新时被打回原形。
+    ///
+    /// 失败不抛给调用方,只回 false:位置没记上是件小事,不该让用户看见报错 ——
+    /// 调用方据此把乐观更新回滚即可(对齐 macOS moveWorkspace 的取舍)。
+    async moveWorkspace(workspaceId, beforeWorkspaceId = null) {
+      try {
+        await connection.call(RPC.workspaceInsertBefore, {
+          workspaceId,
+          ...(beforeWorkspaceId ? { beforeWorkspaceId } : {})
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    /// 工作区内的会话排序。beforeSessionId 省略 = 移到末尾。失败语义同上。
+    async moveSession(workspaceId, sessionId, beforeSessionId = null) {
+      try {
+        await connection.call(RPC.workspaceInsertSessionBefore, {
+          workspaceId,
+          sessionId,
+          ...(beforeSessionId ? { beforeSessionId } : {})
+        });
+        return true;
+      } catch {
+        return false;
+      }
     }
   };
 }

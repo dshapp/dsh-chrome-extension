@@ -4,7 +4,7 @@
 import { renderMenuItems } from "./sidepanel-overlays.js";
 import { t } from "../../shared/i18n.js";
 
-const STORAGE_KEY = "codemax_dsh_workspace_id";
+const STORAGE_KEY = "dsh_workspace_id";
 const ALL_ID = "__all__";
 const ADD_ID = "__add__";
 // 「临时目录」过滤项:未挂到任何 workspace 的会话都建在宿主自己的 cwd 下
@@ -119,14 +119,43 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
       ...workspaces.map((item) => ({
         id: item.workspaceId,
         label: item.title || basename(item.path),
-        hint: item.path
+        hint: item.path,
+        // 只有真实工作目录可拖:「全部」/「临时目录」/「添加目录…」是功能项,
+        // 不属于这份可排序的名单。
+        draggable: true
       })),
       { id: ADD_ID, label: t("workspace.add") }
     ];
     renderMenuItems(elements.workspaceMenu, entries, {
       selectedId: selectedId ?? (tempSelected ? TEMP_ID : ALL_ID),
-      onSelect: (id) => handleSelect(id)
+      onSelect: (id) => handleSelect(id),
+      onReorder: (movedId, beforeId) => void reorderWorkspace(movedId, beforeId)
     });
+  }
+
+  /// 拖动工作目录改顺序。
+  ///
+  /// 先本地重排再上报:菜单要立刻跟手。顺序**必须**记在宿主上,不能只在本地 ——
+  /// refresh() 每次都用 workspace.list 的结果整个替换 workspaces,
+  /// 纯本地的移动会在下一次刷新时被打回原形(对齐 macOS moveWorkspace 的注释)。
+  ///
+  /// 上报失败就把本地这一步回滚:与其让用户看着一个假的顺序、下次刷新又变回去,
+  /// 不如当场退回去 —— 位置没记上是小事,不弹错误打断他。
+  async function reorderWorkspace(movedId, beforeId) {
+    const before = workspaces;
+    const next = workspaces.filter((item) => item.workspaceId !== movedId);
+    const moved = workspaces.find((item) => item.workspaceId === movedId);
+    if (!moved) return;
+    const at = beforeId ? next.findIndex((item) => item.workspaceId === beforeId) : -1;
+    if (at === -1) next.push(moved);
+    else next.splice(at, 0, moved);
+    workspaces = next;
+    renderMenu();
+    const ok = await deps.workspaces?.moveWorkspace?.(movedId, beforeId);
+    if (ok === false) {
+      workspaces = before;
+      renderMenu();
+    }
   }
 
   async function handleSelect(id) {
@@ -247,6 +276,12 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
     activeSessionIds() {
       const current = selected();
       return current ? current.sessionIds ?? [] : null;
+    },
+    // 当前选中的 workspaceId。会话拖拽排序要用它:宿主的
+    // workspace.insertSessionBefore 是"在某个工作区内排序",
+    // 「全部」/「临时目录」没有工作区归属,返回 null(此时只记本地账本)。
+    activeWorkspaceId() {
+      return selected()?.workspaceId ?? null;
     },
     // 头部那颗「打开目录」按钮要打开的路径 —— 与 #hdr-workspace-prefix 显示的
     // 是同一个目录:选中 workspace → 其 path;孤儿目录 → 该 cwd;否则回落宿主 cwd

@@ -1,5 +1,15 @@
 // 会话列表 store:session.list 基线 + host 帧(host/session-added、host/session-status、
 // host/workspace-changed)增量维护。
+import { rankSession, sortByStatus } from "./session-status-order.js";
+
+/// 三种排序模式,对齐 macOS 的 sidebarOrderBy。
+/// updated 是默认档 —— 它就是本 store 一直以来的行为。
+export const SessionOrderBy = Object.freeze({
+  manual: "manual",
+  updated: "updated",
+  status: "status"
+});
+
 export function createSessionListStore() {
   let summaries = [];
   const listeners = new Set();
@@ -11,15 +21,78 @@ export function createSessionListStore() {
   // 标记(或丢了细节的重放帧)仍按 approval 上报 —— 那是阻塞最硬的一种。
   const awaitingKinds = new Map();
   const draftSessionIds = new Set();
+  // 行首状态点的三份权威状态,理由与上面两样相同:权威来源是实时帧,
+  // 不是 session.list 的基线快照,一次 replaceAll 不该把它们冲掉。
+  //
+  // completedSessionIds:「跑完了但你还没看」的绿点。只由 running true→false 的
+  // 边沿产生,所以必须记住上一次观察到的 running 位 —— 见 previousRunning。
+  const completedSessionIds = new Set();
+  // erroredSessionIds:「上一轮失败了但你还没看」的红点。
+  const erroredSessionIds = new Set();
+  // previousRunning:上次观察到的 running 位。首次观察只记录、不产生未读 ——
+  // 否则启动时拉到的一批本来就 idle 的会话会集体亮绿点(对齐 macOS 的
+  // reconcileCompletedNotification:没有 previous 就只记 running 位然后返回)。
+  const previousRunning = new Map();
+  // 哪个会话是当前打开的那个。未读提醒只发给**不在眼前**的会话:
+  // 用户正看着的那个会话跑完了,他自己就看见了,再点一个绿点是噪声。
+  let selectedSessionId = null;
   // sessionId → summary 索引表。侧栏行状态/标题/活跃排序是每帧事件驱动的,
   // 之前都用 summaries.find(...) 线性查找,会话一多就成了 O(n²) 热点。
   const byId = new Map();
   // 子代理名册缓存:每次写 summaries 都换新数组引用,用引用判断失效,名册变化才重建。
   let subagentCache = null;
   let subagentCacheFor = null;
+  // 「有子代理后裔正在跑」的祖先集合,同样按 summaries 引用失效。
+  // 侧栏每行都要问一次这个问题,而按行去 walk 一遍后裔是 O(N) 重建 ——
+  // 会话一多就成了渲染热点(macOS 上实测过这条路径吃满 CPU)。
+  // 一次共享的上溯把每行的问题变成 O(1) 的 Set.has。
+  let runningRootsCache = null;
+  let runningRootsCacheFor = null;
+
+  // 手动顺序账本(可选注入)。没有它时 manual 档退化为 updated ——
+  // 账本是浏览器本地的、异步加载的,store 本身不该因为它没就位而失效。
+  let orderStore = null;
 
   function notify() {
     for (const listener of listeners) listener(summaries);
+  }
+
+  /// 单行的未读完成对账:记下这一行的 running 位,并在
+  /// running→idle 的边沿上给**非当前**会话点亮绿点。
+  /// 照搬 macOS Stores.swift 的 reconcileCompletedNotification。
+  /// @returns 是否真的改动了未读集合(调用方据此决定要不要 notify)。
+  function reconcileCompleted(summary) {
+    const id = summary.sessionId;
+    const running = Boolean(summary.running);
+    if (!previousRunning.has(id)) {
+      // 首次观察:只登记,不产生提醒。
+      previousRunning.set(id, running);
+      return false;
+    }
+    const previous = previousRunning.get(id);
+    previousRunning.set(id, running);
+    if (previous && !running) {
+      if (id === selectedSessionId) return false;
+      if (completedSessionIds.has(id)) return false;
+      completedSessionIds.add(id);
+      return true;
+    }
+    if (running) return completedSessionIds.delete(id);
+    return false;
+  }
+
+  /// 全量替换后剪掉已不在名单里的 id。对齐 macOS syncCompletedNotifications 的
+  /// prune:留着已消失会话的标记会让集合随进程生命期无限增长。
+  function pruneToRoster() {
+    const seen = new Set(summaries.map((item) => item.sessionId));
+    for (const id of [...previousRunning.keys()]) if (!seen.has(id)) previousRunning.delete(id);
+    for (const id of [...completedSessionIds]) if (!seen.has(id)) completedSessionIds.delete(id);
+    for (const id of [...erroredSessionIds]) if (!seen.has(id)) erroredSessionIds.delete(id);
+    // 挂起请求与草稿同样要剪。它们能扛住一次普通的 replaceAll(那是刷新,会话还在),
+    // 但会话真的离开名单后就该跟着走 —— remove() 清的正是这五样。留着的话集合会
+    // 随进程无限增长,而且该会话一旦重新出现,行上会升起一个并不存在的徽章。
+    for (const id of [...awaitingKinds.keys()]) if (!seen.has(id)) awaitingKinds.delete(id);
+    for (const id of [...draftSessionIds]) if (!seen.has(id)) draftSessionIds.delete(id);
   }
 
   function upsert(summary) {
@@ -37,23 +110,114 @@ export function createSessionListStore() {
     byId.set(summary.sessionId, merged);
   }
 
+  /// 单行的状态档位。事实全部取自本 store 已经维护着的那几个集合 ——
+  /// 这正是状态排序对**从没打开过**的会话也成立的原因:它们没有 SessionStore,
+  /// 但它们的运行位、挂起请求、草稿都在这里。
+  function rankOf(summary, subagentRoots) {
+    const id = summary.sessionId;
+    return rankSession({
+      isRunning: Boolean(summary.running) || subagentRoots.has(id),
+      isUnread: completedSessionIds.has(id),
+      didFail: erroredSessionIds.has(id),
+      awaiting: awaitingKinds.get(id) ?? null,
+      hasDraft: draftSessionIds.has(id)
+    });
+  }
+
   return {
+    /// 注入手动顺序账本。由 app 层组合(store 不自己去碰 storage)。
+    attachOrderStore(store) { orderStore = store ?? null; },
+
+    /**
+     * 按指定模式排序一个可见子集。列表视图拿到的顺序都从这里来。
+     *
+     * @param {Array} visible 可见行。
+     * @param {string} orderBy SessionOrderBy 之一。
+     * @returns {Array} 排好序的新数组。
+     */
+    sortBy(visible, orderBy) {
+      const rows = [...(visible ?? [])];
+      // 排序控制器还没就绪时(首帧)按默认档,而不是抛错或给出空列表。
+      if (!orderBy) return rows.sort(byUpdatedDesc);
+      if (orderBy === SessionOrderBy.status) {
+        // 子代理根集合提前算一次:它要走一遍整个名册的父链,
+        // 每行都问一次就退化成 O(n²)(macOS 那边记过这一笔)。
+        const subagentRoots = computeRunningSubagentRoots(summaries);
+        return sortByStatus(rows, (summary) => rankOf(summary, subagentRoots));
+      }
+      if (orderBy === SessionOrderBy.manual && orderStore) return orderStore.sort(rows);
+      return rows.sort(byUpdatedDesc);
+    },
+
     replaceAll(items) {
       summaries = [...(items ?? [])].sort(byUpdatedDesc);
       byId.clear();
       for (const item of summaries) byId.set(item.sessionId, item);
+      // 基线快照也要过一遍边沿判定:另一个客户端在我们离线时跑完的会话,
+      // 只有靠这里的 true→false 才会被发现。首次观察不产生提醒的规则
+      // 保证冷启动不会把一屏 idle 会话全点亮。
+      //
+      // 读 item.running 本身而不是 byId:全量替换时基线就是权威。
+      for (const item of summaries) reconcileCompleted(item);
+      pruneToRoster();
       notify();
     },
     upsertAndNotify(summary) {
+      // 对账要用**合并后**的 running 位,而不是传入的那份:局部更新
+      // (host/session-added 只带 cwd/parentSessionId,或标题投影)不带 running,
+      // 直接拿 summary 去对账会把它读成 false,于是一个仍在跑的会话被误判成
+      // "刚刚跑完",凭空亮起未读绿点。这里显式沿用已有行的 running。
+      //
+      // 仍在 upsert **之前**对账:reconcileCompleted 要的是 previousRunning 里
+      // 那个旧值,先落盘会抹平 true→false 的边沿。
+      const existingRow = byId.get(summary.sessionId);
+      const running = summary.running ?? existingRow?.running ?? false;
+      reconcileCompleted({ sessionId: summary.sessionId, running });
       upsert(summary);
       notify();
     },
     setStatus(sessionId, running) {
       const target = byId.get(sessionId);
       if (target && target.running !== running) {
+        // 对账必须在写入**之前**:reconcileCompleted 靠 previousRunning 里那个
+        // 旧的 running 位去认 true→false 的边沿。先 upsert 会把 previousRunning
+        // 更新成新值,边沿就被抹平了,绿点永远不亮。
+        reconcileCompleted({ sessionId, running });
         upsert({ ...target, running });
         notify();
       }
+    },
+    /// 记录上一轮是否以错误收尾。重跑(turn/start)时传 false 消错,
+    /// 对齐 macOS SessionStore.lastTurnErrored 的重置点。
+    /// 当前打开的会话不记:错误就摆在他眼前的对话里,行上再点一个红点是重复。
+    setErrored(sessionId, errored) {
+      if (!sessionId) return;
+      if (errored && sessionId === selectedSessionId) return;
+      const changed = errored
+        ? !erroredSessionIds.has(sessionId) && Boolean(erroredSessionIds.add(sessionId))
+        : erroredSessionIds.delete(sessionId);
+      if (changed) notify();
+    },
+    /// 切换当前会话:新的当前会话就地清掉自己的未读提醒(用户已经在看了),
+    /// 对齐 macOS select 里的 selection-clear + clearCompleted。
+    setSelected(sessionId) {
+      selectedSessionId = sessionId ?? null;
+      if (!sessionId) return;
+      // 两个 delete 都必须执行:用 || 会短路,第一个删成功时第二个就不跑了,
+      // 于是"打开会话"只清掉未读绿点、把失败红点留在了行上。
+      const clearedCompleted = completedSessionIds.delete(sessionId);
+      const clearedErrored = erroredSessionIds.delete(sessionId);
+      if (clearedCompleted || clearedErrored) notify();
+    },
+    isCompleted: (sessionId) => completedSessionIds.has(sessionId),
+    isErrored: (sessionId) => erroredSessionIds.has(sessionId),
+    /// 该会话是否有子代理后裔正在跑(自身可能是 idle 的)。
+    isRunningSubagentRoot(sessionId) {
+      if (runningRootsCacheFor !== summaries) {
+        runningRootsCache = computeRunningSubagentRoots(summaries);
+        runningRootsCacheFor = summaries;
+      }
+      return runningRootsCache.has(sessionId);
     },
     /// 后台会话来了新的用户消息:更新活跃时间并重排,让列表顺序与
     /// 「谁最近在动」一致(对齐 macOS 丢帧修复保留的 recordActivity 偷看)。
@@ -86,6 +250,9 @@ export function createSessionListStore() {
       byId.delete(sessionId);
       awaitingKinds.delete(sessionId);
       draftSessionIds.delete(sessionId);
+      completedSessionIds.delete(sessionId);
+      erroredSessionIds.delete(sessionId);
+      previousRunning.delete(sessionId);
       notify();
     },
     /// 记录/清除某个会话的挂起请求。kind 传 null 表示已解决。
@@ -175,4 +342,34 @@ export function walkSubagentChildren(byParent, rootId) {
 /// 一次性索引 + walk 的组合入口(单测/无缓存的调用方直接从这里拿)。
 export function indexSubagentDescendants(summaries, rootId) {
   return walkSubagentChildren(indexSubagentChildren(summaries), rootId);
+}
+
+/// 每个「有子代理后裔正在跑」的祖先会话 id。
+///
+/// 方向与 walkSubagentChildren 相反:从每个正在跑的子代理往上溯到根,而不是
+/// 从每个根往下 walk 一遍后裔 —— 前者的总代价是"正在跑的子代理数",
+/// 后者是"行数 × 后裔数"。侧栏每行都要问这个问题,所以走上溯。
+///
+/// 与 indexSubagentChildren 同样只认 origin == "subagent" 的边:普通 fork
+/// 不是子代理关系,链条在那里断开。visited 防环,与 walkSubagentChildren 一致。
+export function computeRunningSubagentRoots(summaries) {
+  const parentOf = new Map();
+  for (const s of summaries ?? []) {
+    if (s.origin !== "subagent") continue;
+    if (s.parentSessionId) parentOf.set(s.sessionId, s.parentSessionId);
+  }
+  const roots = new Set();
+  for (const s of summaries ?? []) {
+    if (!s.running || s.origin !== "subagent") continue;
+    let current = s.sessionId;
+    const seen = new Set([current]);
+    while (parentOf.has(current)) {
+      const parent = parentOf.get(current);
+      if (seen.has(parent)) break;
+      seen.add(parent);
+      roots.add(parent);
+      current = parent;
+    }
+  }
+  return roots;
 }

@@ -1006,7 +1006,10 @@ export function createSessionStore() {
       for (const k of [...versions.keys()]) if (!keep.has(k)) versions.delete(k);
     }
     const existing = state.projections.get(key);
-    if (!existing || at > existing.seq) {
+    // 同序按后到者胜。宿主不带 seq 时 at 恒等于当前 lastSeq(投影不推进 lastSeq),
+    // 严格 `>` 会把每一条正常的后续更新都误判成陈旧帧,投影永远冻在第一版。
+    // 真正的乱序帧 seq 严格更小,仍然被挡住。
+    if (!existing || at >= existing.seq) {
       state.projections.set(key, { value, seq: at });
       decodeProjection(key, value);
     }

@@ -36,6 +36,27 @@ describe("foldMessageText", () => {
     expect(foldMessageText(null).folded).toBe(false);
     expect(foldMessageText(undefined).preview).toBe("");
   });
+
+  // 气泡里贴一段以 emoji 跨越 limit 的长文本时,按码元切会把代理对劈成两半,
+  // 末尾留下一个孤立高位代理,浏览器渲染成 "�"。
+  it("never cuts a surrogate pair in half", () => {
+    const text = "a".repeat(FOLD_LIMIT - 1) + "😀" + "b".repeat(50);
+    const fold = foldMessageText(text);
+    expect(fold.folded).toBe(true);
+    // 整个 emoji 要么完整保留,要么整个留在折叠区,不能只剩一半。
+    expect(/[�-�]$/.test(fold.preview)).toBe(false);
+    expect(fold.preview).toBe("a".repeat(FOLD_LIMIT - 1));
+    // hidden 仍要能和 preview 拼回原文,计数不能对不上。
+    expect(fold.preview.length + fold.hidden).toBe(fold.total);
+    expect(text.slice(fold.preview.length)).toHaveLength(fold.hidden);
+  });
+
+  it("keeps a pair that lands wholly inside the limit", () => {
+    const text = "a".repeat(FOLD_LIMIT - 2) + "😀" + "b".repeat(50);
+    const fold = foldMessageText(text);
+    expect(fold.preview).toBe("a".repeat(FOLD_LIMIT - 2) + "😀");
+    expect(fold.preview).toHaveLength(FOLD_LIMIT);
+  });
 });
 
 describe("chunkText", () => {
@@ -59,5 +80,19 @@ describe("chunkText", () => {
 
   it("honours a custom size", () => {
     expect(chunkText("abcdef", 2)).toEqual(["ab", "cd", "ef"]);
+  });
+
+  // 分片是按 UTF-16 码元切的,切点可能落在代理对中间。相邻 Text 节点在排版时
+  // 会重新拼合,所以弹窗里看不出问题;但每一片本身不是合法 Unicode 串,任何
+  // 逐片消费的地方(复制、逐片写文件、发给宿主)都会拿到孤立代理项。
+  it("分片不会把代理对切成两半", () => {
+    const emoji = String.fromCodePoint(0x1f600);
+    const chunks = chunkText("a" + emoji.repeat(3), 4);
+    for (const chunk of chunks) {
+      expect(/[\uD800-\uDBFF]$/.test(chunk)).toBe(false);
+      expect(/^[\uDC00-\uDFFF]/.test(chunk)).toBe(false);
+    }
+    // 拼回去仍须与原文逐字节一致 —— 修法不能吞字或补字。
+    expect(chunks.join("")).toBe("a" + emoji.repeat(3));
   });
 });

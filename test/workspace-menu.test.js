@@ -179,13 +179,13 @@ describe("workspace 下拉菜单", () => {
   });
 
   it("恢复上次选中的目录", async () => {
-    const { menu } = setup({ storage: { codemax_dsh_workspace_id: "w2" } });
+    const { menu } = setup({ storage: { dsh_workspace_id: "w2" } });
     await menu.refresh();
     expect(menu.selected()?.workspaceId).toBe("w2");
   });
 
   it("上次选中的目录已被删除时回落「全部」", async () => {
-    const { menu } = setup({ storage: { codemax_dsh_workspace_id: "gone" } });
+    const { menu } = setup({ storage: { dsh_workspace_id: "gone" } });
     await menu.refresh();
     expect(menu.selected()).toBeNull();
     expect(menu.activePath()).toBeNull();

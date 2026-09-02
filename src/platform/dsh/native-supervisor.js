@@ -38,6 +38,11 @@ export async function ensureServerRunning(target, options = {}) {
   if (!canCallNative()) {
     return { ok: false, reason: "native-messaging-unavailable" };
   }
+  // 先判目标合法性,再动冷却表。反过来的话,一个非法 target 会白占 30s 冷却:
+  // 第一次如实回 unknown-target,第二次却回 cooldown —— 调用方据此以为"刚试过、
+  // 稍后会好",而真实原因是个永远不会自愈的配置错误。
+  if (target !== "web") return { ok: false, reason: "unknown-target" };
+
   const now = Date.now();
   const last = lastAttemptByTarget.get(target) || 0;
   if (!options.force && now - last < COOLDOWN_MS) {
@@ -46,7 +51,6 @@ export async function ensureServerRunning(target, options = {}) {
   lastAttemptByTarget.set(target, now);
 
   const message = { cmd: "start", target };
-  if (target !== "web") return { ok: false, reason: "unknown-target" };
   const settings = createSettings();
   const url = options.backendUrl || (await settings.getBackendUrl());
   const { host, port } = parseHostPort(url);

@@ -104,6 +104,43 @@
 .msg-agent .md-table th { background: var(--bg-raised); font-weight: 600; }
 .msg-agent .md-table tbody tr:nth-child(even) td { background: var(--bg-raised); }
 
+/* Markdown 图片。侧栏很窄,宽图必须缩到容器宽度,否则会把整条消息撑出横向滚动。
+   给一个 max-height 是因为竖长图(整页截图)否则会把后面的正文顶到屏幕外。 */
+.msg-agent img {
+  max-inline-size: 100%;
+  max-block-size: 420px;
+  block-size: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  margin-block: 0.375rem;
+  display: block;
+}
+
+/* 语法着色。类名是 hljs 的输出契约,取值走 foundation.css 的主题变量,
+   所以明暗切换时着色跟着走。未列出的 token 继承 --code-text,不会变成裸色。 */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-name { color: var(--hl-keyword); }
+.hljs-string, .hljs-attr, .hljs-symbol, .hljs-bullet, .hljs-regexp { color: var(--hl-string); }
+.hljs-number, .hljs-quote { color: var(--hl-number); }
+.hljs-comment { color: var(--hl-comment); font-style: italic; }
+.hljs-function .hljs-title, .hljs-title.function_, .hljs-section { color: var(--hl-function); }
+.hljs-type, .hljs-class .hljs-title, .hljs-title.class_ { color: var(--hl-type); }
+.hljs-variable, .hljs-template-variable, .hljs-tag { color: var(--hl-variable); }
+.hljs-literal, .hljs-meta, .hljs-link { color: var(--hl-literal); }
+.hljs-deletion { color: var(--hl-deletion); }
+.hljs-addition { color: var(--hl-addition); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
+/* KaTeX。侧栏宽度有限,块级公式要能横向滚动而不是撑破布局;
+   字号跟随正文,避免公式比周围文字大一圈。 */
+.msg-agent .katex { font-size: 1.05em; }
+.msg-agent .katex-display {
+  margin-block: 0.625rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.125rem;
+}
+
 /* 代码块(工具栏:语言 + 复制) */
 .code-block {
   min-inline-size: 0;

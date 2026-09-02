@@ -326,9 +326,10 @@ describe("应用接线冒烟", () => {
     expect(deps.sessions.prompt).toHaveBeenCalled();
     const [, content] = deps.sessions.prompt.mock.calls[0];
     const text = content.find((c) => c.type === "text").text;
-    expect(text.startsWith("<selected_page_elements>")).toBe(true);
-    // XPath 里的引号在 XML 里被转义成 &quot; —— 这正是不破坏 XML 结构的关键。
-    expect(text).toContain("<xpath>//*[@id=&quot;go&quot;]</xpath>");
+    expect(text.startsWith("<selected_page_elements ")).toBe(true);
+    // XPath 里的引号在 XML 里被转义成 &quot; —— 这正是不破坏 XML 结构的关键
+    // (定位符现在是属性,属性位的引号转义更关键:漏转义会直接截断标签)。
+    expect(text).toContain('xpath="//*[@id=&quot;go&quot;]"');
     expect(text).toContain("[指令] 把这个按钮改成蓝色");
     // 发出后元素被消费,不会带到下一轮
     expect(document.querySelector("#picked-elements-chip").hidden).toBe(true);
@@ -344,7 +345,7 @@ describe("应用接线冒烟", () => {
     await app.sendMessage();
     const [, content] = deps.sessions.prompt.mock.calls[0];
     const text = content.find((c) => c.type === "text").text;
-    expect(text).toContain("<selected_page_elements>");
+    expect(text).toContain("<selected_page_elements ");
     expect(text).toContain("[指令]");
   });
 

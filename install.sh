@@ -6,12 +6,9 @@
 # the dsh server by itself":
 #
 #   1. node / npm / pnpm            (installed globally when missing)
-#   2. dsh + its three plugins      (into the web profile; the two public
-#                                    plugins come from registry.npmjs.org,
-#                                    the rest from the internal registry)
+#   2. dsh + its two plugins        (into the web profile; the plugins come
+#                                    from registry.npmjs.org)
 #   3. the Native Messaging host    (so Chrome can launch dsh web on demand)
-#   4. the CodeMax model provider   (minted through Chrome and written to dsh's
-#                                    config *before* the server first starts)
 #
 # It is idempotent: every step probes first and does nothing when the desired
 # state already holds, so re-running after a partial failure is safe.
@@ -23,16 +20,15 @@
 # may override it with a positional argument or DSH_EXTENSION_ID.
 # Environment overrides:
 #   DSH_EXTENSION_ID   advanced override for the derived extension id
-#   DSH_REGISTRY       registry for internal packages (@orba/*, dsh, pnpm)
+#   DSH_REGISTRY       registry for the dsh CLI itself (and the pnpm fallback)
 #   DSH_PUBLIC_REGISTRY registry for the public plugins (dsh-chrome-control,
 #                      dsh-kimi-computer-use); defaults to registry.npmjs.org
 #   DSH_HOME           dsh state directory (default ~/.dsh)
-#   DSH_WEB_PORT       port the self-test starts dsh web on (default 3080)
-#   DSH_SKIP_LLM_KEY   set to 1 to skip acquiring the CodeMax API key
+#   DSH_WEB_PORT       port the installer starts dsh web on (default 3080)
 # =============================================================================
 set -euo pipefail
 
-# 内部 registry,只用于内部包(@orba/*)和 dsh CLI / pnpm 自身。
+# 内部 registry,只用于 dsh CLI 自身(以及兜底装 pnpm)。
 REGISTRY="${DSH_REGISTRY:-https://npm-registry.toolsfdg.net/}"
 # dsh-chrome-control 与 dsh-kimi-computer-use 是发布在公共 npm 上的包。
 # 内部源虽然代理了它们(HTTP 直接拉 packument 能看到 0.1.5/0.1.6/0.1.7),
@@ -49,15 +45,30 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 EXTENSION_MANIFEST="$SCRIPT_DIR/manifest.json"
 NATIVE_HOST_SOURCE="$SCRIPT_DIR/native-host/dsh-native-host.js"
 
-# dsh-chrome-control 0.2.0 is the pure-plugin bridge that rides dsh web's
-# own HTTP server (/chrome/ws + /chrome/mcp), which is what this installer and
-# the extension are built for.
-CHROME_PKG="dsh-chrome-control@^0.2.0"
-CHROME_MIN="0.2.0"
-KIMI_PKG="dsh-kimi-computer-use"
-CODEMAX_PKG="@orba/dsh-codemax-skills"
+# 两个插件都装 @latest —— 每次 install 都收敛到当前发布的最新版。
+#
+# 不再用 caret pin(原来是 dsh-chrome-control@^0.2.0)。0.x 的 caret 锁 minor,
+# 会把 chrome-control 永久卡在 0.2.x,而 latest 已经是 0.3.x。
+# 实测 0.3.2 的 cordis.patch.yml 仍然只插 chrome-server + chrome-skills 两行,
+# 仍然把 /chrome/mcp + /chrome/ws + /chrome/status 挂在 dsh web 自己的 HTTP
+# server 上(README 与 lib/server.js 均确认),也就是本安装器和扩展依赖的那套
+# 契约没变;0.3.x 多出来的 binaries/<platform>/chrome-daemon 由插件自己 spawn
+# 并做 build-hash 对齐,对扩展不可见。所以升级不需要改扩展或 native host。
+#
+# 它是"不低于",不是"等于",因此 0.3.x 正常通过。
+CHROME_PKG="dsh-chrome-control@latest"
+KIMI_PKG="dsh-kimi-computer-use@latest"
 
-ALL_PKGS="$CHROME_PKG $KIMI_PKG $CODEMAX_PKG"
+ALL_PKGS="$CHROME_PKG $KIMI_PKG"
+
+# dsh 本体与上面两个插件相反,钉死在一个确定版本上,不跟 latest。
+# 插件是自家发布、契约稳定的,收敛到最新没风险;dsh 是整个运行时的地基,
+# 一次版本变化会同时影响 cordis loader、profile 组合和 native host 冷启动,
+# 而这个安装器是无人值守跑的 —— 装到哪个版本必须可预期,不能取决于当天
+# latest 指向谁(尤其 latest 可能指向一个 rc)。
+# 升级就改这一行,让版本变更留在 git 历史里,而不是散在各台机器的安装时刻。
+DSH_VERSION="0.1.1-rc.2"
+DSH_PKG="@deepseek-ai/dsh@$DSH_VERSION"
 
 RED=""; GREEN=""; YELLOW=""; BLUE=""; BOLD=""; RESET=""
 if [ -t 1 ]; then
@@ -91,6 +102,20 @@ derive_extension_id() {
       .map((byte) => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join(""));
   ' "$EXTENSION_MANIFEST"
 }
+
+# 装的是 unpacked 目录,所以"版本"就是 manifest.json 里的那个 —— 用户在
+# chrome://extensions 卡片上看到的同一个值。读不到不致命:摘要少一行而已,
+# 不该因此让一次成功的安装以非零退出。
+read_extension_version() {
+  [ -f "$EXTENSION_MANIFEST" ] || return 1
+  node -e '
+    const fs = require("node:fs");
+    const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (!manifest.version) process.exit(1);
+    process.stdout.write(String(manifest.version));
+  ' "$EXTENSION_MANIFEST"
+}
+EXTENSION_VERSION="$(read_extension_version 2>/dev/null || echo unknown)"
 
 EXTENSION_ID="${1:-${DSH_EXTENSION_ID:-}}"
 if [ -z "$EXTENSION_ID" ]; then
@@ -155,7 +180,7 @@ ok "npm v$(npm -v)"
 
 # npm's global prefix is root-owned on many Linux setups but user-owned under
 # Homebrew; only reach for sudo when the prefix is genuinely unwritable.
-# 只用来装 pnpm 自己 —— 之后一切都走 pnpm。
+# 用来装 dsh 本体,以及在独立脚本失败时兜底装 pnpm。
 npm_global() {
   local prefix
   prefix="$(npm prefix -g 2>/dev/null || echo /usr/local)"
@@ -164,6 +189,17 @@ npm_global() {
   else
     warn "$prefix is not writable; using sudo"
     sudo npm install -g "$@"
+  fi
+}
+
+# 与 npm_global 同一套 sudo 判定。卸载用,失败无所谓(没装过就是没装过)。
+npm_global_uninstall() {
+  local prefix
+  prefix="$(npm prefix -g 2>/dev/null || echo /usr/local)"
+  if [ -w "$prefix/lib/node_modules" ] 2>/dev/null || [ -w "$prefix" ]; then
+    npm uninstall -g "$@"
+  else
+    sudo npm uninstall -g "$@"
   fi
 }
 
@@ -218,33 +254,57 @@ ensure_pnpm_global_bin
 # ---------------------------------------------------------------------------
 # 2. dsh
 # ---------------------------------------------------------------------------
-step "Installing dsh"
+step "Installing dsh $DSH_VERSION"
 # 无条件重装,不做 "已存在就跳过"。跳过看着省事,实际上把用错布局装出来的
-# dsh 永久锁死:早期版本的本脚本没带 --node-linker=hoisted,那样装出来的
-# dsh 能跑 --version、能过 --dump-config,却在 boot 时炸成
+# dsh 永久锁死:历史上用 pnpm 且漏了 --node-linker=hoisted 装出来的 dsh
+# 能跑 --version、能过 --dump-config,却在 boot 时炸成
 # "Cannot find package '@deepseek-ai/cordis-plugin-timer'"。只要"存在即跳过",
 # 重跑脚本永远修不好它。每次都重装,脚本就成了幂等的修复入口。
 #
-# 走 pnpm 而不是 npm:pnpm 用自己的 store(~/Library/pnpm/store),
-# 不读 ~/.npm/_cacache,因此不受历史上 sudo npm 留下的 root 属主文件影响。
+# 走 npm 而不是 pnpm。dsh 的 cordis loader 在运行时按名字 import 上百个
+# @deepseek-ai/* 插件,要求这些兄弟包在同一层 node_modules 里可见。
+# npm -g 本来就是平铺布局,天然满足;pnpm 默认把每个包隔离在 store 里,
+# 必须靠 --node-linker=hoisted 才能摊平成同样的形状 —— 也就是说 hoisted
+# 一直是在把 pnpm 掰回 npm 的行为。既然如此,直接用 npm,少一个能配错的旋钮。
 #
-# --node-linker=hoisted 是必须的,不是调优。pnpm 默认把每个包隔离在
-# store 里各自的目录下,而 dsh 的 cordis loader 是在运行时按名字
-# import 上百个 @deepseek-ai/* 插件的。默认布局下这些兄弟包对
-# loader 不可见,一 boot 就炸,端口起不来。hoisted 把依赖摊平进全局
-# node_modules,行为跟 npm -g 一致,loader 才解析得到。
+# 先 uninstall 再 install:清掉可能存在的旧布局(比如之前 pnpm 装的那份),
+# 避免残留的 node_modules 结构被原地复用。没装过就是没装过,吞掉退出码。
 #
-# 先 remove 再 add:pnpm 对"已装但布局不对"的包不会重排布局,
-# 光 add 可能原地复用错误的 node-linker 结果。remove 失败无所谓
-# (没装过就是没装过),所以吞掉它的退出码。
+# 顺带把 pnpm 那份也卸掉:两份 dsh 同时在 PATH 上时,谁在前面谁生效,
+# 会出现"装了新版却在跑旧版"的静默不一致。这里以 npm 装的为准。
 pnpm remove -g @deepseek-ai/dsh >/dev/null 2>&1 || true
-if ! pnpm add -g @deepseek-ai/dsh --registry "$REGISTRY" --node-linker=hoisted; then
-  die "failed to install @deepseek-ai/dsh from $REGISTRY."
+npm_global_uninstall @deepseek-ai/dsh >/dev/null 2>&1 || true
+if ! npm_global "$DSH_PKG" --registry "$REGISTRY"; then
+  die "failed to install $DSH_PKG from $REGISTRY.
+    Check that this exact version still exists there:
+      npm view $DSH_PKG version --registry $REGISTRY"
 fi
+# npm 刚装完,新的 bin 可能还不在当前 shell 的 hash 表里。
+hash -r 2>/dev/null || true
 command -v dsh >/dev/null 2>&1 || die "dsh is still unavailable after installation.
-    pnpm installs it into ${PNPM_HOME:-the pnpm home}; if that is not on your
-    PATH, run 'pnpm setup' once and open a new terminal."
-ok "dsh $(dsh --version 2>/dev/null || echo '(version unknown)')"
+    npm installs it into \"$(npm prefix -g)/bin\"; make sure that directory is
+    on your PATH, then run this installer again."
+
+# 钉了版本就要验版本,否则钉了等于没钉。装完 PATH 上解析到的不一定是刚装的
+# 那份 —— 机器上可能并存 Homebrew / pnpm 的 dsh 且排在前面,那样后续所有步骤
+# (profile 组合、落盘给 native host 的 dshBin、重启 server)都会用错版本,
+# 而且全程不报错。这里一次断言,把这种静默不一致挡在安装期。
+INSTALLED_DSH_VERSION="$(dsh --version 2>/dev/null | tr -d '[:space:]')"
+if [ -z "${INSTALLED_DSH_VERSION:-}" ]; then
+  warn "could not read the installed dsh version; continuing"
+elif [ "$INSTALLED_DSH_VERSION" != "$DSH_VERSION" ]; then
+  die "expected dsh $DSH_VERSION but 'dsh' on PATH reports $INSTALLED_DSH_VERSION.
+    Another dsh is shadowing the one just installed. Find it with 'which -a dsh'
+    and remove it (a Homebrew or pnpm copy is the usual cause), then re-run."
+fi
+ok "dsh $DSH_VERSION"
+
+# 本次装出来的那份 dsh 的绝对路径。上面刚把 pnpm 那份卸掉,所以 command -v
+# 解析到的就是刚用 npm 装的这份 —— 而不是机器上可能同时存在的 Homebrew 版本。
+# 后面停机重启、以及落盘给 native host 的都用它,
+# 避免"装了新版却在跑旧版"这种静默不一致。
+DSH_BIN_ABS="$(command -v dsh)"
+ok "using dsh at $DSH_BIN_ABS"
 
 # ---------------------------------------------------------------------------
 # 3. plugins
@@ -259,41 +319,37 @@ PROFILE_DIR="$DSH_HOME/profiles/web"
 # declares dsh.bundle joins the layer stack on its own. Never hand-edit the
 # profile manifest.
 #
-# 整个 web profile 直接删掉重建,不做增量修补。这里以前是一张"已知过时包"
-# 的名单(dsh-chrome / dsh-codemax-skills 等改名前的旧身份),逐个 remove。
-# 那种写法只能处理列进名单的情况:任何别的残留 —— 装了一半的依赖树、
-# 用错 registry 解析出来的版本、旧 .npmrc —— 都会留下来,并在 boot 时
-# 报 "duplicate loader entry id" 或 ERR_MODULE_NOT_FOUND。
-# 全删就没有"漏掉哪一种"的问题,而且 profile 里除了这三个插件本身
-# 没有用户数据(会话/凭据都在 DSH_HOME 的别处),删了不丢东西。
+# 整个 web profile 直接删掉重建,不做增量修补。
+#
+# 光靠 add 是不够的。它确实能改写依赖范围(实测:^0.1.7 的旧 profile 跑一次
+# add ^0.2.0 会变成 ^0.2.6),但**不会**清理 dsh.profile.bundles 里改名前的
+# 旧身份 —— 实测 dsh plugin add 之后 ["dsh-chrome-control","dsh-chrome"]
+# 里的 dsh-chrome 原样留着,dsh 随后以 "cannot resolve profile bundle" 拒绝
+# 启动,而且重跑脚本永远修不好。同类残留还有装了一半的依赖树、用错 registry
+# 解析出来的版本、旧 .npmrc。
+#
+# 全删就没有"漏掉哪一种"的问题,脚本因此是一个可靠的修复入口。profile 里
+# 除这三个插件外没有用户数据(会话/凭据/设置都在 DSH_HOME 的别处),删了不丢东西。
 if [ -d "$PROFILE_DIR" ]; then
   warn "removing existing web profile for a clean reinstall"
   rm -rf "$PROFILE_DIR"
 fi
 
-# 三个包来自两个 registry,但不能分两次 add:--registry 是整条命令一个值,
-# 而 pnpm 每次 add 都会照着 package.json 重新解析**所有**已声明的依赖。
-# 于是"先内部后公共"那种写法会拿公共源去解析 @orba/dsh-codemax-skills,
-# 直接 ERR_PNPM_FETCH_404。反过来同理。
-#
-# 正确做法是把路由写进 profile 的 .npmrc:默认走公共源,@orba scope 走内部源。
-# 这样一次 add 就能把三个包各自解析到正确的地方,且后续任何 pnpm 操作
-# (升级、重装)都继续遵守同一套路由,不依赖命令行传了什么。
+# 把 registry 写进 profile 的 .npmrc,而不是靠命令行 --registry:后续任何
+# pnpm 操作(升级、重装)都继续遵守同一来源,不依赖命令行传了什么。
 # 首次安装时 profile 目录还不存在('dsh plugin add' 才会创建它),
 # 但 .npmrc 必须在 add 之前就位,否则第一次解析仍会走错源。
 mkdir -p "$PROFILE_DIR"
 cat > "$PROFILE_DIR/.npmrc" <<EOF
 registry=$PUBLIC_REGISTRY
-@orba:registry=$REGISTRY
 EOF
 
 # shellcheck disable=SC2086
 if ! dsh plugin --profile web add $ALL_PKGS; then
   die "plugin installation failed for $ALL_PKGS.
     dsh-chrome-control and dsh-kimi-computer-use come from the public npm
-    registry ($PUBLIC_REGISTRY); @orba/* comes from the internal one
-    ($REGISTRY). Check network/proxy access to both, or override with
-    DSH_PUBLIC_REGISTRY=<url> / DSH_REGISTRY=<url>."
+    registry ($PUBLIC_REGISTRY). Check network/proxy access to it, or
+    override with DSH_PUBLIC_REGISTRY=<url>."
 fi
 
 [ -f "$PROFILE_DIR/package.json" ] || die "profile was not created at $PROFILE_DIR"
@@ -311,7 +367,11 @@ resolve_dsh_entry() {
   local bin target
   bin="$(command -v dsh 2>/dev/null)" || return 0
   [ -n "$bin" ] || return 0
-  if head -c2 "$bin" 2>/dev/null | grep -q '#!' && grep -q 'exec .*\.js' "$bin" 2>/dev/null; then
+  # 只认 shell 垫片。npm 装的 bin.js 首行是 "#!/usr/bin/env node",光判 '#!'
+  # 会把它也当垫片,一旦将来 bin.js 里出现 "exec ....js" 字样就会抠错路径;
+  # 判到 sh/bash 才动手,node 脚本一律走下面的 realpath。
+  if head -1 "$bin" 2>/dev/null | grep -qE '^#!.*(sh|bash)$' \
+     && grep -q 'exec .*\.js' "$bin" 2>/dev/null; then
     # 垫片:取第一条 exec 里的 .js 路径,并把 $basedir 展开成垫片所在目录。
     target="$(grep -oE '"[^"]*\.js"' "$bin" 2>/dev/null | head -1 | tr -d '"')"
     if [ -n "$target" ]; then
@@ -392,7 +452,9 @@ if (broken.length) {
 console.log(manifest.version);
 DSH_VERIFY_EOF
 
-for pkg in dsh-chrome-control "$KIMI_PKG" "$CODEMAX_PKG"; do
+# 注意用裸包名,不能用 *_PKG —— 那些带 @latest,是给 add 的安装 spec,
+# 而 verify_bundle 要的是 node 解析用的包名。
+for pkg in dsh-chrome-control dsh-kimi-computer-use; do
   if version="$(verify_bundle "$pkg")"; then
     ok "$pkg@$version"
   else
@@ -400,18 +462,23 @@ for pkg in dsh-chrome-control "$KIMI_PKG" "$CODEMAX_PKG"; do
   fi
 done
 
-# Guard the version floor explicitly: pnpm may resolve an older cached copy.
-CHROME_VERSION="$(verify_bundle dsh-chrome-control)"
-if [ "$(printf '%s\n%s\n' "$CHROME_MIN" "$CHROME_VERSION" | sort -V | head -1)" != "$CHROME_MIN" ]; then
-  die "dsh-chrome-control $CHROME_VERSION is older than the required pure-plugin bridge version $CHROME_MIN."
-fi
-
 # The composed tree is the real proof that the profile boots. --dump-config
 # renders the tree without instantiating it, so it happily prints a config the
 # loader would reject; check for repeated ids explicitly, because two bundles
 # inserting the same id abort boot with "duplicate loader entry id".
+# 不再每次删 profile 之后,这里是残留的唯一兜底,所以报错必须可操作:
+# 最典型的一种是 bundles 里留着改名前的旧身份(如 dsh-chrome),add 不会
+# 清理它,dsh 会以 "cannot resolve profile bundle" 拒绝启动。
 COMPOSED="$(dsh --profile web --dump-config 2>&1)" || {
   printf '%s\n' "$COMPOSED" >&2
+  case "$COMPOSED" in
+    *"cannot resolve profile bundle"*)
+      die "the profile lists a bundle that is not installed (see above).
+    It is usually a plugin that was renamed; drop the stale entry with:
+      dsh plugin --profile web remove <package>
+    or start over from a clean profile:
+      rm -rf \"$PROFILE_DIR\" && re-run this installer" ;;
+  esac
   die "the composed profile is invalid; see the output above"
 }
 DUPLICATE_IDS="$(printf '%s\n' "$COMPOSED" | sed -n 's/^- id: //p' | sort | uniq -d)"
@@ -444,6 +511,19 @@ exec "$NODE_BIN" "$HOST_JS"
 EOF
 chmod +x "$WRAPPER"
 ok "launcher files installed in $HOST_DIR"
+
+# ── host 配置落盘 ────────────────────────────────────────────────────────────
+# dshBin:机器上可能并存 Homebrew / npm -g / pnpm 三份 dsh,而 host 的
+# resolveDsh() 只能按固定顺序猜。装的是哪一份只有本脚本知道(它就是刚装的那个),
+# 所以落一份盘,让 host 冷启动 server 时不必再猜。每次重跑都覆盖。
+HOST_CONFIG="$DSH_HOME/dsh-chrome-update.json"
+cat > "$HOST_CONFIG" <<EOF
+{
+  "dshBin": "$DSH_BIN_ABS",
+  "installedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+ok "host configuration recorded (dsh path)"
 
 MANIFEST_JSON="$(cat <<EOF
 {
@@ -504,114 +584,122 @@ if [ "$INSTALLED_COUNT" -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. CodeMax model provider
+# 5. Restart the server on the freshly installed dsh
 # ---------------------------------------------------------------------------
-# Browser control now rides dsh web's own /chrome/mcp + /chrome/ws endpoints;
-# there is no standalone daemon to provision. The installer does not start the
-# server early solely to mint a key: provider configuration remains optional,
-# and can be completed after the final dsh web self-test below.
+# 上面刚把 dsh 整个重装、并把 profiles/web 删掉重建。此刻若还有一个 server
+# 在跑,它用的是旧二进制 + 已经被删掉的 profile —— 端口通、请求也能应答,
+# 但新装的插件一个都不在里面。旧自检只探端口,这种状态照样打绿勾,
+# 于是用户拿到"安装成功"却发现功能没变。
 #
-# Every failure here is a warning: an install without a model provider is still
-# a working install, and the user is told exactly how to finish the job.
-step "Configuring the CodeMax model provider"
+# 所以这里不问状态、直接收敛:端口上有旧的就停掉,然后用本次装出来的
+# $DSH_BIN_ABS 起一个新的。
+step "Restarting the DSH server on the new build"
 
-CODEX_TOKEN_CLI="$PROFILE_DIR/node_modules/@orba/dsh-codemax-skills/lib/cli.js"
-LUMINA_URL="https://lumina.build.toolsfdg.net/lumina/settings/api-keys?spaceId=0"
+port_pid() {
+  lsof -nP -iTCP:"$WEB_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1
+}
 
-if [ "${DSH_SKIP_LLM_KEY:-0}" = "1" ]; then
-  warn "DSH_SKIP_LLM_KEY=1; skipping model-provider configuration."
-elif [ ! -f "$CODEX_TOKEN_CLI" ]; then
-  warn "the codemax-skills CLI is missing; skipping model-provider configuration."
-elif node "$CODEX_TOKEN_CLI" provider-status >/dev/null 2>&1; then
-  ok "the CodeMax model provider is already configured"
+RESTARTED=0
+if ! command -v lsof >/dev/null 2>&1; then
+  warn "lsof not found; cannot reclaim port $WEB_PORT, leaving any running server alone"
 else
-  # 自动获取现在要求 dsh web + 扩展已经连接。安装必须一路装到底,
-  # 不为此提前起第二套生命周期，也不停下来提问；自测会在下一步启动
-  # dsh web，之后这条命令即可走共享的 /chrome/mcp 端点。
-  warn "no model provider configured yet. After loading the extension, finish it with:"
-  warn "  node $CODEX_TOKEN_CLI acquire llm"
-  warn "or create a key at $LUMINA_URL and run:"
-  warn "  echo <key> | node $CODEX_TOKEN_CLI set-provider"
-fi
+  OLD_PID="$(port_pid)"
+  if [ -n "$OLD_PID" ]; then
+    # 端口不一定是 dsh 占的。别人的服务恰好用 3080 是完全可能的,
+    # 而这里的动作是 kill —— 认错了就是在破坏用户环境。所以先验明正身,
+    # cmdline 对不上宁可退出让人工处理,也不猜。
+    OLD_CMD="$(ps -o command= -p "$OLD_PID" 2>/dev/null || true)"
+    case "$OLD_CMD" in
+      *dsh*|*bin.js*) ;;
+      *)
+        die "port $WEB_PORT is held by PID $OLD_PID, which does not look like dsh:
+    $OLD_CMD
+    Free that port (or set DSH_WEB_PORT to another one) and re-run this installer." ;;
+    esac
 
-# ---------------------------------------------------------------------------
-# 6. Self-test
-# ---------------------------------------------------------------------------
-step "Verifying the host can start the server"
-
-# Speak the real Native Messaging framing (4-byte little-endian length + JSON)
-# straight to the wrapper, exactly as Chrome would.
-PYTHON="$(command -v python3 || true)"
-if [ -z "$PYTHON" ]; then
-  warn "python3 not found; skipping the automated self-test"
-else
-  SELFTEST_PY="$(mktemp -t dsh-selftest-XXXXXX).py"
-  trap 'rm -f "$VERIFY_JS" "$SELFTEST_PY"' EXIT
-  cat > "$SELFTEST_PY" <<'DSH_SELFTEST_EOF'
-import json, struct, subprocess, sys, time, socket
-
-wrapper, port = sys.argv[1], int(sys.argv[2])
-
-def call(payload, timeout):
-    body = json.dumps(payload).encode()
-    proc = subprocess.run(
-        [wrapper],
-        input=struct.pack("<I", len(body)) + body,
-        capture_output=True,
-        timeout=timeout,
-    )
-    out = proc.stdout
-    if len(out) < 4:
-        raise SystemExit(
-            "  the host returned no response (exit %s).\n  stderr: %s"
-            % (proc.returncode, proc.stderr.decode(errors="replace")[:400])
-        )
-    length = struct.unpack("<I", out[:4])[0]
-    return json.loads(out[4:4 + length].decode())
-
-status = call({"cmd": "status"}, 30)
-if not status.get("ok"):
-    raise SystemExit("  the host reported an error: %s" % status)
-if not status.get("dsh"):
-    raise SystemExit("  the host could not locate the dsh binary")
-print("  host reachable; dsh at %s" % status["dsh"])
-
-reply = call({"cmd": "start", "target": "web", "host": "127.0.0.1", "port": port}, 90)
-if not reply.get("ok"):
-    raise SystemExit("  the host failed to start dsh web: %s" % reply)
-
-deadline = time.time() + 30
-while time.time() < deadline:
-    probe = socket.socket()
-    probe.settimeout(1)
-    connected = probe.connect_ex(("127.0.0.1", port)) == 0
-    probe.close()
-    if connected:
-        state = "was already running" if reply.get("alreadyUp") else "started"
-        print("  dsh web %s and is listening on 127.0.0.1:%d" % (state, port))
-        break
-    time.sleep(1)
-else:
-    raise SystemExit("  dsh web never began listening on port %d" % port)
-DSH_SELFTEST_EOF
-  if ! "$PYTHON" "$SELFTEST_PY" "$WRAPPER" "$WEB_PORT"; then
-    LOG="$HOME/.dsh-chrome/logs/dsh-web.log"
-    if [ -f "$LOG" ]; then
-      printf '\n  last lines of %s:\n' "$LOG" >&2
-      tail -20 "$LOG" >&2
+    warn "stopping the running server (PID $OLD_PID) so the new build takes effect"
+    kill "$OLD_PID" 2>/dev/null || true
+    # 先给 SIGTERM 一点时间优雅退出(它要落盘会话状态),不行再强杀。
+    WAITED=0
+    while [ "$WAITED" -lt 10 ] && [ -n "$(port_pid)" ]; do
+      sleep 0.5
+      WAITED=$((WAITED + 1))
+    done
+    if [ -n "$(port_pid)" ]; then
+      warn "it did not exit in time; forcing it down"
+      kill -9 "$OLD_PID" 2>/dev/null || true
+      sleep 1
     fi
-    die "the self-test failed; the extension would not be able to start the server"
+    [ -z "$(port_pid)" ] || die "port $WEB_PORT is still busy after stopping PID $OLD_PID."
+    RESTARTED=1
   fi
-  ok "the host starts dsh web successfully"
+
+  # detached + nohup:本脚本退出后 server 必须继续活着。日志沿用 host 那份,
+  # 排查时只有一个地方要看。
+  SERVER_LOG="$HOME/.dsh-chrome/logs/dsh-web.log"
+  mkdir -p "$(dirname "$SERVER_LOG")"
+  # 不能直接跑 $DSH_BIN_ABS。它的两种形态都会在精简环境里静默失败:
+  #   - npm 装的是指向 lib/bin.js 的符号链接,首行 `#!/usr/bin/env node`
+  #   - pnpm 装的是 /bin/sh 垫片,末尾是裸的 `exec node .../bin.js`
+  # 两者都要求 node 在 PATH 上,而 Homebrew 的 node 在 /opt/homebrew/bin,
+  # GUI 进程和精简环境里经常没有 —— 于是 "env: node: No such file or directory",
+  # 端口永远起不来。所以统一用绝对路径的 node 去跑那个 .js。
+  #
+  # 注意不能无条件 grep 一个 .js 出来:npm 装的 bin.js 本身就是 JS 源码,
+  # 里面含 "./profile-boot-*.js" 这类内部字符串,grep 会抓到它,拼出一条
+  # 不存在的相对路径,然后退回执行入口本身 —— 正好绕回上面那个失败。
+  # 所以先判断形态:只有真的是 shell 垫片时才去抠 exec 的目标,
+  # 否则(符号链接/真实脚本)直接对它取 realpath。
+  DSH_ENTRY_JS=""
+  if head -1 "$DSH_BIN_ABS" 2>/dev/null | grep -qE '^#!.*(sh|bash)$' \
+     && grep -q 'exec .*\.js' "$DSH_BIN_ABS" 2>/dev/null; then
+    # 垫片:取 exec 的那个 .js。里面有 Windows 分支($basedir_win),排掉。
+    DSH_ENTRY_JS="$(grep -oE '"[^"]*\.js"' "$DSH_BIN_ABS" 2>/dev/null \
+      | grep -v basedir_win | head -1 | tr -d '"')"
+    if [ -n "${DSH_ENTRY_JS:-}" ]; then
+      DSH_ENTRY_JS="${DSH_ENTRY_JS//\$basedir/$(dirname "$DSH_BIN_ABS")}"
+    fi
+  else
+    # 符号链接或真实的 node 脚本:realpath 就是要跑的 .js。
+    DSH_ENTRY_JS="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' \
+      "$DSH_BIN_ABS" 2>/dev/null || true)"
+  fi
+  if [ -n "${DSH_ENTRY_JS:-}" ] && [ -f "$DSH_ENTRY_JS" ]; then
+    nohup "$NODE_BIN" "$DSH_ENTRY_JS" web --no-open --host 127.0.0.1 --port "$WEB_PORT" \
+      >>"$SERVER_LOG" 2>&1 &
+  else
+    nohup "$DSH_BIN_ABS" web --no-open --host 127.0.0.1 --port "$WEB_PORT" \
+      >>"$SERVER_LOG" 2>&1 &
+  fi
+  NEW_PID=$!
+  disown "$NEW_PID" 2>/dev/null || true
+
+  WAITED=0
+  while [ "$WAITED" -lt 60 ] && [ -z "$(port_pid)" ]; do
+    sleep 0.5
+    WAITED=$((WAITED + 1))
+  done
+  if [ -z "$(port_pid)" ]; then
+    printf '\n  last lines of %s:\n' "$SERVER_LOG" >&2
+    tail -20 "$SERVER_LOG" >&2 2>/dev/null || true
+    die "the new server never began listening on port $WEB_PORT."
+  fi
+  if [ "$RESTARTED" -eq 1 ]; then
+    ok "server restarted on the new build (127.0.0.1:$WEB_PORT, PID $(port_pid))"
+  else
+    ok "server started (127.0.0.1:$WEB_PORT, PID $(port_pid))"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
 step "Installation complete"
 cat <<EOF
 
-  Runtime:          ready
-  Browser launcher: ready
-  Extension folder: $SCRIPT_DIR
+  Runtime:           ready
+  Browser launcher:  installed
+  Auto-update:       ready (silent; checks every 3h)
+  Extension folder:  $SCRIPT_DIR
+  Extension version: $EXTENSION_VERSION
 
   One Chrome security step remains:
     1. Open chrome://extensions and enable Developer mode.

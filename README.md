@@ -9,20 +9,20 @@ Two independent halves share one extension:
    `http://127.0.0.1:3080`). See [The side panel](#the-side-panel).
 
 Neither half needs the other: the bridge works with the panel closed, and the
-panel works with agent control switched off.
+panel works whether or not the bridge has managed to connect.
 
 ## Install
 
-Run the one-command installer:
+Run the installer from the root of this repository:
 
 ```bash
-curl -fsSL https://memorybank-station.qa1fdg.net/codemax-chrome/api/dsh-install.sh | bash
+./install.sh
 ```
 
-It downloads the extension, installs DSH and its plugins, registers the browser
-launcher, derives the fixed extension ID from `manifest.json`, and verifies that
-the launcher can start `dsh web`. You do not need to copy an extension ID or run
-a second script.
+It installs DSH and its plugins, registers the browser launcher, derives the
+fixed extension ID from `manifest.json`, and verifies that the launcher can
+start `dsh web`. You do not need to copy an extension ID or run a second
+script.
 
 Chrome requires one owner-approved action: on the page opened by the installer,
 enable **Developer mode**, click **Load unpacked**, and select the folder whose
@@ -46,17 +46,26 @@ For development or targeted repair only, `scripts/install-native-host.sh
 <extension-id>` remains available. Normal users should re-run the one-command
 installer instead.
 
-## The kill switch
+## Connection status
 
-Open the side panel, press **⋮**, and clear **允许 Agent 控制此浏览器** under
-*Agent 浏览器控制*. The extension disconnects immediately and stops accepting
-tool calls, no matter what the agent does. Use it whenever you want the browser
-to yourself.
+Open the side panel, press **⋮**, and look under *Agent 浏览器控制* on the
+server tab. It reports whether the bridge is currently attached to `dsh web`
+and which WebSocket URL it is using.
 
-That section also shows whether the bridge is currently attached to dsh web,
-and which derived WebSocket URL it is using. There is no popup: the toolbar icon opens the
-panel, because Chrome gives a declared `action.default_popup` precedence over
-`openPanelOnActionClick`, so an extension cannot have both.
+There is no on/off switch. Agent control is the reason this extension exists, so
+a toggle that turns it off only produces a confusing failure mode — an installed
+extension that silently refuses to work, usually long after the user has
+forgotten they flipped it. To take the browser back, disable or remove the
+extension from `chrome://extensions`, or stop `dsh web`; either drops the
+connection immediately and no tool call can reach the browser.
+
+(An older build had a **允许 Agent 控制此浏览器** switch backed by a
+`dsh_chrome_enabled` storage flag. The flag is now ignored and cleared at
+startup, so profiles that had switched it off reconnect after updating.)
+
+There is no popup: the toolbar icon opens the panel, because Chrome gives a
+declared `action.default_popup` precedence over `openPanelOnActionClick`, so an
+extension cannot have both.
 
 ## What it can do
 
@@ -67,6 +76,61 @@ you are currently viewing. Two of the tools (`mouse_click`, `key_type`) send
 
 Treat granting this the way you would treat handing someone your unlocked
 laptop. Turn the toggle off when you are done.
+
+## Host operations: Git, plugins, and restarting dsh
+
+The Git entry in the chat area's top-right corner, the install/update/uninstall
+buttons on the **插件** tab, and the restart/update buttons under **服务端** all
+run real commands on your machine.
+
+The Git entry mirrors the macOS app's toolbar control: it names the current
+branch and how much has piled up (`+added −removed`), and opens a popover that
+switches branch, creates one, or pushes/pulls. It appears only when the working
+directory really is a git repository — a plain directory gets no entry at all,
+because everything the entry shows is git state. A branch another worktree has
+checked out is listed but greyed, since git would refuse that checkout anyway. An extension cannot start a process, so these go
+through `chrome-daemon`'s `/host/*` HTTP routes, which are separate from the
+Chrome-control WebSocket — turning host operations off never disturbs browser
+control, and vice versa.
+
+What the daemon will run is fixed in its own source, not chosen by the caller:
+
+- **Git** — an allowlist of subcommands (`status`, `log`, `checkout`, `push`, …)
+  with options like `-c` and `--upload-pack` rejected, because those make git
+  execute arbitrary programs. The working directory must be a registered
+  workspace inside your home directory.
+- **Plugins** — `dsh plugin` (which forwards to pnpm) restricted to
+  `add`/`remove`/`update`/`list`/`outdated`, and only for registry package
+  names. `file:`, `link:`, `git+` and `github:` specs are refused, since those
+  install from an arbitrary location and run the package's build scripts.
+- **The dsh runtime** — restart and update take no arguments at all. Restart
+  finds the process by its port and refuses unless that process really is
+  `dsh web`; update is hard-coded to `pnpm add -g @deepseek-ai/dsh@latest`.
+
+> **dsh must be installed with pnpm.** These buttons deliberately start and
+> restart `$PNPM_HOME/dsh`, never whatever `dsh` happens to come first on
+> `PATH`. If a copy installed some other way shadows it, updating would change
+> one copy while you keep running the other — the version would never move and
+> the update would appear to have worked. When dsh is not a pnpm install, the
+> panel says so and points at `pnpm add -g @deepseek-ai/dsh` instead of failing
+> vaguely.
+
+### Who is allowed to call these routes
+
+The daemon accepts `/host/*` only from this extension's exact origin, and only
+on the loopback interface. That stops web pages (a browser will not let a page
+forge an extension origin) and other installed extensions (the id is compared
+exactly, not by prefix).
+
+It does **not** stop another program running as you on this machine: any local
+process can set an `Origin` header, and a loopback TCP connection carries no
+caller identity. This is a deliberate trade-off — such a program can already
+run `git` and `pnpm` directly, so these routes do not widen what it could do.
+The allowlists above, and the host-proxy kill switch below, are what limit the
+damage.
+
+**Kill switch:** **服务端** has *关闭宿主代理*, which disables every `/host/*`
+route until the daemon restarts. Browser control keeps working.
 
 ## Permissions, and why each is needed
 
@@ -99,7 +163,7 @@ any of three ways:
 - press **⌘⇧D** (macOS) or **Ctrl+Shift+D**.
 
 A green dot in the panel header means it is connected to `dsh web`. The **⋮**
-settings button holds the backend address, the bridge's status and kill switch,
+settings button holds the backend address, the bridge's connection status,
 notification and language preferences.
 
 ### Switching workspace
@@ -133,7 +197,7 @@ sw/         service worker shards (one job each), assembled by sw/index.js
 src/platform/  DSH protocol: RPC envelopes, downlink, fence rules, settings
 src/features/  one directory per domain (chat, sessions, models, …)
 src/app/sidepanel/  DOM composition and styles
-              (bridge-settings.js is the bridge's status + kill switch)
+              (bridge-settings.js reports the bridge's connection status)
 src/shared/    pure helpers (markdown, i18n, error formatting)
 pages/sidepanel/index.html   the panel document
 ```

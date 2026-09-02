@@ -83,7 +83,8 @@ describe("动作派发", () => {
     const panel = mount([item("a")], { onAction, running: true });
     panel.querySelector('[data-action="remove"]').click();
     expect(onAction).toHaveBeenCalledWith("a", "remove");
-    await Promise.resolve();
+    // 解锁要跨过 dispatch 的 catch→finally 两跳微任务,不能只让出一轮。
+    await new Promise((resolve) => setTimeout(resolve, 0));
     panel.querySelector('[data-action="steer"]').click();
     expect(onAction).toHaveBeenCalledWith("a", "steer");
   });
@@ -97,7 +98,7 @@ describe("动作派发", () => {
     panel.querySelector('[data-action="remove"]')?.click();
     expect(onAction).toHaveBeenCalledTimes(1);
     release();
-    await Promise.resolve(); await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(panel.querySelector(".queue-row").classList.contains("is-busy")).toBe(false);
   });
 });
@@ -153,5 +154,45 @@ describe("行内编辑", () => {
     panel.querySelector(".queue-edit-input").value = "   ";
     panel.querySelector('[data-action="save"]').click();
     expect(onAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("失败与异常路径", () => {
+  // dispatch 用 .finally 收尾,而 .finally 不消费拒绝 —— onAction 失败时链尾
+  // 没有 catch,直接变成未处理拒绝;UI 却照常解锁,看起来像操作成功了。
+  it("onAction 拒绝时不产生未处理的 Promise 拒绝", async () => {
+    const unhandled = [];
+    const onUnhandled = (event) => { unhandled.push(event.reason); event.preventDefault(); };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    try {
+      const panel = mount([item("a")], { onAction: () => Promise.reject(new Error("rpc failed")) });
+      panel.querySelector('button[data-action="remove"]').click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(unhandled).toEqual([]);
+    } finally {
+      window.removeEventListener("unhandledrejection", onUnhandled);
+    }
+  });
+
+  it("onAction 失败后仍然解锁,不把面板永久卡在 busy", async () => {
+    const onAction = vi.fn(() => Promise.reject(new Error("boom")));
+    const panel = mount([item("a")], { onAction });
+    panel.querySelector('button[data-action="remove"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 第二次点击要能再次发出去 —— busyId 已经清掉。
+    panel.querySelector('button[data-action="remove"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onAction).toHaveBeenCalledTimes(2);
+  });
+
+  // click 分支有 if (!row) return,keydown 分支没有 —— 同一文件两套标准。
+  it("编辑框脱离行时按 Enter 不抛异常", () => {
+    const panel = mount([item("a")]);
+    const stray = document.createElement("input");
+    stray.className = "queue-edit-input";
+    panel.append(stray);
+    expect(() => {
+      stray.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }).not.toThrow();
   });
 });

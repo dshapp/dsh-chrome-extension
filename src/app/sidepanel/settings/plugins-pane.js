@@ -14,6 +14,7 @@ import {
   escapeHtml, tag, formFooter
 } from "./settings-ui.js";
 import { createPluginSettingsState } from "../../../features/settings/plugin-settings-state.js";
+import { createPluginActionsUi } from "./plugin-actions-ui.js";
 
 /// 可配置卡片规格。fields 的 id 即命名空间里的字段名(路径只有一段)。
 const CARDS = [
@@ -52,7 +53,7 @@ function moduleShortName(moduleName) {
   return raw;
 }
 
-export function createPluginsPane({ host, deps, settingsService, showToast }) {
+export function createPluginsPane({ host, deps, settingsService, showToast, pluginActions }) {
   let activeTab = "configurable";
   // 每张卡片一份暂存态,按命名空间存;切 tab 不该丢掉正在编辑的草稿(Mac D.D29)。
   const forms = new Map();
@@ -67,6 +68,20 @@ export function createPluginsPane({ host, deps, settingsService, showToast }) {
   let inventoryLoaded = false;
   let inventorySearch = "";
   let inventoryExpanded = null;
+  // 装 / 更 / 删经 daemon 代理。daemon 不可用(老版本、没跑、被关掉)时这些控件
+  // 整体不渲染 —— 与"命名空间不被组装就不画卡片"同一条规则:一个点不动的按钮
+  // 读起来像坏了,而不像"此部署没有它"。
+  // 状态放在一个对象里,好让 plugin-actions-ui 与本文件共享同一份,而不是各存一半。
+  const actionState = { actionsAvailable: false, installName: "", actionBusy: null };
+  // render 在下面才定义,这里用一层间接调用把它晚绑定 —— 直接传 render 会捕获
+  // 到 undefined(函数声明会提升,但这行在模块工厂里先于赋值执行)。
+  const actionsUi = createPluginActionsUi({
+    host,
+    pluginActions,
+    showToast,
+    state: actionState,
+    render: () => render()
+  });
   const saving = new Set();
   const failed = new Set();
 
@@ -194,7 +209,8 @@ export function createPluginsPane({ host, deps, settingsService, showToast }) {
       })
       + (entry.enabled
         ? row({ label: escapeHtml(t("inv.cordis")), control: escapeHtml(phaseLabel(entry.fiberPhase)) })
-        : "");
+        : "")
+      + actionsUi.renderRowActions(entry);
     return `<div class="set-card">${head}<div class="set-card-body">${detail}</div></div>`;
   }
 
@@ -218,6 +234,7 @@ export function createPluginsPane({ host, deps, settingsService, showToast }) {
       return section({ body: searchRow + `<div class="set-empty">${escapeHtml(t("inv.emptySearch"))}</div>` });
     }
     return section({ body: searchRow })
+      + actionsUi.renderInstallRow()
       + section({
         header: `${t("inv.catalog")} · ${rows.length}`,
         body: rows.map(renderInventoryRow).join("")
@@ -332,10 +349,14 @@ export function createPluginsPane({ host, deps, settingsService, showToast }) {
         render();
       });
     }
+    actionsUi.bind(inventory);
   }
 
   async function loadInventory() {
     inventoryLoading = true; inventoryError = null; render();
+    // 先探一次代理可用性,再决定要不要画那些按钮。清单本身来自 dsh web,
+    // 与代理是两条独立链路 —— 代理不可用不该让清单也读不出来。
+    await actionsUi.probe();
     try {
       const value = await settingsService.pluginInventory();
       inventory = value?.entries ?? [];

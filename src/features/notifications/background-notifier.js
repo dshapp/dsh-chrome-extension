@@ -3,23 +3,31 @@
 //
 // MV3 会回收空闲 worker,运行集合若只驻内存,短任务在两次轮询之间完成就会
 // 漏报。所以把 running 集合持久化到 storage.local,worker 重启后先恢复再轮询。
-const RUNNING_KEY = "codemax_dsh_running_sessions";
+import { notificationIdForSession } from "./notification-click.js";
+
+const RUNNING_KEY = "dsh_running_sessions";
 
 export function createBackgroundNotifier({ notifications, settings, storage }) {
   const area = storage ?? (typeof chrome !== "undefined" ? chrome.storage?.local : null);
   const running = new Set();
-  let loaded = false;
+  // 记住恢复用的 promise 而不是一个 bool。用 bool 的话它必须在 await 之前置位,
+  // 于是并发的第二个调用者会在集合还空着的时候就拿到"已加载",把 s1 的
+  // running→idle 边沿判成"本来就不在集合里",通知被丢掉;更糟的是 storage 里
+  // s1 仍标着 running,后续轮询再也见不到这个边沿,通知永久丢失。
+  // 启动轮询与 alarm tick 恰好会这样并发(见 sw/session-notify.js)。
+  let loadPromise = null;
 
-  /// 幂等:首次调用从 storage 恢复运行集合,后续直接返回。
-  async function loadRunning() {
-    if (loaded) return;
-    loaded = true;
-    if (!area) return;
-    try {
-      const value = await area.get([RUNNING_KEY]);
-      const list = value?.[RUNNING_KEY];
-      if (Array.isArray(list)) for (const id of list) running.add(id);
-    } catch { /* 无 storage 时退化为纯内存 */ }
+  /// 幂等:首次调用从 storage 恢复运行集合,并发调用共享同一次恢复。
+  function loadRunning() {
+    loadPromise ??= (async () => {
+      if (!area) return;
+      try {
+        const value = await area.get([RUNNING_KEY]);
+        const list = value?.[RUNNING_KEY];
+        if (Array.isArray(list)) for (const id of list) running.add(id);
+      } catch { /* 无 storage 时退化为纯内存 */ }
+    })();
+    return loadPromise;
   }
 
   function persistRunning() {
@@ -31,7 +39,8 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
     // 非扩展环境(dev web 模式、测试)没有 notifications API:静默跳过。
     if (!notifications?.create) return;
     if (!(await settings.getNotificationsEnabled())) return;
-    notifications.create(`dsh-${sessionId}-${Date.now()}`, {
+    // id 携带会话 id:点击通知时 service worker 靠它定位要打开的会话。
+    notifications.create(notificationIdForSession(sessionId), {
       type: "basic",
       title,
       message,
@@ -50,7 +59,7 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
         }
       } else if (running.delete(sessionId)) {
         persistRunning();
-        notify(sessionId, "CodeMax DSH", "后台任务已完成");
+        notify(sessionId, "DSH", "后台任务已完成");
       }
     },
     /// 后台会话的轮以错误结束:由侧栏帧偷看驱动(轮询只报"完成",区分不了失败)。
@@ -59,7 +68,7 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
       const text = detail
         ? `后台任务失败:${String(detail).slice(0, 160)}`
         : "后台任务失败";
-      notify(sessionId, "CodeMax DSH", text);
+      notify(sessionId, "DSH", text);
     },
     reset() {
       running.clear();

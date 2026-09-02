@@ -13,12 +13,16 @@ import { mountWorkspaceMenu } from "./workspace-menu.js";
 import { createComposerMenus } from "./composer-menus.js";
 import { createComposerDock } from "./composer-dock.js";
 import { mountTriggerMenu } from "./trigger-menu.js";
-import { projectDraft, reconcileEdit, renderChipMirror, PLACEHOLDER } from "./composer-chips.js";
+import { projectDraft, reconcileEdit, reconcileDraft, renderChipMirror } from "./composer-chips.js";
 import { collectElements } from "./sidepanel-elements.js";
 import { mountAttachmentControls } from "./composer-attachments.js";
 import { createSessionShortcutController, getSessionShortcutLabels } from "../../features/sessions/session-shortcuts.js";
 import { mountGoalBar, mountTodoPanel, mountStatsBar } from "../../features/docks/session-docks.js";
 import { mountSubagentCatalog } from "../../features/subagents/subagent-catalog-view.js";
+import { mountGitEntry } from "./git-entry.js";
+import { createHostProxyClient } from "../../platform/dsh/host-proxy-client.js";
+import { createGitService } from "../../features/host-proxy/git-service.js";
+import { createGitSummaryReader } from "../../features/host-proxy/git-summary.js";
 import { createElementPicker } from "../../features/element-picker/element-picker.js";
 import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../../features/element-picker/element-picker-shortcut.js";
 import { createPageContext } from "../../features/page-context/page-context.js";
@@ -98,7 +102,11 @@ export function createSidepanelApp(root, deps) {
 
   function applySnapshot(snapshot) {
     if (snapshot.running) awaitingTurnStart = false;
+    const previousCwd = state.cwd;
     state.cwd = snapshot.cwd ?? state.cwd;
+    // 冷启动也走这里(首个快照带来 cwd),所以入口的首次出现靠这一行 ——
+    // 只在真的变化时刷,避免每个快照都发一串 git。
+    if (state.cwd && state.cwd !== previousCwd) refreshGitEntry();
     state.subagent = snapshot.subagent ?? null;
 
     chatRenderer.render(snapshot.nodes);
@@ -320,14 +328,11 @@ export function createSidepanelApp(root, deps) {
     chatRenderer.setTyping(true, t("statusPreparing"));
     try {
       const content = [];
-      // 两块上下文拼在最前面,后接 [指令] 分隔用户原话。
-      // 顺序:页面 tabId(在哪)→ 选取的元素(指哪个,语义化 XML)→ 指令。
-      // capture 内部吞掉所有异常,取不到 tab 只会少一行,不会连累消息发不出去。
-      // 关态时 context() 同步返回空串,await 一个非 Promise 不额外欠 tick,
-      // 发送时序与没有这个功能时完全一致。
-      const pageCtx = await pageContext.context();
+      // 选取的元素(指哪个,语义化 XML)拼在最前面,后接 [指令] 分隔用户原话。
+      // 「当前网页」的 tabId 不走这里 —— 它是输入框里的一枚胶囊,
+      // 已由上面的 projectDraft 展开进 text,是正文的一部分。
       const pickedContext = pickedElements.length ? picker.context(pickedElements) : "";
-      const prefix = [pageCtx, pickedContext].filter(Boolean).join("\n\n");
+      const prefix = pickedContext;
       const promptText = prefix
         ? `${prefix}\n\n[指令] ${text || t("picker.instruction")}`
         : text;
@@ -401,6 +406,34 @@ export function createSidepanelApp(root, deps) {
     onOpenSubagent: (address) => { void openSubagent(address); }
   });
 
+  // ---- Git 入口(对齐 Mac WorkspaceGitAction)----
+  //
+  // 刷新由这里驱动,而不是入口自己定时拉:入口在「非 git 仓库」时整个不渲染,
+  // 挂在它内部的定时器永远不会跑,入口会永久隐藏(Mac 的注释记录了同一个坑,
+  // 那边由 ConversationRoot 负责读取)。
+  const gitHostProxy = createHostProxyClient();
+  const gitService = createGitService(gitHostProxy);
+  const gitEntry = mountGitEntry(elements.gitEntryBtn, elements.gitEntryMenu, {
+    summaryReader: createGitSummaryReader(gitHostProxy),
+    gitService,
+    getCwd: () => state.cwd,
+    showToast,
+    onWorkingTreeChanged: () => refreshGitEntry(),
+    promptBranchName: () => promptBranchName()
+  });
+
+  /// 重读 Git 入口。cwd 落定的每一处都调它。
+  function refreshGitEntry() {
+    return gitEntry.refresh().catch(() => {});
+  }
+
+  /// 新建分支的名字。用原生 prompt:侧栏没有通用输入模态,而这一处的输入
+  /// 只有一个字段、没有校验分支,自造一个模态不划算。
+  async function promptBranchName() {
+    const name = window.prompt(t("branch.createNewPrompt"));
+    return name ? name.trim() : null;
+  }
+
   // ---- 页面元素选取 ----
   const isMac = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
   const picker = createElementPicker({
@@ -450,43 +483,45 @@ export function createSidepanelApp(root, deps) {
   }
 
   // ---- 当前页面上下文 ----
-  // 与元素选取并列的一颗开关:开启后每条消息自动附带当前标签页的 tabId 与页面快照。
-  const pageContext = createPageContext({
-    showToast, t,
-    onChange: () => renderPageContextButton()
-  });
-
-  function renderPageContextButton() {
-    const button = elements.pageContextBtn;
-    const on = pageContext.enabled;
-    button.classList.toggle("state-on", on);
-    button.classList.toggle("state-off", !on);
-    button.setAttribute("aria-pressed", String(on));
-    button.title = t("pageCtx.toggle");
-  }
+  // 只负责"取当前标签页 tabId"。带不带由候选浮层里的「当前网页」胶囊决定。
+  const pageContext = createPageContext();
 
   const menus = createComposerMenus({ elements, deps, state, showToast, format });
   const dock = createComposerDock({ elements, deps, state, showToast, format });
   const { refreshSlashSources } = menus;
 
-  // 引用胶囊:草稿里存 U+FFFC 占位符,真正的引用文本存在这里(对齐 Mac ComposerState.occurrences)。
+  // 引用胶囊:草稿里存 "\u00A0label\u00A0" 真实字符段,完整引用文本存在这里。
   let occurrences = [];
   let lastDraft = elements.input.value;
 
   /// 草稿每次变化都要重算胶囊位置并重画镜像层。
-  function syncChips() {
+  /// isComposing:IME 组合期间不能写回 textarea.value(会打断输入法),
+  /// 组合中触碰胶囊的罕见路径退化为 reconcileEdit(胶囊失效、残余字符留作普通文字)。
+  function syncChips(isComposing = false) {
     const draft = elements.input.value;
-    // 无占位符快速路径:没有胶囊,reconcile 的全文 diff 与占位符扫描都省掉,
-    // 只让镜像层保持行高(长草稿打字的主要热点之一)。
-    if (occurrences.length === 0 && draft.indexOf(PLACEHOLDER) === -1) {
+    // 无胶囊快速路径:reconcile 的全文 diff 省掉,只让镜像层保持行高。
+    if (occurrences.length === 0) {
       lastDraft = draft;
       renderChipMirror(elements.inputMirror, draft, occurrences);
       elements.inputMirror.scrollTop = elements.input.scrollTop;
       return;
     }
-    occurrences = reconcileEdit(lastDraft, draft, occurrences);
-    lastDraft = draft;
-    renderChipMirror(elements.inputMirror, draft, occurrences);
+    if (isComposing) {
+      occurrences = reconcileEdit(lastDraft, draft, occurrences);
+      lastDraft = draft;
+    } else {
+      const caret = elements.input.selectionStart ?? draft.length;
+      const next = reconcileDraft(lastDraft, draft, occurrences, caret);
+      occurrences = next.occurrences;
+      lastDraft = next.text;
+      // 被触碰的胶囊连残余标签字符一起剔除:剔除后的文本要写回 textarea,
+      // 否则碎片会被当成正文发出去。
+      if (next.text !== draft) {
+        elements.input.value = next.text;
+        elements.input.setSelectionRange(next.caret, next.caret);
+      }
+    }
+    renderChipMirror(elements.inputMirror, lastDraft, occurrences);
     // 镜像层不滚动,靠跟随 textarea 的滚动位置保持对齐。
     elements.inputMirror.scrollTop = elements.input.scrollTop;
   }
@@ -500,9 +535,22 @@ export function createSidepanelApp(root, deps) {
     renderChipMirror(elements.inputMirror, value, occurrences);
   }
 
+  // 必须排在 mountTriggerMenu 之前:浮层的「添加图片」行要拿它的 pickImage。
+  const attachmentControls = mountAttachmentControls({
+    elements, deps, showToast, onChange: () => updateSendState(),
+    // 拖放的响应区是整个侧栏,不只是 composer。
+    root: root.body ?? root
+  });
+
   const triggerMenu = mountTriggerMenu({
-    elements, deps, state,
+    elements, deps, state, showToast,
+    // '@' 浮层的额外候选来源(可插拔),排在固定行与文件之间。
+    extraSources: deps.mentionSources ?? [],
     getOccurrences: () => occurrences,
+    // 「当前网页」候选:选中时解析当前标签页,插成一枚展开为 tabId 的胶囊。
+    captureCurrentTab: () => pageContext.captureCurrentTab(),
+    // 「添加图片」候选:唤起文件选择器。
+    onAttachImage: () => attachmentControls.pickImage(),
     // 候选被选中时由菜单回调插入胶囊,菜单自己不再拼裸文本。
     onInsertReference: (next) => {
       occurrences = next.occurrences;
@@ -510,6 +558,15 @@ export function createSidepanelApp(root, deps) {
       renderChipMirror(elements.inputMirror, next.text, occurrences);
     }
   });
+
+  // ＋ 按钮打开的就是这一个浮层(与输入 "@" 完全相同)。
+  // stopPropagation:否则这次点击会立刻被下面的 document 监听判成"点了外面"。
+  elements.attachBtn.addEventListener("mousedown", (event) => event.preventDefault());
+  elements.attachBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    triggerMenu.toggleAtCaret();
+  });
+  document.addEventListener("mousedown", (event) => triggerMenu.handleDocumentPointerDown(event));
 
   // ---- 元素选取事件 ----
   elements.elementPickerBtn.addEventListener("click", () => void picker.toggle());
@@ -527,19 +584,10 @@ export function createSidepanelApp(root, deps) {
   }, true);
   picker.attach();
 
-  // 页面上下文开关:状态跨侧栏开关持久化,启动时读回一次。
-  elements.pageContextBtn.addEventListener("click", () => void pageContext.toggle());
-  renderPageContextButton();
-  void pageContext.load();
-
-  const attachmentControls = mountAttachmentControls({
-    elements, deps, showToast, onChange: () => updateSendState()
-  });
-
   // ---- 输入区 ----
-  elements.input.addEventListener("input", () => {
+  elements.input.addEventListener("input", (event) => {
     autoResizeInput();
-    syncChips();
+    syncChips(Boolean(event.isComposing));
     updateSendState();
     setDraft(state.sessionId, elements.input.value);
     triggerMenu.handleInput();
@@ -547,7 +595,7 @@ export function createSidepanelApp(root, deps) {
   elements.input.addEventListener("scroll", () => {
     elements.inputMirror.scrollTop = elements.input.scrollTop;
   });
-  // 插入胶囊后菜单派发 change(而非 input):此时占位符与 occurrences 已同步好,
+  // 插入胶囊后菜单派发 change(而非 input):此时胶囊字符段与 occurrences 已同步好,
   // 这里只补做「输入变化」的其余副作用。
   elements.input.addEventListener("change", () => {
     autoResizeInput();
@@ -709,6 +757,8 @@ export function createSidepanelApp(root, deps) {
       state.cwd = summary.cwd;
       workspaceMenu?.setActiveByCwd(summary.cwd);
     }
+    // 工作目录变了就是换了一个仓库(或换成一个非仓库),入口要跟着重判。
+    refreshGitEntry();
     // 切会话:上一轮选的元素属于上一个语境,不该跟着带过来。
     picker.clear();
     renderPickedChip();
@@ -771,6 +821,8 @@ export function createSidepanelApp(root, deps) {
       state.cwd = summary.cwd;
       workspaceMenu?.setActiveByCwd(summary.cwd);
     }
+    // 工作目录变了就是换了一个仓库(或换成一个非仓库),入口要跟着重判。
+    refreshGitEntry();
     picker.clear();
     renderPickedChip();
     setInputText("");
@@ -828,17 +880,23 @@ export function createSidepanelApp(root, deps) {
     });
     historyDrawer = mountHistoryDrawer(deps, openSession, newSession, shortcutLabels, {
       workspacePath: () => workspaceMenu?.activePath() ?? null,
-      workspaceSessionIds: () => workspaceMenu?.activeSessionIds() ?? null
+      workspaceSessionIds: () => workspaceMenu?.activeSessionIds() ?? null,
+      workspaceId: () => workspaceMenu?.activeWorkspaceId() ?? null,
+      orderStore: deps.sessions?.orderStore ?? null
     });
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
     mountSettings(
       { ...deps, showToast, onBusyEnterChange: setBusyEnter },
-      () => { setStreamState(deps.DshStreamState.CONNECTING); startConnection(); },
       // 设置页改完提供方/模型目录后,当场重画底栏模型菜单 ——
       // 用户关掉设置页就能在对话框里看到新模型,不必切会话。
       { onModelsChanged: () => { dock.refreshModelMenu(); } }
     );
     startConnection();
+    // 通知点击(侧栏已开着):worker 写入 pending sessionId,这里即时切会话。
+    // 启动那次的领取在 startConnection 里,要等会话列表就绪。
+    deps.pendingSessionOpen?.subscribe?.((sessionId) => {
+      openSession(sessionId).catch((error) => showToast(format(error)));
+    });
     setInterval(() => setStreamState(deps.connection.streamState), 500);
     // 断开时点击状态点手动重连。
     elements.hdrStatus.addEventListener("click", () => {
@@ -857,6 +915,23 @@ export function createSidepanelApp(root, deps) {
         showToast(format(error));
       }
     });
+  }
+
+  /// 属于当前选中工作目录的会话(顺序沿用 listStore 的最近优先)。
+  /// 「全部」时返回全部;选中具体 workspace 时以宿主的 sessionIds 名单为准,
+  /// 名单缺失才回落 cwd 比对 —— 与 historyDrawer 的过滤口径一致。
+  function sessionsInActiveWorkspace(listed) {
+    // 名单为空数组有两种含义:宿主真的说"这个 workspace 没有会话",或宿主压根
+    // 没给 sessionIds。两者都不该直接判定为空 —— 空名单时回落 cwd 比对更安全:
+    // 真没有会话时 cwd 过滤同样为空,不会误恢复别的目录的会话。
+    const ids = workspaceMenu?.activeSessionIds() ?? null;
+    if (ids && ids.length) {
+      const allow = new Set(ids);
+      return listed.filter((item) => allow.has(item.sessionId));
+    }
+    const path = workspaceMenu?.activePath() ?? null;
+    if (!path) return listed;
+    return listed.filter((item) => item.cwd === path);
   }
 
   async function startConnection() {
@@ -879,7 +954,21 @@ export function createSidepanelApp(root, deps) {
       loadBusyEnter()
     ]);
     const listed = deps.sessions.listStore.get();
-    if (listed.length) await openSession(listed[0].sessionId);
+    // 通知点击把侧栏拉起来的场景:优先打开通知指向的会话,盖过默认恢复。
+    // 只认列表里存在的 id —— 会话可能在点击与启动之间被删掉。
+    const pendingId = await deps.pendingSessionOpen?.take?.().catch(() => null) ?? null;
+    if (pendingId && listed.some((item) => item.sessionId === pendingId)) {
+      await openSession(pendingId);
+      return;
+    }
+    // 启动时恢复哪个会话,必须服从当前选中的工作目录 —— 否则 listed[0](全局最近)
+    // 可能属于别的目录,'@' 的文件候选走 fileReferences/list 只认会话 cwd,
+    // 用户就会在项目目录下看到家目录的 Applications/ Desktop/ ...
+    // 过滤规则与历史列表保持一致:优先宿主给的成员名单,回落按 cwd 比对。
+    const restorable = sessionsInActiveWorkspace(listed);
+    if (restorable.length) await openSession(restorable[0].sessionId);
+    else if (workspaceMenu?.activePath() || workspaceMenu?.activeSessionIds()) await newSession();
+    else if (listed.length) await openSession(listed[0].sessionId);
     else await newSession();
   }
 

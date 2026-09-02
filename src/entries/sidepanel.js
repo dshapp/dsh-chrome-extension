@@ -11,7 +11,7 @@ deps.settings.getLang().then(setLang);
 
 const app = createSidepanelApp(document.documentElement, deps);
 app.start().catch((error) => {
-  console.error("[codemax-dsh] 启动失败", error);
+  console.error("[dsh] 启动失败", error);
   const banner = document.querySelector("#connection-banner");
   if (banner) {
     banner.textContent = `启动失败: ${error.message}`;

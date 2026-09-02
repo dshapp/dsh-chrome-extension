@@ -7,7 +7,7 @@
  * makes trusted input (real mouse and key events) possible.
  *
  * The socket address follows the same "DSH server" setting the rest of the
- * extension uses (settings.js's codemax_dsh_backend_url), so configuring one
+ * extension uses (settings.js's dsh_backend_url), so configuring one
  * URL configures everything; dsh_chrome_url remains as an explicit override.
  *
  * MV3 service workers are evicted aggressively, so the socket cannot simply be
@@ -27,7 +27,7 @@ const STORAGE = {
   url: 'dsh_chrome_url',
   // Shared with src/platform/storage/settings.js — the extension-wide DSH
   // server address. Read directly because this file must stay import-free.
-  backendUrl: 'codemax_dsh_backend_url',
+  backendUrl: 'dsh_backend_url',
 }
 const CDP_VERSION = '1.3'
 
@@ -59,10 +59,19 @@ function bridgeUrlFrom(backendUrl) {
   }
 }
 
+// The bridge is always on. Agent control is the whole point of this extension,
+// so there is no user-facing switch any more (the side panel only reports the
+// connection state). `enabled` stays in the shape below because reconcile(),
+// the autostart shard and the get_state message all still read it — it is just
+// pinned to true instead of coming from storage.
+//
+// Any `dsh_chrome_enabled: false` left in storage by an older build is cleared
+// by clearLegacyDisable() at startup: it is no longer reachable from the UI, so
+// a stale false would strand that profile permanently disconnected.
 async function getDesired() {
-  const stored = await chrome.storage.local.get([STORAGE.enabled, STORAGE.url, STORAGE.backendUrl])
+  const stored = await chrome.storage.local.get([STORAGE.url, STORAGE.backendUrl])
   return {
-    enabled: stored[STORAGE.enabled] !== false,
+    enabled: true,
     // An explicit socket override wins; otherwise the bridge connects to the
     // standalone daemon on its fixed port (the backend URL drives only the
     // native-host autostart of dsh web, not the WS connection).
@@ -70,10 +79,24 @@ async function getDesired() {
   }
 }
 
-async function setEnabled(enabled) {
-  await chrome.storage.local.set({ [STORAGE.enabled]: enabled })
-  if (enabled) reconcile()
-  else teardown()
+/**
+ * Drop a `dsh_chrome_enabled: false` written by an older build.
+ *
+ * That flag used to back the "allow agent control" switch. The switch is gone,
+ * so nothing can ever set it back to true — leaving it in place would keep the
+ * bridge torn down forever on exactly the profiles that had turned it off.
+ * Clearing it is safe because the flag no longer has any other meaning.
+ */
+async function clearLegacyDisable() {
+  try {
+    const stored = await chrome.storage.local.get(STORAGE.enabled)
+    if (stored[STORAGE.enabled] !== undefined) {
+      await chrome.storage.local.remove(STORAGE.enabled)
+    }
+  } catch {
+    // Storage unavailable: getDesired() pins enabled to true regardless, so the
+    // bridge still connects. This cleanup is only about not leaving litter.
+  }
 }
 
 // ---------------------------------------------------------------- network log
@@ -2202,6 +2225,23 @@ function isConnected() {
   return state === 'connected'
 }
 
+// The autostart shard (sw/server-supervisor.js) runs in this very worker, so it
+// cannot ask over runtime.sendMessage: a context's own onMessage never receives
+// its own message, and no other context answers `get_state`, so the shard would
+// read null forever and never start the server. Expose the state directly —
+// same worker, no import, which keeps this file loadable as a bare function.
+globalThis.__dshBridgeState = async () => ({
+  connected: isConnected(),
+  shouldConnect: (await getDesired()).enabled,
+})
+
+// Same reason: let the shard ask for an immediate reconnect after it has
+// started the server, instead of waiting out the 30s RECONCILE_ALARM.
+globalThis.__dshBridgeReconcile = async () => {
+  await reconcile()
+  return { ok: true, connected: isConnected() }
+}
+
 function flushPending() {
   if (socket?.readyState !== WebSocket.OPEN || pending.length === 0) return
   while (pending.length) {
@@ -2340,7 +2380,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RECONCILE_ALARM) reconcile()
 })
 chrome.runtime.onStartup.addListener(reconcile)
-chrome.runtime.onInstalled.addListener(reconcile)
+// onInstalled also covers the update that removed the on/off switch, so this is
+// where a profile carrying a stale `enabled: false` gets it cleared.
+chrome.runtime.onInstalled.addListener(() => {
+  clearLegacyDisable().finally(reconcile)
+})
 
 // A changed server address takes effect immediately rather than on the next
 // 30s tick: drop the old socket and reconnect against the new URL.
@@ -2364,10 +2408,6 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
         })
         break
       }
-      case 'set_enabled':
-        await setEnabled(Boolean(message.enabled))
-        respond({ ok: true })
-        break
       case 'reconcile':
         // The daemon-supervisor shard asks the bridge to retry its connection
         // immediately after it has started the daemon, rather than wait for
@@ -2383,4 +2423,6 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   return true
 })
 
-reconcile()
+// Cold worker start: clear the legacy flag before the first connect attempt, so
+// an old `enabled: false` cannot survive as a permanently-off bridge.
+clearLegacyDisable().finally(reconcile)

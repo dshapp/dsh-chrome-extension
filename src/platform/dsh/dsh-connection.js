@@ -15,6 +15,9 @@ export function createDshConnection(options) {
   let backendUrl = options.baseUrl || null;
   let api = null;
   let downlink = null;
+  // 下行流是否已经开过。不能拿 api/downlink 是否为空来推断:setBackendUrl 会在
+  // 启动前就把两者建好,那时流还没开,而 `!api` 的守卫已经不成立了。
+  let started = false;
 
   const onFrame = (frame, stream) => {
     for (const listener of frameListeners) listener(frame, stream);
@@ -31,6 +34,9 @@ export function createDshConnection(options) {
         onGenerationReady: options.onGenerationReady
       });
       if (dnr) await applyFenceRules(dnr, backendUrl);
+    }
+    if (!started) {
+      started = true;
       downlink.start();
     }
   }
@@ -63,7 +69,7 @@ export function createDshConnection(options) {
     // 后端地址变更:更新设置、重建 client、刷新 DNR 规则、重开下行流。
     async setBackendUrl(url) {
       const normalized = await settings.setBackendUrl(url);
-      const hadStarted = downlink !== null;
+      const hadStarted = started;
       downlink?.stop();
       backendUrl = normalized;
       api = createApiClient({ baseUrl: normalized, fetch: options.fetch });
@@ -83,6 +89,7 @@ export function createDshConnection(options) {
       frameListeners.clear();
       api = null;
       downlink = null;
+      started = false;
     },
     ensureStarted
   });

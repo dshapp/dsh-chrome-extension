@@ -2,17 +2,20 @@
 // 对齐 macos/.../Settings/SettingsRoot.swift 的 TabView:选中的 tab 记在
 // 本地存储里,下次打开设置页回到同一页(Mac 用 @AppStorage("settingsSection"))。
 import { t } from "../../../shared/i18n.js";
-import { mountBridgeSettings } from "../bridge-settings.js";
 import { createSettingsService } from "../../../features/settings/settings-service.js";
 import { createGeneralPane } from "./general-pane.js";
 import { createModelsPane } from "./models-pane.js";
 import { createPresetsPane } from "./presets-pane.js";
 import { createPluginsPane } from "./plugins-pane.js";
 import { createServerPane } from "./server-pane.js";
+import { createHostProxyClient } from "../../../platform/dsh/host-proxy-client.js";
+import { createPluginActions } from "../../../features/host-proxy/plugin-actions.js";
+import { createServerOps } from "../../../features/host-proxy/server-ops.js";
+import { createShortcutsPane } from "./shortcuts-pane.js";
 import { escapeHtml } from "./settings-ui.js";
 
-const TABS = ["general", "models", "presets", "plugins", "server"];
-const TAB_STORAGE_KEY = "codemax_dsh_settings_tab";
+const TABS = ["general", "models", "presets", "plugins", "server", "shortcuts"];
+const TAB_STORAGE_KEY = "dsh_settings_tab";
 
 /// 设置页里共用的模态。Mac 用 .sheet 挂在 Settings 窗口上,这里用一个 <dialog>
 /// 复用:同一时刻只会有一个 sheet(编辑提供方时不会再开自定义提供方)。
@@ -52,7 +55,10 @@ function createSheet(dialog) {
   };
 }
 
-export function mountSettings(deps, onBackendChanged, { onModelsChanged } = {}) {
+/// 第二个参数曾是 onBackendChanged(换后端后重连)。服务端 pane 去掉地址
+/// 输入框后就没有任何入口能换后端了,所以它被移除而不是留成一个永不触发的
+/// 回调 —— 留着会让调用方以为"改地址仍会重连"。
+export function mountSettings(deps, { onModelsChanged } = {}) {
   const view = document.querySelector("#view-settings");
   const openButton = document.querySelector("#hdr-settings");
   const backButton = view.querySelector("#settings-back");
@@ -61,12 +67,15 @@ export function mountSettings(deps, onBackendChanged, { onModelsChanged } = {}) 
   const settingsService = createSettingsService(deps.connection);
   const sheet = createSheet(dialog);
   // 已经加载过的 pane 不再重复拉取 —— 切回来时保留上次的内容与草稿。
-  // 声明在 panes 之前:服务端 pane 的 onBackendChanged 会读它作废缓存。
   const loaded = new Set();
   const showToast = (message) => deps.showToast?.(message);
 
-  // 桥的状态区块自带轮询,只在设置页可见期间运行。
-  const bridge = mountBridgeSettings(view);
+  // 宿主代理栈:插件页的装/更/删与服务端页的 dsh 重启/更新都经它执行。
+  // Git 不在这里 —— 它的入口在聊天区右上角(对齐 Mac),自带一份客户端。
+  // 这些能力走 chrome-daemon 的 /host/*,与 deps.connection(dsh web)是两条
+  // 独立链路,daemon 不可用时只降级这几处,不影响设置页其余部分。
+  const hostProxy = createHostProxyClient();
+  const serverOps = createServerOps({ client: hostProxy });
 
   const panes = {
     general: createGeneralPane({
@@ -86,30 +95,30 @@ export function mountSettings(deps, onBackendChanged, { onModelsChanged } = {}) 
       host: view.querySelector("#settings-pane-presets"), sheet, deps, settingsService, showToast
     }),
     plugins: createPluginsPane({
-      host: view.querySelector("#settings-pane-plugins"), deps, settingsService, showToast
+      host: view.querySelector("#settings-pane-plugins"), deps, settingsService, showToast,
+      // 装 / 更 / 删要跑 dsh plugin(即 pnpm),扩展做不到,经 daemon 代理。
+      // 成功后用 settingsService 重拉清单,以宿主 reconcile 后的状态为准。
+      pluginActions: createPluginActions({
+        client: hostProxy,
+        onInventoryChanged: () => panes.plugins.refresh()
+      })
     }),
     server: createServerPane({
       // 渲染进 pane 内的专属容器,而不是整个 pane —— CDP 桥是同一页里的静态 DOM,
       // 每次 refresh 重写整页会把它绑好的监听器一起冲掉。
-      host: view.querySelector("#set-server-host"), deps, showToast,
-      // 换了后端就是换了一整台宿主:其余 pane 手里的命名空间、提供方、预设
-      // 全部属于旧宿主,必须作废重拉,否则切回去看到的是上一台机器的设置
-      // (更糟:在那份陈旧的 revision 上写回)。
-      onBackendChanged: () => {
-        invalidateHostPanes();
-        onBackendChanged?.();
-      }
+      host: view.querySelector("#set-server-host"), deps, showToast, serverOps
+      // 服务端 pane 不再带后端地址输入框(版式以视觉稿为准),所以不再传
+      // onBackendChanged —— 那个回调唯一的触发点就是那个输入框的保存按钮。
+      //
+      // 连带删掉了 invalidateHostPanes():换后端要作废其余 pane 的缓存这条规则
+      // 本身没变,但现在没有任何入口能换后端,留着就是一段永不执行的死代码。
+      // 若日后把地址编辑加回来,连同那个 helper 一起恢复(git history 里有)。
+    }),
+    // 快捷键页是命令表的纯视图:不读宿主设置,所以不参与 invalidateHostPanes。
+    shortcuts: createShortcutsPane({
+      host: view.querySelector("#settings-pane-shortcuts")
     })
   };
-
-  /// 作废所有依赖宿主的 pane 缓存;当前正显示的那个立刻重拉。
-  function invalidateHostPanes() {
-    for (const tab of ["general", "models", "presets", "plugins"]) loaded.delete(tab);
-    if (activeTab !== "server") {
-      loaded.add(activeTab);
-      panes[activeTab].refresh();
-    }
-  }
 
   let activeTab = readStoredTab();
 
@@ -140,7 +149,7 @@ export function mountSettings(deps, onBackendChanged, { onModelsChanged } = {}) 
     // tab 文案跟随语言切换。
     const labels = {
       general: "set.tab.general", models: "set.tab.models", presets: "set.tab.presets",
-      plugins: "set.tab.plugins", server: "set.tab.server"
+      plugins: "set.tab.plugins", server: "set.tab.server", shortcuts: "set.tab.shortcuts"
     };
     for (const [tab, key] of Object.entries(labels)) {
       const button = tabBar.querySelector(`[data-tab="${tab}"]`);
@@ -152,10 +161,10 @@ export function mountSettings(deps, onBackendChanged, { onModelsChanged } = {}) 
     activeTab = TABS.includes(tab) ? tab : "general";
     storeTab(activeTab);
     paintTabs();
-    // 桥区块每秒唤醒一次 service worker,服务端页的连接状态点也按秒自刷 ——
-    // 两者都只在服务端页可见时才该跑。
-    if (activeTab === "server") bridge.refresh();
-    else { bridge.stop(); panes.server.stop(); }
+    // 服务端页的连接状态点、以及桥那一行,都按秒自刷 —— 只在这一页可见时才跑。
+    // 桥的轮询现在归服务端 pane 管(它自己 render 那一行),所以这里只需要
+    // 在离开时停掉整个 pane,不再单独持有一个 bridge 句柄。
+    if (activeTab !== "server") panes.server.stop();
     if (force || !loaded.has(activeTab)) {
       loaded.add(activeTab);
       await panes[activeTab].refresh();
@@ -187,7 +196,7 @@ export function mountSettings(deps, onBackendChanged, { onModelsChanged } = {}) 
   function close() {
     view.classList.remove("open");
     // 关页面要停掉所有按秒跑的表,否则设置页关了还在每秒唤醒 service worker。
-    bridge.stop();
+    // panes.server.stop() 一并停掉桥那一行的轮询。
     panes.server.stop();
     sheet.close();
   }

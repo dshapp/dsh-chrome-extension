@@ -72,3 +72,44 @@ describe("dsh-connection 帧监听器隔离", () => {
     expect(listenerA).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("dsh-connection 启动前改后端地址", () => {
+  it("先 setBackendUrl 再 call,下行流仍要开起来", async () => {
+    // 真实路径:用户在设置页先把服务器地址改掉,之后才发第一条消息。
+    // setBackendUrl 会预建 api 与 downlink,但 hadStarted 为 false 所以不调 start();
+    // 而 ensureStarted 的守卫看的是 api 是否为空,此时 api 已非空 —— 于是 start()
+    // 永远等不到,上行 HTTP 正常但下行帧一条都收不到。
+    const sockets = [];
+    class FakeWebSocket {
+      constructor(url) {
+        this.url = url;
+        this.onopen = null;
+        this.onmessage = null;
+        this.onclose = null;
+        sockets.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const conn = createDshConnection({ settings: makeSettings(), dnr: null, fetch: mockFetch() });
+    await conn.setBackendUrl("http://127.0.0.1:3099");
+    await conn.call("test/method", {});
+    for (const s of sockets) s.onopen?.();
+    await sleep(150);
+
+    // 下行流必须已经建立,并且连的是新地址。
+    expect(sockets.length).toBeGreaterThan(0);
+    expect(sockets.every((s) => s.url.includes("127.0.0.1:3099"))).toBe(true);
+    expect(conn.streamState).not.toBe("disconnected");
+
+    // 帧要真能送达订阅者。
+    const listener = vi.fn();
+    conn.onFrame(listener);
+    const mux = sockets.find((s) => s.url.endsWith("events.mux"));
+    mux.onmessage({ data: frameJson() });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    await conn.dispose();
+  });
+});

@@ -63,6 +63,7 @@ describe("isSteerChord", () => {
 describe("steerChordLabel", () => {
   it("renders per platform", () => {
     expect(steerChordLabel(true)).toBe("⌥⌘↩");
-    expect(steerChordLabel(false)).toBe("Alt+Ctrl+Enter");
+    // 主修饰键在前是 Windows 的书写惯例(Ctrl+Alt+Del,不是 Alt+Ctrl+Del)。
+    expect(steerChordLabel(false)).toBe("Ctrl+Alt+Enter");
   });
 });

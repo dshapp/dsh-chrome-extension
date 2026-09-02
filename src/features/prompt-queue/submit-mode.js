@@ -10,6 +10,8 @@
 // 而不是 session/queue 的 steer 动作 —— 后者是"把队列里某条提前",
 // 会把队列条目立刻发出去而把输入框留在原地,正好是反的。
 
+import { COMMANDS, chordFor, chordLabel } from "../shortcuts/command-table.js";
+
 /// 普通 Enter 在 agent 忙时的默认行为,与宿主默认值一致。
 export const DEFAULT_BUSY_ENTER = "queue";
 
@@ -40,7 +42,9 @@ export function isSteerChord(event, { mac = true } = {}) {
   return mac ? event.metaKey === true : event.ctrlKey === true;
 }
 
-/// 快捷键的展示文案,给 tooltip / 设置页用。
+/// 快捷键的展示文案,给 tooltip / 设置页用。取自命令表,不在这里手写字形。
 export function steerChordLabel(mac = true) {
-  return mac ? "⌥⌘↩" : "Alt+Ctrl+Enter";
+  const kind = mac ? "mac" : "win";
+  const command = COMMANDS.find((entry) => entry.id === "steerDraft");
+  return chordLabel(chordFor(command, kind), kind);
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { mountTriggerMenu } from "../src/app/sidepanel/trigger-menu.js";
-import { projectDraft, reconcileEdit, renderChipMirror, PLACEHOLDER } from "../src/app/sidepanel/composer-chips.js";
+import { projectDraft, reconcileEdit, renderChipMirror, chipRun, CHIP_PAD } from "../src/app/sidepanel/composer-chips.js";
 
 function setup() {
   document.body.innerHTML = '<div id="input-wrap"><div id="input-mirror"></div><textarea id="input"></textarea></div><div id="trigger-menu" hidden></div>';
@@ -51,10 +51,10 @@ describe("@ reference inserts a chip", () => {
     const { elements, menu, type, state } = setup();
     await type("@th");
     menu.handleKeyDown(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
-    expect(elements.input.value).toBe(PLACEHOLDER + " ");
+    expect(elements.input.value).toBe(chipRun("theme.js") + " ");
     const chips = elements.inputMirror.querySelectorAll(".composer-chip");
     expect(chips).toHaveLength(1);
-    expect(chips[0].textContent).toBe("theme.js");
+    expect(chips[0].textContent).toBe(CHIP_PAD + "theme.js" + CHIP_PAD);
     expect(state().sent).toBe("@src/app/sidepanel/theme.js ");
   });
 
@@ -66,7 +66,7 @@ describe("@ reference inserts a chip", () => {
     expect(state().sent).toBe("@src/app/sidepanel/theme.js 看看这个");
   });
 
-  it("deleting the chip character removes the reference entirely", async () => {
+  it("deleting the chip text removes the reference entirely", async () => {
     const { elements, menu, type, state } = setup();
     await type("@th");
     menu.handleKeyDown(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));

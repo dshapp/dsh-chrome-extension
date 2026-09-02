@@ -274,6 +274,58 @@ describe("历史列表上下键导航", () => {
     expect(selectedTitles(doc)).toEqual(["第二个"]);
   });
 
+  it("打开浮层时先显示加载动画,列表回来后换成行", async () => {
+    const { drawer, doc, deps } = setup();
+    // 让 refreshList 挂住,以便观察 await 之前的那一帧。
+    let release;
+    deps.sessions.refreshList.mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(SESSIONS); }));
+
+    drawer.show();
+    // 列表还没回来:应当是加载态,而不是一片空白或上一次的残留行。
+    const loading = doc.querySelector(".history-loading");
+    expect(loading).toBeTruthy();
+    expect(loading.querySelector(".typing-dots")).toBeTruthy();
+    expect(rows(doc)).toHaveLength(0);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    // 列表到手后加载态让位给真正的行。
+    expect(doc.querySelector(".history-loading")).toBeNull();
+    expect(rows(doc)).toHaveLength(3);
+  });
+
+  it("加载态下回车不打开任何会话", async () => {
+    const { drawer, doc, openSession, deps } = setup();
+    let release;
+    deps.sessions.refreshList.mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(SESSIONS); }));
+
+    drawer.show();
+    // 加载中还没有任何行,回车不该赌一个下标去开会话。
+    press(doc, "Enter");
+    expect(openSession).not.toHaveBeenCalled();
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    // 加载完成后回车恢复正常,开首条。
+    press(doc, "Enter");
+    expect(openSession).toHaveBeenCalledWith("s1");
+  });
+
+  it("刷新失败时加载态退回旧列表,不把浮层留在转圈上", async () => {
+    const { drawer, doc, deps } = setup();
+    drawer.show();
+    await drawer.refresh();
+    expect(rows(doc)).toHaveLength(3);
+
+    deps.sessions.refreshList.mockRejectedValueOnce(new Error("offline"));
+    await drawer.refresh({ showLoading: true });
+    // 后端不可达:保留旧行,而不是永远停在加载动画上。
+    expect(doc.querySelector(".history-loading")).toBeNull();
+    expect(rows(doc)).toHaveLength(3);
+  });
+
   it("列表变短后高亮下标不会越界", async () => {
     const { drawer, doc, deps } = setup();
     drawer.show();

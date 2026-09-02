@@ -1,7 +1,7 @@
 // 页面元素选取:在用户当前浏览的页面上圈选元素,发送消息时把定位信息
 // 以语义化 XML 拼在最前面,让模型准确知道"用户指的是哪个元素"。
 //
-// 移植自 codemax-chrome 的 element-picker,适配 DSH 侧栏的依赖注入风格
+// 移植自原 extension 的 element-picker,适配 DSH 侧栏的依赖注入风格
 // (无全局 state/actions 容器,改为工厂 + 显式依赖)。
 //
 // 四个注入体(summary/overlay/lifecycle/highlight)保持自包含:它们经
@@ -259,6 +259,23 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
     };
     api.tabs?.onActivated?.addListener(onActivated);
 
+    // 目标页被关掉:必须就地收尾。留着 active + 一个已死的 tabId,drain 会每 400ms
+    // 空转一次;更要紧的是 Chrome 会复用 tabId —— 等这个 id 被新标签页复用,
+    // drain 与 SW 的 stopPickerOnTab 就打到一个用户毫不相干的页面上去了。
+    // presence 哨兵只覆盖侧栏关闭,覆盖不了标签页关闭。
+    const onRemoved = (id) => {
+      if (id !== tabId && id !== highlightTabId) return;
+      if (id === tabId) {
+        stopDrain();
+        active = false;
+        tabId = null;
+        syncPresence();
+        notify();
+      }
+      if (id === highlightTabId) highlightTabId = null;
+    };
+    api.tabs?.onRemoved?.addListener(onRemoved);
+
     // 主路径:侧栏关闭 → port 断开 → SW 拆掉页面覆盖层。
     connectPresence();
 
@@ -276,6 +293,7 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
       api.runtime.onMessage.removeListener(onMessage);
       api.tabs?.onUpdated?.removeListener(onUpdated);
       api.tabs?.onActivated?.removeListener(onActivated);
+      api.tabs?.onRemoved?.removeListener(onRemoved);
       if (typeof window !== "undefined") window.removeEventListener("pagehide", onPageHide);
       try { presencePort?.disconnect?.(); } catch { /* 已断开 */ }
       presencePort = null;

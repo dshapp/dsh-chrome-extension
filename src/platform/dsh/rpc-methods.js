@@ -26,6 +26,9 @@ export const RPC = Object.freeze({
   workspaceRename: "workspace.rename",
   workspaceDelete: "workspace.delete",
   workspaceArchiveSession: "workspace.archiveSession",
+  // 排序:beforeXxxId 省略即追加到末尾。前者排工作区本身,后者排某个工作区内的会话。
+  workspaceInsertBefore: "workspace.insertBefore",
+  workspaceInsertSessionBefore: "workspace.insertSessionBefore",
   // ---- host ----
   hostDescribe: "host.describe",
   hostListDirectory: "host.listDirectory",

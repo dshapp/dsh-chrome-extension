@@ -18,7 +18,8 @@ function fakeChrome({ tabs = [{ id: 7, url: "https://example.com" }], drain = []
         query: vi.fn().mockResolvedValue(tabs),
         get: vi.fn().mockImplementation((id) => Promise.resolve(tabs.find((t) => t.id === id) ?? tabs[0])),
         onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
-        onActivated: { addListener: vi.fn(), removeListener: vi.fn() }
+        onActivated: { addListener: vi.fn(), removeListener: vi.fn() },
+        onRemoved: { addListener: vi.fn(), removeListener: vi.fn() }
       },
       runtime: { onMessage: { addListener: vi.fn(), removeListener: vi.fn() } },
       scripting: {
@@ -169,32 +170,38 @@ describe("XML 上下文序列化", () => {
     url: "https://shop.example/checkout", title: "结算页"
   };
 
+  const parse = (xml) => new window.DOMParser().parseFromString(xml, "application/xml");
+
   it("空集合返回空串", () => {
     expect(formatPickedElementsContext([])).toBe("");
     expect(formatPickedElementsContext(null)).toBe("");
   });
 
   it("产出可被 DOMParser 解析的合法 XML", () => {
-    const xml = formatPickedElementsContext([element]);
-    const doc = new window.DOMParser().parseFromString(xml, "application/xml");
+    const doc = parse(formatPickedElementsContext([element]));
     expect(doc.querySelector("parsererror")).toBeNull();
     expect(doc.documentElement.tagName).toBe("selected_page_elements");
   });
 
-  it("三种定位符并存于 locators 下", () => {
-    const xml = formatPickedElementsContext([element]);
-    const doc = new window.DOMParser().parseFromString(xml, "application/xml");
-    const loc = doc.querySelector("locators");
-    expect(loc.querySelector("xpath").textContent).toBe('//*[@id="submit"]');
-    expect(loc.querySelector("css_selector").textContent).toBe("#app > form > button");
-    expect(loc.querySelector("ref").textContent).toBe("ref_1");
+  it("三种定位符都以属性形式挂在 element 上", () => {
+    const el = parse(formatPickedElementsContext([element])).querySelector("element");
+    expect(el.getAttribute("xpath")).toBe('//*[@id="submit"]');
+    expect(el.getAttribute("css")).toBe("#app > form > button");
+    expect(el.getAttribute("ref")).toBe("ref_1");
   });
 
-  it("页面 url/title 与元素计数入 XML", () => {
-    const xml = formatPickedElementsContext([element]);
-    const doc = new window.DOMParser().parseFromString(xml, "application/xml");
-    expect(doc.querySelector("page").getAttribute("url")).toBe("https://shop.example/checkout");
-    expect(doc.querySelector("elements").getAttribute("count")).toBe("1");
+  it("页面 url/title 与元素计数收进根节点属性", () => {
+    const root = parse(formatPickedElementsContext([element])).documentElement;
+    expect(root.getAttribute("url")).toBe("https://shop.example/checkout");
+    expect(root.getAttribute("title")).toBe("结算页");
+    expect(root.getAttribute("count")).toBe("1");
+  });
+
+  it("根节点只有 element 子节点(不再有说明句/page/elements 包装层)", () => {
+    const doc = parse(formatPickedElementsContext([element]));
+    const tags = [...doc.documentElement.children].map((n) => n.tagName);
+    expect(tags).toEqual(["element"]);
+    expect(formatPickedElementsContext([element])).not.toContain("<description");
   });
 
   it("特殊字符被转义且往返无损(否则 XML 结构会被内容破坏)", () => {
@@ -202,38 +209,65 @@ describe("XML 上下文序列化", () => {
       ...element,
       selector: 'div[data-x="a&b"] > span',
       name: '他说 "你好" & <再见>',
-      attrs: { id: "a<b", class: "c&d" },
+      text: '他说 "你好" & <再见>',
       title: "标题 <含尖括号>"
     };
-    const xml = formatPickedElementsContext([nasty]);
-    const doc = new window.DOMParser().parseFromString(xml, "application/xml");
+    const doc = parse(formatPickedElementsContext([nasty]));
     expect(doc.querySelector("parsererror")).toBeNull();
-    expect(doc.querySelector("css_selector").textContent).toBe('div[data-x="a&b"] > span');
-    expect(doc.querySelector("accessible_name").textContent).toBe('他说 "你好" & <再见>');
-    expect(doc.querySelector("page").getAttribute("title")).toBe("标题 <含尖括号>");
+    // 定位符移进了属性,属性位的引号转义尤其要验。
+    expect(doc.querySelector("element").getAttribute("css")).toBe('div[data-x="a&b"] > span');
+    expect(doc.querySelector("element").textContent.trim()).toBe('他说 "你好" & <再见>');
+    expect(doc.documentElement.getAttribute("title")).toBe("标题 <含尖括号>");
   });
 
-  it("多个元素各自带 index", () => {
-    const xml = formatPickedElementsContext([element, { ...element, ref: "ref_2", name: "取消" }]);
-    const doc = new window.DOMParser().parseFromString(xml, "application/xml");
-    const nodes = [...doc.querySelectorAll("element")];
-    expect(nodes.map((n) => n.getAttribute("index"))).toEqual(["1", "2"]);
+  it("多个元素各自带序号 i", () => {
+    const doc = parse(formatPickedElementsContext([element, { ...element, ref: "ref_2", name: "取消" }]));
+    expect([...doc.querySelectorAll("element")].map((n) => n.getAttribute("i"))).toEqual(["1", "2"]);
   });
 
-  it("bounding_box 用整数", () => {
-    const xml = formatPickedElementsContext([{ ...element, rect: { x: 1.6, y: 2.4, width: 3.5, height: 4.4 } }]);
-    const doc = new window.DOMParser().parseFromString(xml, "application/xml");
-    const box = doc.querySelector("bounding_box");
-    expect(box.getAttribute("x")).toBe("2");
-    expect(box.getAttribute("width")).toBe("4");
+  it("不再输出 id/class/bounding_box(已被选择器编码 / 无消费方)", () => {
+    const xml = formatPickedElementsContext([element]);
+    expect(xml).not.toContain("bounding_box");
+    expect(xml).not.toContain("btn primary");
+    const el = parse(xml).querySelector("element");
+    expect(el.getAttribute("id")).toBeNull();
+    expect(el.getAttribute("class")).toBeNull();
   });
 
-  it("缺字段的元素不产出空标签", () => {
+  it("role 与 tag 同义时省略,被显式改写才输出", () => {
+    const same = parse(formatPickedElementsContext([element])).querySelector("element");
+    expect(same.getAttribute("role")).toBeNull();
+    const diff = parse(formatPickedElementsContext([{ ...element, role: "tab" }])).querySelector("element");
+    expect(diff.getAttribute("role")).toBe("tab");
+  });
+
+  it("text 与 name 相同时不另起 text 子节点,不同才补", () => {
+    expect(formatPickedElementsContext([element])).not.toContain("<text>");
+    const doc = parse(formatPickedElementsContext([{ ...element, text: "提交订单(含运费)" }]));
+    expect(doc.querySelector("text").textContent).toBe("提交订单(含运费)");
+  });
+
+  it("url 与定位符不被截断:半截 URL / 选择器等于不可用", () => {
+    const url = "https://shop.example/checkout?" + "q=1&".repeat(60);
+    const css = "body > " + "div:nth-of-type(2) > ".repeat(11) + "button";
+    const doc = parse(formatPickedElementsContext([{ ...element, url, selector: css }]));
+    expect(doc.documentElement.getAttribute("url")).toBe(url);
+    expect(doc.querySelector("element").getAttribute("css")).toBe(css);
+  });
+
+  it("缺字段的元素不产出空标签,也不产出空属性", () => {
     const xml = formatPickedElementsContext([{ tag: "div", ref: "r", selector: "", xpath: "" }]);
-    const doc = new window.DOMParser().parseFromString(xml, "application/xml");
+    const doc = parse(xml);
     expect(doc.querySelector("parsererror")).toBeNull();
-    expect(doc.querySelector("xpath")).toBeNull();
-    expect(doc.querySelector("ref").textContent).toBe("r");
+    expect(xml).not.toContain('=""');
+    const el = doc.querySelector("element");
+    expect(el.getAttribute("xpath")).toBeNull();
+    expect(el.getAttribute("ref")).toBe("r");
+  });
+
+  it("体积回归:两个元素的上下文远小于旧嵌套格式(旧版 ~1142 字符)", () => {
+    const xml = formatPickedElementsContext([element, { ...element, ref: "ref_2", name: "取消" }]);
+    expect(xml.length).toBeLessThan(500);
   });
 });
 
@@ -283,5 +317,45 @@ describe("注入体(在 jsdom 里当作页面脚本直接跑)", () => {
     elementPickerSummaryScript({ maxTextLength: 120 });
     const summary = window.__cmPickerSummary.build(document.querySelector("input"));
     expect(JSON.stringify(summary)).not.toContain("s3cret");
+  });
+});
+
+describe("目标页被关掉", () => {
+  // attach() 挂了 onUpdated / onActivated,唯独没挂 onRemoved:目标页关掉后
+  // picker 仍是 active、tabId 仍指着那个已死的 tab,drain 每 400ms 空转一次。
+  // 真正的危害是 Chrome 会复用 tabId —— 死 id 被新页面复用后,drain 与 SW 的
+  // stopPickerOnTab 会打到一个用户毫不相干的页面上。
+  it("目标页关闭后选取模式收尾,不再盯着这个 tabId", async () => {
+    const { picker, api } = make();
+    const detach = picker.attach();
+    await picker.setActive(true);
+    expect(picker.active).toBe(true);
+    expect(picker.tabId).toBe(7);
+
+    const onRemoved = api.tabs.onRemoved.addListener.mock.calls[0]?.[0];
+    expect(typeof onRemoved).toBe("function");
+    onRemoved(7);
+
+    expect(picker.active).toBe(false);
+    expect(picker.tabId).toBe(null);
+    detach();
+  });
+
+  it("关掉的是别的标签页则不受影响", async () => {
+    const { picker, api } = make();
+    const detach = picker.attach();
+    await picker.setActive(true);
+    const onRemoved = api.tabs.onRemoved.addListener.mock.calls[0]?.[0];
+    onRemoved(999);
+    expect(picker.active).toBe(true);
+    expect(picker.tabId).toBe(7);
+    detach();
+  });
+
+  it("detach 时把 onRemoved 一起摘掉", async () => {
+    const { picker, api } = make();
+    const detach = picker.attach();
+    detach();
+    expect(api.tabs.onRemoved.removeListener).toHaveBeenCalled();
   });
 });

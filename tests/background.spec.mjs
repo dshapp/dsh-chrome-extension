@@ -129,6 +129,7 @@ function makeChromeMock() {
   const groupCalls = []
   const store = {}
   const debuggerEvents = []
+  const messageListeners = []
   const detachListeners = []
   const attachCalls = []
   const timeline = []
@@ -155,9 +156,15 @@ function makeChromeMock() {
     api: {
       runtime: {
         getManifest: () => ({ version: '0.1.0' }),
-        onMessage: { addListener() {} },
+        // Keep the listener so a test can drive get_state the way the side
+        // panel does, instead of reaching into the worker's internals.
+        onMessage: { addListener(listener) { messageListeners.push(listener) } },
         onStartup: { addListener() {} },
         onInstalled: { addListener() {} },
+        /** Deliver a runtime message and hand the reply to `respond`. */
+        __message(message, sender, respond) {
+          for (const listener of messageListeners) listener(message, sender, respond)
+        },
       },
       storage: {
         local: {
@@ -167,7 +174,10 @@ function makeChromeMock() {
             return out
           },
           async set(values) { Object.assign(store, values) },
+          async remove(keys) { for (const key of [].concat(keys)) delete store[key] },
         },
+        /** Read the backing store directly, to assert on migrations. */
+        __store: store,
         onChanged: { addListener() {} },
       },
       alarms: { create() {}, onAlarm: { addListener() {} } },
@@ -373,9 +383,10 @@ before(async () => {
   })
 
   mock = makeChromeMock()
-  // The bridge now derives its socket from the extension-wide DSH backend
-  // setting. Seed that same storage key instead of patching a daemon constant.
-  await mock.api.storage.local.set({ codemax_dsh_backend_url: `http://127.0.0.1:${port}` })
+  // The bridge no longer follows the DSH backend URL: it connects to the
+  // standalone daemon on its fixed port, with `dsh_chrome_url` as the only
+  // explicit override. Seed that override so the worker dials this test server.
+  await mock.api.storage.local.set({ dsh_chrome_url: `ws://127.0.0.1:${port}${'/chrome/ws'}` })
   new Function('chrome', 'WebSocket', 'console', source)(mock.api, WebSocket, console)
   await connected
 })
@@ -1438,3 +1449,78 @@ test('trusted clicks do not pre-focus the remembered element', async () => {
     .filter((call) => call.method === 'Runtime.evaluate' && call.params.expression.includes('__dshChromeFocused'))
   assert.equal(restores.length, 0, 'a click must arrive without a programmatic focus before it')
 })
+// ------------------------------------------------------- always-on bridge
+
+/**
+ * Boot a second, isolated worker against its own WS server.
+ *
+ * The suite-wide worker in before() is already connected, and the bridge reads
+ * its desired state at load, so the always-on behaviour needs a fresh instance
+ * whose storage can be seeded first.
+ */
+async function bootWorker(seed = {}) {
+  const wss = new WebSocketServer({ port: 0 })
+  await new Promise((ready) => wss.once('listening', ready))
+  const p = wss.address().port
+  const connected = new Promise((resolve) => wss.once('connection', resolve))
+  const m = makeChromeMock()
+  await m.api.storage.local.set({ dsh_chrome_url: `ws://127.0.0.1:${p}/chrome/ws`, ...seed })
+  new Function('chrome', 'WebSocket', 'console', source)(m.api, WebSocket, console)
+  return { wss, mock: m, connected }
+}
+
+test('a stale dsh_chrome_enabled:false still connects, and the flag is cleared', async () => {
+  // Regression: that flag used to back the "allow agent control" switch. The
+  // switch is gone, so nothing could ever flip it back — a profile that had
+  // turned it off would stay disconnected forever.
+  const { wss, mock: m, connected } = await bootWorker({ dsh_chrome_enabled: false })
+  try {
+    await connected   // hangs (and the test times out) if the flag still gates
+    assert.equal(m.api.storage.__store.dsh_chrome_enabled, undefined,
+      'the legacy flag should be removed, not left as litter')
+  } finally {
+    wss.close()
+  }
+})
+
+test('enabled is pinned to true even when the flag is re-added after startup', async () => {
+  // Targets getDesired() specifically. The startup migration also clears the
+  // flag, so a boot-time seed alone cannot prove the read is unconditional:
+  // either mechanism would carry that test. Writing the flag back *after*
+  // startup removes the migration from the picture — only a hard-coded
+  // `enabled: true` can keep the bridge up from here.
+  const { wss, mock: m, connected } = await bootWorker()
+  try {
+    await connected
+    await m.api.storage.local.set({ dsh_chrome_enabled: false })
+
+    const state = await new Promise((resolve) => {
+      m.api.runtime.__message({ type: 'get_state' }, null, resolve)
+    })
+    assert.equal(state.shouldConnect, true,
+      'getDesired() must ignore the flag, not read it back out of storage')
+  } finally {
+    wss.close()
+  }
+})
+
+test('set_enabled is no longer honoured', async () => {
+  // A stale caller (an old side panel bundle, say) must not appear to succeed
+  // at switching agent control off.
+  const { wss, mock: m, connected } = await bootWorker()
+  try {
+    await connected
+    const reply = await new Promise((resolve) => {
+      m.api.runtime.__message({ type: 'set_enabled', enabled: false }, null, resolve)
+    })
+    assert.equal(reply.ok, false, 'set_enabled must fall through to the unknown-message branch')
+
+    const state = await new Promise((resolve) => {
+      m.api.runtime.__message({ type: 'get_state' }, null, resolve)
+    })
+    assert.equal(state.shouldConnect, true, 'and it must not have changed anything')
+  } finally {
+    wss.close()
+  }
+})
+

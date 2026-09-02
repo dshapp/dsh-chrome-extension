@@ -81,7 +81,9 @@ export function createAttachmentTray() {
   // 由 app 层在 imageLimits 投影到达时注入;未注入时用保守兜底。
   let limits = null;
   return {
-    get pending() { return [...pending]; },
+    // 只暴露读完的附件:占位项的 part 还是 null,漏出去会被拼进消息体发给宿主。
+    // 张数/字节校验读的是内部的 pending(含占位),所以上限依然按占位算。
+    get pending() { return pending.filter((item) => item.part); },
     get limits() { return limits; },
     setLimits(next) { limits = next ?? null; },
     onChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
@@ -94,11 +96,28 @@ export function createAttachmentTray() {
         error.i18nParams = rejection.params;
         throw error;
       }
-      const part = await fileToContentPart(file);
-      pending.push({ part, previewUrl: URL.createObjectURL(file), bytes: file.size });
+      // 先按 bytes 占位再读文件。校验读 pending 是同步的,而读文件是异步的:
+      // 不占位的话,一次粘贴多张图产生的并发调用会全部在 pending 仍为空时通过
+      // 校验,张数与总字节上限双双被突破,直到发送时才被宿主拒绝。
+      const slot = { part: null, previewUrl: null, bytes: file.size };
+      pending.push(slot);
+      let part;
+      try {
+        part = await fileToContentPart(file);
+      } catch (error) {
+        const at = pending.indexOf(slot);
+        if (at !== -1) pending.splice(at, 1);
+        throw error;
+      }
+      slot.part = part;
+      slot.previewUrl = URL.createObjectURL(file);
       for (const listener of listeners) listener(this.pending);
     },
     remove(index) {
+      // 索引来自 DOM 的 data-index,重渲染竞态或被改写时可能是 NaN / 负数 / 越界。
+      // splice 对这些值另有语义(-1 删最后一个、NaN 当 0),删掉的都不是用户点的
+      // 那张,而目标那张的 blob 还留着没回收。对齐 element-picker.remove 的护栏。
+      if (!Number.isInteger(index) || index < 0 || index >= pending.length) return;
       const [removed] = pending.splice(index, 1);
       if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
       for (const listener of listeners) listener(this.pending);

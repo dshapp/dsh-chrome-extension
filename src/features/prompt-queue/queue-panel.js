@@ -57,7 +57,9 @@ const ICONS = {
 ///                 或 { kind: "edit", text }
 /// @param running  仅 agent 运行中才可插队 —— 不在运行就没有"当前轮"可插。
 /// @param mutable  子代理会话的队列不归本端管,只读展示。
-export function createQueuePanel(items, { onAction, running = false, mutable = true } = {}) {
+/// @param onError  (error, itemId, action) => void;onAction 失败时的上报口。
+///                 不传也不会漏成未处理拒绝,只是失败对用户不可见。
+export function createQueuePanel(items, { onAction, onError, running = false, mutable = true } = {}) {
   const element = document.createElement("div");
   element.className = "queue-dock";
 
@@ -140,6 +142,9 @@ export function createQueuePanel(items, { onAction, running = false, mutable = t
     if (!input) return;
     const row = input.closest("[data-item-id]");
     if (event.isComposing) return; // 组字确认候选的 Enter 不提交编辑
+    // 输入框可能已经脱离所属行(重渲染竞态下事件仍会冒泡上来),此时没有可提交的
+    // 目标 —— 与上面 click 分支的 !row 处理保持一致,直接放过。
+    if (!row) return;
     if (event.key === "Enter") { event.preventDefault(); commitEdit(row.dataset.itemId, input); }
     else if (event.key === "Escape") { event.preventDefault(); editingId = null; render(); }
   });
@@ -156,7 +161,11 @@ export function createQueuePanel(items, { onAction, running = false, mutable = t
     if (busyId) return;
     busyId = itemId;
     render();
-    Promise.resolve(onAction?.(itemId, action)).finally(() => {
+    // .finally 不消费拒绝:少了这个 catch,onAction 失败就会变成未处理拒绝,
+    // 而 UI 照常解锁,用户以为改动生效了。失败交给调用方的 onError 上报。
+    Promise.resolve(onAction?.(itemId, action)).catch((error) => {
+      onError?.(error, itemId, action);
+    }).finally(() => {
       busyId = null;
       if (typeof action === "object" && action.kind === "edit") editingId = null;
       render();

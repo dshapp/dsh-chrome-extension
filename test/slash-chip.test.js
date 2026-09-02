@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { mountTriggerMenu } from "../src/app/sidepanel/trigger-menu.js";
-import { projectDraft, reconcileEdit, renderChipMirror, PLACEHOLDER } from "../src/app/sidepanel/composer-chips.js";
+import { projectDraft, reconcileEdit, renderChipMirror, chipRun, CHIP_PAD } from "../src/app/sidepanel/composer-chips.js";
 
 function setup() {
   document.body.innerHTML = '<div id="input-wrap"><div id="input-mirror"></div><textarea id="input"></textarea></div><div id="trigger-menu" hidden></div>';
@@ -32,14 +32,15 @@ function setup() {
   const enter = () => menu.handleKeyDown(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
   return { elements, type, enter, sent: () => projectDraft(elements.input.value, occurrences) };
 }
-const chips = (el) => [...el.querySelectorAll(".composer-chip")].map(c => c.textContent);
+// 胶囊内容含两侧 NBSP 留白,比较时剥掉
+const chips = (el) => [...el.querySelectorAll(".composer-chip")].map(c => c.textContent.replaceAll(CHIP_PAD, ""));
 
 describe("slash picks render as chips", () => {
   it("command becomes a chip labelled /compact", async () => {
     const { elements, type, enter, sent } = setup();
     await type("/comp");
     enter();
-    expect(elements.input.value).toBe(PLACEHOLDER + " ");
+    expect(elements.input.value).toBe(chipRun("/compact") + " ");
     expect(chips(elements.inputMirror)).toEqual(["/compact"]);
     // 关键:发送时必须展开成命令原文,否则 tryDispatchCommand 匹配不到
     expect(sent()).toBe("/compact ");

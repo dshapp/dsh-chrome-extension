@@ -2,6 +2,7 @@
 // 断线重连后由 onGenerationReady 触发收敛重拉。
 import { createSessionStore } from "./session-store.js";
 import { createSessionListStore } from "./session-list-store.js";
+import { createSessionOrderStore } from "./session-order-store.js";
 import { SessionAwaitingKind } from "./session-row-trailing.js";
 import { RPC, MUX, HOST } from "../../platform/dsh/rpc-methods.js";
 
@@ -19,6 +20,10 @@ export function locationOf({ workspaceId, cwd } = {}) {
 /// (对齐 macOS 丢帧修复特意保留的 liveTurnFailureMessage 例外)。
 export function createSessionService(connection, { onBackgroundTurnFailure } = {}) {
   const listStore = createSessionListStore();
+  // 手动顺序账本(浏览器本地)。listStore 只认得"排序结果",
+  // 账本的存取由它自己负责 —— 所以在这里组合,而不是让 listStore 去碰 storage。
+  const orderStore = createSessionOrderStore();
+  listStore.attachOrderStore(orderStore);
   const store = createSessionStore();
   let currentSessionId = null;
   const runtimeListeners = new Set();
@@ -53,6 +58,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
 
   const service = {
     listStore,
+    orderStore,
     store,
     getRuntimeSnapshot: () => store.getSnapshot(),
     onRuntimeChange(listener) {
@@ -63,7 +69,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
 
     async refreshList() {
       const value = await connection.call(RPC.sessionList, {});
-      listStore.replaceAll(value.items.filter((item) => !item.blank));
+      // 与本文件其余各处解包一致地兜底。裸取的话,一个不带 items 的回包会抛
+      // TypeError,而 resync() 的第一行就是它 —— 断线重连的收敛会整个失败,
+      // 当前会话的 loadHistory 也跟着不执行。
+      listStore.replaceAll((value?.items ?? []).filter((item) => !item.blank));
       return listStore.get();
     },
 
@@ -240,11 +249,19 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           if (!isCurrent(payload.sessionId)) {
             // 别的会话:丢帧前偷看三样(帧反正已解码,偷看免费),事件本体不进 store。
             // 运行状态点亮/熄灭侧栏行;用户消息更新活跃排序;失败轮上报通知。
-            if (event?.type === "turn/start") listStore.setStatus(payload.sessionId, true);
+            if (event?.type === "turn/start") {
+              listStore.setStatus(payload.sessionId, true);
+              // 重跑即消错:新一轮开始,上一轮的失败红点就不再是待读的事了
+              // (对齐 macOS SessionStore 在开轮时重置 lastTurnErrored)。
+              listStore.setErrored(payload.sessionId, false);
+            }
             if (event?.type === "turn/end") {
               listStore.setStatus(payload.sessionId, false);
               const reason = event?.data?.reason;
               if (reason?.kind === "error") {
+                // 通知与行首红点是两回事:通知是一次性的推送,红点是留在列表上
+                // 直到用户回去看为止的状态。所以两个都要发。
+                listStore.setErrored(payload.sessionId, true);
                 onBackgroundTurnFailure?.(payload.sessionId, reason.error?.message ?? "");
               }
             }

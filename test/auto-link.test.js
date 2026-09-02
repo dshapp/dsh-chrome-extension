@@ -62,8 +62,12 @@ describe("裸 URL 自动探测", () => {
   });
 
   it("不注入 HTML:URL 里的尖括号已被转义,无法逃逸出属性", () => {
+    // 这条断言的意图是**防注入**,不是"禁止图片":正文里写出来的尖括号必须
+    // 保持转义态,永远不能变成真标签。Markdown 图片语法(![](...))走的是
+    // md-image.test.js 那条独立的、带白名单的路径,与这里互不相干。
     const html = mdToHtml('https://e.com/"><img src=x>');
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img ");
+    expect(html).toContain("&lt;img");
   });
 
   it("autoLinkUrls 对无 URL 文本保持原样", () => {

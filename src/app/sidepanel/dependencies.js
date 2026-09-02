@@ -1,8 +1,9 @@
-// CodeMax DSH 侧栏应用组合根:组装各功能域依赖。纯组装,不含业务逻辑。
+// DSH 侧栏应用组合根:组装各功能域依赖。纯组装,不含业务逻辑。
 import { createSettings } from "../../platform/storage/settings.js";
 import { createDshConnection, DshStreamState } from "../../platform/dsh/dsh-connection.js";
 import { createSessionService } from "../../features/sessions/session-service.js";
 import { createBackgroundNotifier } from "../../features/notifications/background-notifier.js";
+import { createPendingSessionOpen } from "../../features/notifications/notification-click.js";
 import { createModelService } from "../../features/models/model-service.js";
 import { createSkillService } from "../../features/skills/skill-service.js";
 import { createCommandService } from "../../features/commands/command-service.js";
@@ -39,7 +40,11 @@ export function createSidepanelDependencies(options = {}) {
     workspaces: options.workspaces || createWorkspaceService(connection),
     references: options.references || createReferenceService(connection),
     goals: options.goals || createGoalService(connection),
+    // '@' 浮层的额外候选来源(可插拔契约,见 trigger-menu.js 的 extraSources)。
+    mentionSources: options.mentionSources || [],
     attachments: options.attachments || createAttachmentTray(),
+    // 通知点击的交接:worker 写 pending sessionId,侧栏领取后切会话。
+    pendingSessionOpen: options.pendingSessionOpen || createPendingSessionOpen(),
     DshStreamState,
     formatErrorDetails,
     setLang,

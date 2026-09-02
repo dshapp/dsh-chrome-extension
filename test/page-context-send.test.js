@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
-// 「携带当前页面上下文」开关在**真实发送路径**上的接线:
-// 关态不得改变既有时序(回归:一个多余的 await 会把 prompt 推迟一个微任务,
+// 「当前网页」在**真实发送路径**上的接线,以及 ＋ 与 @ 共用同一个候选浮层。
+//
+// 不选时不得改变既有时序(回归:一个多余的 await 会把 prompt 推迟一个微任务,
 // 曾经打挂 steer-send / stop-button 这类按微任务计数的用例);
-// 开态则必须把 tabId 与页面快照拼在 prompt 最前面。
+// 选中则插成一枚胶囊,发送时由 projectDraft 展开成 tabId 那一行。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createSidepanelApp } from "../src/app/sidepanel/sidepanel-app.js";
-import { PAGE_CONTEXT_STORAGE_KEY } from "../src/features/page-context/page-context.js";
 
 const html = readFileSync(resolve(process.cwd(), "pages/sidepanel/index.html"), "utf8");
 
@@ -127,67 +127,119 @@ function setup() {
   return {
     deps, app,
     input: document.querySelector("#input"),
-    send: document.querySelector("#send"),
-    button: document.querySelector("#page-context-btn")
+    send: document.querySelector("#send")
   };
 }
 
-/// 输入一句话并点发送。tick 数与 steer-send/stop-button 的用例保持一致 ——
-/// 关态发送必须在同样的微任务预算内走完。
+/// 输入一句话。tick 数与 steer-send/stop-button 的用例保持一致 ——
+/// 没选「当前网页」时发送必须在同样的微任务预算内走完。
 async function type(input, value) {
   input.value = value;
   input.dispatchEvent(new window.Event("input", { bubbles: true }));
 }
 
-describe("底栏开关", () => {
-  it("按钮就在元素选取按钮的右边", () => {
+
+/// 打开候选浮层(点 ＋),返回当前浮层里的所有行名。
+function openMenu() {
+  const btn = document.querySelector("#attach-btn");
+  btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  return rowNames();
+}
+
+const rowNames = () =>
+  [...document.querySelectorAll("#trigger-menu .trigger-item-name")].map((n) => n.textContent);
+
+/// 点浮层里名字为 name 的那一行(用 mousedown —— 行本身就监听 mousedown)。
+function clickRow(name) {
+  const row = [...document.querySelectorAll("#trigger-menu .trigger-item")]
+    .find((r) => r.querySelector(".trigger-item-name")?.textContent === name);
+  if (!row) throw new Error(`浮层里没有「${name}」这一行,现有:${rowNames().join(" / ")}`);
+  row.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  return row;
+}
+
+describe("＋ 与 @ 共用同一个浮层", () => {
+  it("底栏不再有独立的页面上下文开关", () => {
     setup();
-    const picker = document.querySelector("#element-picker-btn");
-    expect(picker.nextElementSibling?.id).toBe("page-context-btn");
+    expect(document.querySelector("#page-context-btn")).toBeNull();
+    // 旧的加号专属菜单也一并退休。
+    expect(document.querySelector("#attach-menu")).toBeNull();
   });
 
-  it("默认关态,点击后变开态并回写 aria-pressed", async () => {
-    const { button } = setup();
-    expect(button.classList.contains("state-off")).toBe(true);
-    expect(button.getAttribute("aria-pressed")).toBe("false");
-
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    expect(button.classList.contains("state-on")).toBe(true);
-    expect(button.getAttribute("aria-pressed")).toBe("true");
+  it("点 ＋ 打开的就是 #trigger-menu,第一行是「当前网页」", () => {
+    setup();
+    const names = openMenu();
+    expect(document.querySelector("#trigger-menu").hidden).toBe(false);
+    expect(names[0]).toBe("当前网页");
+    expect(names).toContain("添加图片");
   });
 
-  it("开态写进 storage,重新挂载侧栏后按钮仍是开态", async () => {
-    const { button } = setup();
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    await Promise.resolve();
-    expect(store[PAGE_CONTEXT_STORAGE_KEY]).toBe(true);
+  it("输入 @ 唤起的是同一份浮层,同样带「当前网页」", async () => {
+    const { input } = setup();
+    await type(input, "@");
+    await Promise.resolve(); await Promise.resolve();
+    expect(document.querySelector("#trigger-menu").hidden).toBe(false);
+    expect(rowNames()[0]).toBe("当前网页");
+  });
 
-    const again = setup();
-    // load() 是异步读 storage,给它几个 tick 落地。
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
-    expect(again.button.classList.contains("state-on")).toBe(true);
+  it("再点一次 ＋ 收起浮层", () => {
+    setup();
+    openMenu();
+    document.querySelector("#attach-btn").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    expect(document.querySelector("#trigger-menu").hidden).toBe(true);
+  });
+
+  it("点浮层外面收起", () => {
+    setup();
+    openMenu();
+    document.body.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true }));
+    expect(document.querySelector("#trigger-menu").hidden).toBe(true);
+  });
+
+  it("「添加图片」行唤起文件选择器", () => {
+    setup();
+    const fileInput = document.querySelector("#file-input");
+    const clicked = vi.spyOn(fileInput, "click").mockImplementation(() => {});
+    openMenu();
+    clickRow("添加图片");
+    expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
+  it("「当前网页」不出现在 / 的候选里", async () => {
+    const { input } = setup();
+    await type(input, "/");
+    await Promise.resolve(); await Promise.resolve();
+    expect(rowNames()).not.toContain("当前网页");
   });
 });
 
 describe("发送路径", () => {
-  it("关态:prompt 拿到的就是原文,且时序与没有这个功能时一致", async () => {
+  it("没选当前网页:prompt 拿到的就是原文,且时序与没有这个功能时一致", async () => {
     const { deps, input, send } = setup();
     await type(input, "你好");
 
     send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    // 与 steer-send / stop-button 相同的两个 tick 预算:关态一次 tick 都不该多欠。
+    // 与 steer-send / stop-button 相同的两个 tick 预算:不选就一个 tick 都不该多欠。
     await Promise.resolve();
     await Promise.resolve();
 
     expect(deps.sessions.prompt).toHaveBeenCalledTimes(1);
     expect(deps.sessions.prompt.mock.calls[0][1]).toEqual([{ type: "text", text: "你好" }]);
+    expect(globalThis.chrome.tabs.query).not.toHaveBeenCalled();
     expect(globalThis.chrome.scripting.executeScript).not.toHaveBeenCalled();
   });
 
-  it("开态:tabId 拼在原文前面", async () => {
-    const { deps, input, send, button } = setup();
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    await type(input, "这个页面是什么");
+  it("选了当前网页:输入框出现胶囊,发送时展开成 tabId 前缀", async () => {
+    const { deps, input, send } = setup();
+    openMenu();
+    clickRow("当前网页");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+
+    // 胶囊画在镜像层上,草稿里只留一个占位符。
+    expect(document.querySelector("#input-mirror .composer-chip").textContent).toBe("\u00A0当前网页\u00A0");
+
+    input.value = input.value + "这个页面是什么";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
 
     send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
@@ -197,15 +249,16 @@ describe("发送路径", () => {
     // 一行纯文字,没有 XML 包裹。
     expect(text.startsWith("当前页面tabId=42")).toBe(true);
     expect(text).not.toContain("<current_page_context>");
-    // 用户原话在最后,由 [指令] 与上下文分开。
-    expect(text.endsWith("[指令] 这个页面是什么")).toBe(true);
+    expect(text.endsWith("这个页面是什么")).toBe(true);
   });
 
-  it("只有第一条带 tabId,第二条起就是原文", async () => {
-    const { deps, input, send, button } = setup();
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-
-    await type(input, "第一条");
+  it("只选一次就只带一次:第二条不再带 tabId", async () => {
+    const { deps, input, send } = setup();
+    openMenu();
+    clickRow("当前网页");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    input.value = input.value + "第一条";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
     send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
@@ -214,62 +267,102 @@ describe("发送路径", () => {
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
     expect(deps.sessions.prompt).toHaveBeenCalledTimes(2);
-    const first = deps.sessions.prompt.mock.calls[0][1][0].text;
-    const second = deps.sessions.prompt.mock.calls[1][1][0].text;
-    expect(first.startsWith("当前页面tabId=42")).toBe(true);
-    // 第二条完全是原文:开关还开着,但额度已经用掉了。
-    expect(second).toBe("第二条");
-    expect(second).not.toContain("tabId");
-    // 也不该再去查一次 tabs。
+    expect(deps.sessions.prompt.mock.calls[0][1][0].text.startsWith("当前页面tabId=42")).toBe(true);
+    // 胶囊随发送一起清空,第二条完全是原文。
+    expect(deps.sessions.prompt.mock.calls[1][1][0].text).toBe("第二条");
+    // 也不该再去查一次 tabs —— tabId 在选中那一刻就定死了。
     expect(globalThis.chrome.tabs.query).toHaveBeenCalledTimes(1);
   });
 
-  it("关掉再打开,下一条重新带一次", async () => {
-    const { deps, input, send, button } = setup();
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    await type(input, "第一条");
+  it("再选一次就再带一次", async () => {
+    const { deps, input, send } = setup();
+    openMenu();
+    clickRow("当前网页");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    input.value = input.value + "第一条";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
     send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));   // 关
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));   // 再开
-    await type(input, "第二条");
+    openMenu();
+    clickRow("当前网页");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    input.value = input.value + "第二条";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
     send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
     const second = deps.sessions.prompt.mock.calls[1][1][0].text;
     expect(second.startsWith("当前页面tabId=42")).toBe(true);
-    expect(second.endsWith("[指令] 第二条")).toBe(true);
+    expect(second.endsWith("第二条")).toBe(true);
   });
 
-  it("开态也不往页面注入脚本 —— 只查一次 tabs", async () => {
-    const { input, send, button } = setup();
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    await type(input, "发一条");
+  it("删掉胶囊就不带了", async () => {
+    const { deps, input, send } = setup();
+    openMenu();
+    clickRow("当前网页");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
+    // 用户把胶囊连同它后面的空格一起删掉,重新打字。
+    input.value = "改主意了";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
     send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+
+    expect(deps.sessions.prompt.mock.calls[0][1]).toEqual([{ type: "text", text: "改主意了" }]);
+  });
+
+  it("选了当前网页也不往页面注入脚本 —— 只查一次 tabs", async () => {
+    setup();
+    openMenu();
+    clickRow("当前网页");
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
     expect(globalThis.chrome.scripting.executeScript).not.toHaveBeenCalled();
     expect(globalThis.chrome.tabs.query).toHaveBeenCalledWith({ active: true, lastFocusedWindow: true });
   });
 
-  it("开态但取不到 tab:照发不误,只是不带上下文", async () => {
-    const { deps, input, send, button } = setup();
+  it("取不到 tab:不插胶囊,消息照发", async () => {
+    const { deps, input, send } = setup();
     globalThis.chrome.tabs.query = vi.fn().mockResolvedValue([]);
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    await type(input, "还是要发出去");
+    openMenu();
+    clickRow("当前网页");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
+    expect(document.querySelector("#input-mirror .composer-chip")).toBeNull();
+
+    await type(input, "还是要发出去");
     send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
     expect(deps.sessions.prompt).toHaveBeenCalledTimes(1);
     expect(deps.sessions.prompt.mock.calls[0][1]).toEqual([{ type: "text", text: "还是要发出去" }]);
   });
+});
 
-  it("开关本身不算内容:输入框为空时发送键仍然是禁用的", () => {
-    const { send, button } = setup();
-    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-    expect(send.disabled).toBe(true);
+describe("＋ 打开时的插入位置", () => {
+  it("插在光标处,不动已有文本", async () => {
+    const { input } = setup();
+    input.value = "前面 后面";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    // 把光标放在"前面 "之后。
+    input.setSelectionRange(3, 3);
+
+    openMenu();
+    clickRow("当前网页");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+
+    // 胶囊插在光标处,原文两侧都还在。
+    expect(input.value.startsWith("前面")).toBe(true);
+    expect(input.value.endsWith("后面")).toBe(true);
+    expect(document.querySelector("#input-mirror .composer-chip").textContent).toBe("\u00A0当前网页\u00A0");
+  });
+
+  it("＋ 的 mousedown 不抢焦点(preventDefault),textarea 仍可插入", () => {
+    setup();
+    const btn = document.querySelector("#attach-btn");
+    const ev = new window.MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    btn.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
   });
 });

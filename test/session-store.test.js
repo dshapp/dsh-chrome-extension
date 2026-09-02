@@ -401,6 +401,28 @@ describe("projections", () => {
     expect(s.getSnapshot().title).toBe("新");
   });
 
+  // 宿主不带 seq 时,at 会退化成同一个 state.lastSeq(投影本身不推进 lastSeq),
+  // 严格 `>` 让第二条之后的更新全被当成陈旧帧丢掉,投影永远停在第一版。
+  it("无 seq 的投影按后到者胜,而不是冻结在第一版", () => {
+    const s = fresh();
+    s.applyProjection("title", "第一版");
+    s.applyProjection("title", "第二版");
+    expect(s.getSnapshot().title).toBe("第二版");
+
+    s.applyProjection("todos", [{ id: "1", content: "旧", status: "pending" }]);
+    s.applyProjection("todos", [{ id: "2", content: "新", status: "pending" }]);
+    expect(s.getSnapshot().todos.map((t) => t.id)).toEqual(["2"]);
+  });
+
+  it("带 seq 时仍然拦得住真正的乱序帧", () => {
+    const s = fresh();
+    s.applyProjection("title", "新", 10);
+    s.applyProjection("title", "更旧", 9);
+    expect(s.getSnapshot().title).toBe("新");
+    s.applyProjection("title", "同序后到", 10);
+    expect(s.getSnapshot().title).toBe("同序后到");
+  });
+
   it("todos 与 permissions 解码", () => {
     const s = fresh();
     s.applyProjection("todos", [{ id: "1", content: "做事", status: "in_progress" }], 1);

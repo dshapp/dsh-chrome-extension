@@ -19,14 +19,46 @@ import { fileURLToPath } from "node:url";
 
 const HOST_NAME = "com.dsh.chrome";
 
+/**
+ * install.sh 落盘的那份配置。它记着本次装出来的 dsh 绝对路径
+ * (启动 server 用)。读失败一律返回 null 并回退到候选列表 ——
+ * 配置损坏不能让 host 整个连不上,那会连 status 都不通。
+ */
+function readInstallConfig() {
+  try {
+    const home = process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+    const raw = fs.readFileSync(path.join(home, "dsh-chrome-update.json"), "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 挑一份 dsh 来跑 server。
+ *
+ * 顺序是有讲究的,不是随手排的:一台机器上完全可能并存 Homebrew、npm -g、
+ * pnpm 三份 dsh,而 install.sh 装的、插件 profile 所属的,是 **pnpm 全局** 那份。
+ * 挑错了的后果很隐蔽 —— server 照常起、端口照常通,只是跑着旧代码、
+ * 找不到刚装的插件,看起来像"装了没生效"。
+ *
+ * 于是:显式指定 > 安装期落盘的实测路径 > pnpm 的默认位置 > 其它包管理器。
+ * 其中 ~/Library/pnpm 是 macOS 上 pnpm 的默认 PNPM_HOME,原先整个漏了,
+ * 导致 mac 上必然回退到 /opt/homebrew。
+ */
 function resolveDsh() {
+  const home = os.homedir();
+  const configured = readInstallConfig()?.dshBin;
   const candidates = [
     process.env.DSH_BIN,
+    configured,
+    path.join(home, "Library/pnpm/bin/dsh"),
+    path.join(home, "Library/pnpm/dsh"),
+    path.join(home, ".local/share/pnpm/bin/dsh"),
+    path.join(home, ".local/share/pnpm/dsh"),
     "/opt/homebrew/bin/dsh",
-    path.join(os.homedir(), ".cargo/bin/dsh"),
-    path.join(os.homedir(), ".local/bin/dsh"),
-    path.join(os.homedir(), ".local/share/pnpm/bin/dsh"),
-    path.join(os.homedir(), ".local/share/pnpm/dsh"),
+    path.join(home, ".cargo/bin/dsh"),
+    path.join(home, ".local/bin/dsh"),
     "/usr/local/bin/dsh",
     "/usr/bin/dsh",
     "dsh",

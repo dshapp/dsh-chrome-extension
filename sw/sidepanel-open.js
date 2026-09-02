@@ -4,7 +4,7 @@
  * The toolbar icon opens the panel directly. That requires the manifest to
  * declare no `action.default_popup`, because Chrome gives a declared popup
  * precedence over `openPanelOnActionClick` — which is why the bridge's status
- * and kill switch live in the panel's own settings view instead of a popup.
+ * lives in the panel's own settings view instead of a popup.
  *
  * The context menu and keyboard command remain as secondary routes.
  */
@@ -13,7 +13,7 @@ const MENU_ID = "dsh-open-sidepanel";
 const COMMAND_ID = "open_sidepanel";
 
 /** `sidePanel.open` needs a window; fall back to the focused one. */
-async function openPanel(windowId) {
+export async function openPanel(windowId) {
   const id = windowId ?? (await chrome.windows.getCurrent()).id;
   await chrome.sidePanel.open({ windowId: id });
 }

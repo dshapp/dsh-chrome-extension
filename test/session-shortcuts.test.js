@@ -15,14 +15,18 @@ function keyEvent(key, { meta = false, ctrl = false, shift = false, repeat = fal
 }
 
 describe("session-shortcuts", () => {
-  it("mac 用 ⌘,其他平台用 Ctrl", () => {
+  // 文案改由 command-table 派生,顺带修好了三处手写产生的错字形:
+  // 新建会话曾拼作「⌘⇧K」(Apple 的修饰键顺序是 ⇧⌘),Windows 曾拼作「CtrlK」
+  // (缺 + 号),历史第 N 项曾拼作「⌘K3」(读起来像一个和弦,实为先后两下)。
+  it("mac 用 ⌘,其他平台用 Ctrl,且修饰键顺序符合各平台规范", () => {
     expect(getSessionShortcutLabels("MacIntel")).toEqual({
       history: "⌘K",
-      newSession: "⌘⇧K",
+      newSession: "⇧⌘K",
       historyItem: expect.any(Function)
     });
-    expect(getSessionShortcutLabels("Win32").history).toBe("CtrlK");
-    expect(getSessionShortcutLabels("MacIntel").historyItem(3)).toBe("⌘K3");
+    expect(getSessionShortcutLabels("Win32").history).toBe("Ctrl+K");
+    expect(getSessionShortcutLabels("Win32").newSession).toBe("Ctrl+Shift+K");
+    expect(getSessionShortcutLabels("MacIntel").historyItem(3)).toBe("⌘K 3");
   });
 
   it("⌘K 打开历史,⌘⇧K 新建会话,松开修饰键后隐藏提示", () => {

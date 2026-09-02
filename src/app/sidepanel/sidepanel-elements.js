@@ -6,7 +6,7 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   "history-list-inner", "shortcut-new", "shortcut-history", "messages", "empty-hint", "msg-list", "interactions", "prompt-queue",
   "preview-strip", "input", "composer-bar", "skills-menu", "perm-btn", "perm-label",
   "perm-menu", "model-btn", "model-label", "model-menu", "send", "toast", "view-settings",
-  "attach-btn", "attach-menu", "attach-img", "file-input",
+  "attach-btn", "file-input",
   // 新增:交互接管区、plan 药丸、触发候选菜单、权限二次确认
   "composer-takeover", "plan-chip", "trigger-menu", "perm-confirm", "composer",
   // 引用胶囊镜像层(画在 textarea 底下)
@@ -15,13 +15,14 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   "goal-bar-slot", "todo-panel", "stats-btn", "stats-menu", "preset-btn", "preset-label", "preset-menu",
   // 子代理目录:header chip + 树形 popover
   "subagent-catalog-btn", "subagent-catalog-menu",
+  "git-entry-btn", "git-entry-menu",
   // 新建会话页(empty hero)的选择区:工作目录 + Agent 预设
   "hero-workspace", "hero-workspace-label",
   // 页面元素选取
   "element-picker-btn", "picked-elements-chip", "picked-elements-label",
   "picked-elements-menu", "picked-elements-clear",
-  // 当前页面上下文开关
-  "page-context-btn"];
+  // 拖放落点覆盖层
+  "drop-overlay", "drop-overlay-hint"];
 
 export function collectElements(root) {
   const byId = new Map(IDS.map((id) => [id, root.querySelector(`#${id}`)]));
@@ -57,8 +58,6 @@ export function collectElements(root) {
     send: byId.get("send"),
     toast: byId.get("toast"),
     attachBtn: byId.get("attach-btn"),
-    attachMenu: byId.get("attach-menu"),
-    attachImg: byId.get("attach-img"),
     fileInput: byId.get("file-input"),
     modelBtn: byId.get("model-btn"),
     composer: byId.get("composer"),
@@ -77,12 +76,15 @@ export function collectElements(root) {
     presetLabel: byId.get("preset-label"),
     presetMenu: byId.get("preset-menu"),
     subagentCatalogBtn: byId.get("subagent-catalog-btn"),
+    gitEntryBtn: byId.get("git-entry-btn"),
+    gitEntryMenu: byId.get("git-entry-menu"),
     subagentCatalogMenu: byId.get("subagent-catalog-menu"),
     elementPickerBtn: byId.get("element-picker-btn"),
     pickedChip: byId.get("picked-elements-chip"),
     pickedLabel: byId.get("picked-elements-label"),
     pickedMenu: byId.get("picked-elements-menu"),
     pickedClear: byId.get("picked-elements-clear"),
-    pageContextBtn: byId.get("page-context-btn")
+    dropOverlay: byId.get("drop-overlay"),
+    dropOverlayHint: byId.get("drop-overlay-hint")
   };
 }

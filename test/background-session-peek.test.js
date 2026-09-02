@@ -142,6 +142,53 @@ describe("后台失败通知文案与开关", () => {
   });
 });
 
+describe("运行集合的恢复与并发", () => {
+  // loaded 是个 bool 时必须在 await 之前置位,于是并发的第二个调用者会在集合
+  // 还空着时就拿到"已加载"。s1 的 running→idle 边沿被当成"本来就不在集合里",
+  // 通知丢掉;而 storage 里 s1 仍标着 running,后续轮询再也见不到这个边沿。
+  // 启动轮询与 alarm tick 恰好这样并发(见 sw/session-notify.js)。
+  it("并发 loadRunning 时不丢完成通知", async () => {
+    const create = vi.fn();
+    const store = { dsh_running_sessions: ["s1"] };
+    const area = {
+      get: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { dsh_running_sessions: store.dsh_running_sessions };
+      },
+      set: async (patch) => { Object.assign(store, patch); }
+    };
+    const notifier = createBackgroundNotifier({
+      notifications: { create },
+      settings: { getNotificationsEnabled: async () => true },
+      storage: area
+    });
+
+    const first = notifier.loadRunning();
+    await notifier.loadRunning();
+    notifier.observeStatus("s1", false);
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(create).toHaveBeenCalledTimes(1);
+    // 集合恢复后 s1 已经消费掉,不能继续留在 storage 里。
+    expect(store.dsh_running_sessions).toEqual([]);
+  });
+
+  it("storage 读失败时退化为纯内存,不抛也不卡住", async () => {
+    const create = vi.fn();
+    const notifier = createBackgroundNotifier({
+      notifications: { create },
+      settings: { getNotificationsEnabled: async () => true },
+      storage: { get: async () => { throw new Error("no storage"); }, set: async () => {} }
+    });
+    await expect(notifier.loadRunning()).resolves.toBeUndefined();
+    notifier.observeStatus("s2", true);
+    notifier.observeStatus("s2", false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("历史浮层对 listStore 的活刷新", () => {
   function setupDrawer() {
     const dom = new JSDOM(`<!DOCTYPE html><body>

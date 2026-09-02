@@ -213,6 +213,14 @@ describe("上下文与统计", () => {
     expect(formatTokens(2_500_000)).toBe("2.5M");
     expect(formatDuration(1500)).toBe("1.5s");
     expect(formatDuration(90_000)).toBe("1m 30s");
+    // 先按原值选分支、再对同一个值取整,取整会跨过分支边界:59.6s 落进
+    // "秒" 分支后被 toFixed(0) 进位成 60,输出 "60s";59m59.6s 同理变成
+    // "59m 60s"。这两种写法都不合法,Mac 端不会这么输出。
+    expect(formatDuration(59_600)).toBe("1m");
+    expect(formatDuration(59_990)).toBe("1m");
+    expect(formatDuration(3_599_600)).toBe("1h");
+    // 边界另一侧不受影响。
+    expect(formatDuration(59_499)).toBe("59s");
   });
 
   it("统计行合并轮次、耗时、速度与计费", () => {
@@ -324,6 +332,9 @@ describe("统计数字格式化", () => {
     expect(formatStatsDuration(20 * 60 * 1000 + 8 * 1000)).toBe("20m8s");
     expect(formatStatsDuration(30000)).toBe("30s");
     expect(formatStatsDuration(0)).toBe("0s");
+    // 同样的越界进位:59.99s 会变成非法的 "60s"。
+    expect(formatStatsDuration(59_990)).toBe("1m0s");
+    expect(formatStatsDuration(59_600)).toBe("59.6s");
     expect(formatStatsTokens(17800000)).toBe("17.8M");
     expect(formatStatsTokens(84500)).toBe("84.5K");
     expect(formatStatsTokens(999)).toBe("999");

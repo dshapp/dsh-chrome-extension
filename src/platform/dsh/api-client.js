@@ -60,8 +60,18 @@ export function createApiClient(options) {
       throw new DshTransportError(`rpcId 不匹配: 期望 ${expectedRpcId}, 收到 ${envelope.rpcId}`);
     }
     const result = envelope.result;
+    // 缺 result / 缺 error 时不能裸取:那会抛出 TypeError,而 error-details 靠
+    // instanceof DshRpcError / DshTransportError 分流,裸 TypeError 全落到兜底,
+    // 用户看到的是一句没有意义的 JS 内部报错,而不是"信封无效"。
+    if (!result || typeof result !== "object") {
+      throw new DshTransportError("DSH 响应信封无效:缺少 result");
+    }
     if (!result.ok) {
-      throw new DshRpcError(result.error.code, result.error.message, result.error.details);
+      const error = result.error;
+      if (!error || typeof error !== "object") {
+        throw new DshRpcError("unknown", "DSH 返回了失败但没有给出原因");
+      }
+      throw new DshRpcError(error.code, error.message, error.details);
     }
     return result.value;
   }

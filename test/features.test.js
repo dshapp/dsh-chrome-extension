@@ -59,6 +59,55 @@ describe("attachments", () => {
     expect(formatBytes(20 * 1024 * 1024)).toBe("20MB");
     expect(formatBytes(512 * 1024)).toBe("512KB");
   });
+
+  // renderAttachmentTray 用 Number(dataset.index) 取索引,DOM 被改写或重渲染
+  // 竞态下可能得到 NaN / 负数 / 越界值。splice 对这些值有自己的语义:
+  // -1 删最后一个、NaN 当 0 删第一个 —— 删掉的都不是用户点的那张,
+  // 而真正想删的那张 blob 还留着没回收。同仓 element-picker 的 remove 有护栏。
+  it("remove 的非法索引不误删,也不通知", async () => {
+    const tray = createAttachmentTray();
+    tray.setLimits({ mediaTypes: ["image/png"], maxImageBytes: 1e9, maxImagesPerMessage: 9, maxMessageImageBytes: 1e9 });
+    const png = (name) => new File([new Uint8Array([1])], name, { type: "image/png" });
+    await tray.addFile(png("a.png"));
+    await tray.addFile(png("b.png"));
+
+    let notified = 0;
+    tray.onChange(() => { notified += 1; });
+    for (const bad of [-1, NaN, 99, 2, undefined, 1.5]) tray.remove(bad);
+    expect(tray.pending.map((p) => p.part.name)).toEqual(["a.png", "b.png"]);
+    expect(notified).toBe(0);
+
+    // 合法索引照常生效
+    tray.remove(0);
+    expect(tray.pending.map((p) => p.part.name)).toEqual(["b.png"]);
+    expect(notified).toBe(1);
+  });
+
+  // 校验读 pending 是同步的,而写入在 await fileToContentPart 之后 —— 并发
+  // 粘贴多张图时,所有调用都在 pending 仍为空时通过了校验。
+  it("并发 addFile 不突破张数上限", async () => {
+    const tray = createAttachmentTray();
+    tray.setLimits({ mediaTypes: ["image/png"], maxImageBytes: 1e9, maxImagesPerMessage: 2, maxMessageImageBytes: 1e9 });
+    const png = (name) => new File([new Uint8Array([1])], name, { type: "image/png" });
+    const results = await Promise.allSettled(
+      ["a", "b", "c", "d", "e"].map((n) => tray.addFile(png(`${n}.png`)))
+    );
+    expect(tray.pending).toHaveLength(2);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(3);
+  });
+
+  it("并发 addFile 不突破总字节上限", async () => {
+    const tray = createAttachmentTray();
+    tray.setLimits({ mediaTypes: ["image/png"], maxImageBytes: 1e9, maxImagesPerMessage: 20, maxMessageImageBytes: 100 });
+    const big = (name) => {
+      const file = new File([new Uint8Array([1])], name, { type: "image/png" });
+      Object.defineProperty(file, "size", { value: 60 });
+      return file;
+    };
+    await Promise.allSettled(["a", "b", "c", "d", "e"].map((n) => tray.addFile(big(`${n}.png`))));
+    const total = tray.pending.reduce((sum, p) => sum + p.bytes, 0);
+    expect(total).toBeLessThanOrEqual(100);
+  });
 });
 
 describe("model-service", () => {

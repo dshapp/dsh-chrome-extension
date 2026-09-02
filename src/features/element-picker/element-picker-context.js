@@ -1,6 +1,10 @@
 // 把已选页面元素序列化成注入 prompt 的上下文块,用语义化 XML 包裹,
 // 便于大模型稳定解析出「用户指代了哪些元素」以及每个元素的定位信息。
 // 只发结构化摘要与定位符,不发 innerHTML,控制 token。
+//
+// 刻意不带说明句:标签名 selected_page_elements 与属性名 xpath/css/ref 已自解释,
+// 每条消息重复教一遍定位优先级纯属浪费 token。同理不发 id/class(已被选择器编码)、
+// 不发 bounding_box(无消费方,computer 工具按 ref 操作)。
 
 const MAX_TEXT = 160;
 
@@ -19,35 +23,45 @@ function truncate(value) {
   return text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "…" : text;
 }
 
-function childTag(tag, value) {
+/** 空值不产出属性,避免一排 foo="" 占位。 */
+function attr(name, value) {
   const text = truncate(value);
-  return text ? `      <${tag}>${escapeXml(text)}</${tag}>` : "";
+  return text ? ` ${name}="${escapeXml(text)}"` : "";
+}
+
+/// url 与定位符一样不能截断:半截 URL 既无法点开也无法比对,省下的 token 毫无意义。
+function rawAttr(name, value) {
+  const text = String(value == null ? "" : value).trim();
+  return text ? ` ${name}="${escapeXml(text)}"` : "";
 }
 
 function elementXml(element, index) {
   const attrs = element.attrs || {};
-  const rect = element.rect || {};
-  const lines = [`    <element index="${index + 1}" tag="${escapeXml(element.tag || "element")}">`];
-  // 定位信息优先级:xpath / css selector 稳定可回放,ref 只在本次页面生命周期内有效。
-  lines.push("      <locators>");
-  lines.push(childTag("xpath", element.xpath).replace("      <", "        <"));
-  lines.push(childTag("css_selector", element.selector).replace("      <", "        <"));
-  lines.push(childTag("ref", element.ref).replace("      <", "        <"));
-  lines.push("      </locators>");
-  lines.push(childTag("role", element.role));
-  lines.push(childTag("accessible_name", element.name));
+  const tag = element.tag || "element";
+  const name = truncate(element.name);
+  // role 与 tag 同义时(<button> 的 role=button)不带,只有显式改写过语义才有信息量。
+  const role = truncate(element.role);
+  // describe() 已优先把 aria-label / placeholder 当 name,这里只补它们与 name 不同的情形。
+  const ariaLabel = truncate(attrs.ariaLabel);
+  const placeholder = truncate(attrs.placeholder);
+  const head = [
+    `    <element i="${index + 1}"`,
+    attr("tag", tag),
+    role && role !== tag ? attr("role", role) : "",
+    // 定位信息优先级:xpath / css 稳定可回放,ref 只在本次页面生命周期内有效。
+    rawAttr("xpath", element.xpath),
+    rawAttr("css", element.selector),
+    rawAttr("ref", element.ref),
+    ariaLabel && ariaLabel !== name ? attr("aria_label", ariaLabel) : "",
+    placeholder && placeholder !== name ? attr("placeholder", placeholder) : "",
+    attr("href", attrs.href),
+  ].join("");
+  // 可读名称当正文;可见文本与它不同时才另起子节点(长文本不挤进属性行)。
   const text = truncate(element.text);
-  if (text && text !== truncate(element.name)) lines.push(childTag("text", text));
-  lines.push(childTag("id", attrs.id));
-  lines.push(childTag("class", attrs.class));
-  lines.push(childTag("aria_label", attrs.ariaLabel));
-  lines.push(childTag("placeholder", attrs.placeholder));
-  lines.push(childTag("href", attrs.href));
-  if (Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
-    lines.push(`      <bounding_box x="${Math.round(rect.x)}" y="${Math.round(rect.y)}" width="${Math.round(rect.width)}" height="${Math.round(rect.height)}" />`);
+  if (text && text !== name) {
+    return `${head}>\n      ${escapeXml(name)}\n      <text>${escapeXml(text)}</text>\n    </element>`;
   }
-  lines.push("    </element>");
-  return lines.filter(Boolean).join("\n");
+  return name ? `${head}>${escapeXml(name)}</element>` : `${head} />`;
 }
 
 /**
@@ -57,20 +71,10 @@ function elementXml(element, index) {
 export function formatPickedElementsContext(elements) {
   if (!Array.isArray(elements) || !elements.length) return "";
   const page = elements.find(element => element.url || element.title) || {};
-  const lines = ["<selected_page_elements>"];
-  lines.push(
-    "  <description>用户在页面上手动选取了以下元素,本轮请求即针对这些元素。" +
-    "定位时优先使用 xpath 或 css_selector;ref 仅在当前页面未刷新时有效,可直接传给 computer 工具。</description>",
-  );
-  if (page.url || page.title) {
-    const attrs = [];
-    if (page.url) attrs.push(`url="${escapeXml(page.url)}"`);
-    if (page.title) attrs.push(`title="${escapeXml(truncate(page.title))}"`);
-    lines.push(`  <page ${attrs.join(" ")} />`);
-  }
-  lines.push(`  <elements count="${elements.length}">`);
-  lines.push(...elements.map(elementXml));
-  lines.push("  </elements>");
-  lines.push("</selected_page_elements>");
-  return lines.join("\n");
+  const root = [
+    `<selected_page_elements count="${elements.length}"`,
+    rawAttr("url", page.url),
+    attr("title", page.title),
+  ].join("");
+  return [`${root}>`, ...elements.map(elementXml), "</selected_page_elements>"].join("\n");
 }

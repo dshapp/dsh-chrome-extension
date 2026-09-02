@@ -1,10 +1,11 @@
-// DSH 后端连接设置(chrome.storage.local)。key 前缀 codemax_dsh_ 与原扩展隔离。
+// DSH 后端连接设置(chrome.storage.local)。key 前缀 dsh_ 与桥接侧的
+// dsh_chrome_* 键错开(那组只属于 background.js)。
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:3080";
 
 const KEYS = Object.freeze({
-  backendUrl: "codemax_dsh_backend_url",
-  lang: "codemax_dsh_lang",
-  notificationsEnabled: "codemax_dsh_notifications_enabled"
+  backendUrl: "dsh_backend_url",
+  lang: "dsh_lang",
+  notificationsEnabled: "dsh_notifications_enabled"
 });
 
 async function resolveArea() {

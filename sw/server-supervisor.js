@@ -26,8 +26,12 @@ function canReachWorker() {
 }
 
 async function bridgeState() {
+  // background.js runs in this same worker and publishes its state on a global.
+  // Asking over runtime.sendMessage cannot work: a context's own onMessage never
+  // receives its own message, and nothing else answers `get_state` — this shard
+  // would read null on every tick and never start the server.
   try {
-    return await chrome.runtime.sendMessage({ type: "get_state" });
+    return (await globalThis.__dshBridgeState?.()) ?? null;
   } catch {
     return null;
   }
@@ -43,8 +47,8 @@ async function tick() {
   const result = await ensureServerRunning("web");
   if (result?.ok && !result.alreadyUp) {
     // Nudge the bridge to try again now rather than wait for its 30s alarm.
-    // The bridge ignores unknown message types, so a best-effort nudge is safe.
-    try { await chrome.runtime.sendMessage({ type: "reconcile" }); } catch {}
+    // Same-worker call for the same reason bridgeState() is one.
+    try { await globalThis.__dshBridgeReconcile?.(); } catch {}
   }
 }
 

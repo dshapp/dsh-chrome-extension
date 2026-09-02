@@ -2,6 +2,8 @@
 // msg-actions 操作行、code-block 工具栏、thinking-bubble、结构化错误卡)。
 import { mdToHtml, escapeHtml } from "../../shared/md-to-html.js";
 import { t } from "../../shared/i18n.js";
+import { highlightCodeBlocks } from "./code-highlight.js";
+import { ensureKatex, isKatexReady } from "./katex-loader.js";
 
 // 图标取自 Lucide(https://github.com/lucide-icons/lucide,ISC),保留官方 24×24 网格的原始路径,
 // 仅把 stroke-width 从 2 调到 1.7 以适配 1rem 的实际渲染尺寸。
@@ -85,9 +87,39 @@ export function decorateCodeBlocks(body) {
   }
 }
 
-export function renderMarkdownInto(body, text) {
+/// 正文里是否出现了公式定界符。粗判即可 —— 目的只是决定"要不要去拉 KaTeX",
+/// 真正的判定在 splitMathSegments 里。宁可多拉一次(一次性的),
+/// 也不要因为漏判而让公式永远渲染不出来。
+function mayContainMath(text) {
+  return typeof text === "string" && text.includes("$");
+}
+
+/**
+ * 把 markdown 正文渲染进容器,并补上代码着色与公式。
+ *
+ * KaTeX 与 hljs 都是按需异步加载的,所以这里分两步:先同步渲染一版
+ *(此时公式降级成原文、代码块无色),资源到位后再重绘一次。对已经加载过的
+ * 情况没有额外开销 —— isKatexReady() 为真时不会有第二次渲染。
+ *
+ * @param {Element} body 目标容器。
+ * @param {string} text markdown 源码。
+ * @param {{streaming?: boolean}} options 流式进行中时跳过最后一个代码块的着色。
+ */
+export function renderMarkdownInto(body, text, { streaming = false } = {}) {
   body.innerHTML = mdToHtml(text);
   decorateCodeBlocks(body);
+  void highlightCodeBlocks(body, { streaming });
+
+  // 公式:首次遇到时才拉 KaTeX,拉到后重绘这一条。
+  if (mayContainMath(text) && !isKatexReady()) {
+    void ensureKatex().then((ready) => {
+      // 加载期间这条消息可能已被新内容替换或移出文档 —— 那就不必重绘了。
+      if (!ready || !body.isConnected) return;
+      body.innerHTML = mdToHtml(text);
+      decorateCodeBlocks(body);
+      void highlightCodeBlocks(body, { streaming });
+    });
+  }
 }
 
 // ---- user 消息:.msg-user-turn > (.msg-user + .msg-actions.msg-user-actions) ----

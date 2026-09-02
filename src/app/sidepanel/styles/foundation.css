@@ -1,4 +1,4 @@
-/* CodeMax DSH 侧栏:视觉对齐原 extension(ChatGPT 风格黑白灰)。
+/* DSH 侧栏:视觉对齐原 extension(ChatGPT 风格黑白灰)。
    主题变量与 header/composer/messages 布局沿用 extension/pages/sidepanel/styles 的设计。 */
 
 /* hidden 属性必须压过各组件的 display 规则(empty-hint/prompt-queue 等)。 */
@@ -29,6 +29,18 @@
   --code-border:     #dddddd;
   --code-text:       #242424;
   --code-muted:      #666666;
+  /* 语法着色 token。有意用一套语义变量而不是引 hljs 自带主题:
+     那些主题是硬编码色值,和侧栏的明暗切换、以及上面这组 --code-* 打架。 */
+  --hl-keyword:      #a626a4;
+  --hl-string:       #50a14f;
+  --hl-number:       #986801;
+  --hl-comment:      #a0a1a7;
+  --hl-function:     #4078f2;
+  --hl-type:         #c18401;
+  --hl-variable:     #e45649;
+  --hl-literal:      #0184bc;
+  --hl-deletion:     #c0392b;
+  --hl-addition:     #16a34a;
   --radius:          8px;
   --radius-xl:       24px;
   color-scheme: light;
@@ -58,6 +70,16 @@
   --code-border:     #3a3a3a;
   --code-text:       #ececec;
   --code-muted:      #a0a0a0;
+  --hl-keyword:      #c678dd;
+  --hl-string:       #98c379;
+  --hl-number:       #d19a66;
+  --hl-comment:      #7f848e;
+  --hl-function:     #61afef;
+  --hl-type:         #e5c07b;
+  --hl-variable:     #e06c75;
+  --hl-literal:      #56b6c2;
+  --hl-deletion:     #d05656;
+  --hl-addition:     #4caf50;
   --radius:          10px;
   --radius-xl:       22px;
   color-scheme: dark;
@@ -106,9 +128,11 @@ a { color: var(--link); }
 /* 工作目录下拉:住在历史浮层的搜索行里,长目录名截断,给搜索框留出空间 */
 #hdr-workspace {
   flex-shrink: 0;
-  /* 目录名长短不一:不再用 7rem 硬截断,按搜索行六成自适应,让 label 尽量
-     完整展开,搜索框拿剩余空间;超长目录名仍由 label 省略兜底。 */
-  max-width: min(60%, 16rem);
+  /* 目录名长短不一:不再用 7rem 硬截断,按搜索行自适应,让 label 尽量
+     完整展开,搜索框拿剩余空间;超长目录名仍由 label 省略兜底。
+     上限从 60% 收到 45%:这一行现在多了一颗排序钮,60% 会把搜索框挤到
+     70px 上下(实测),连一个词都显示不全。 */
+  max-width: min(45%, 16rem);
   font-size: 13px;
   gap: 3px;
   anchor-name: --workspace-trigger;
@@ -155,6 +179,34 @@ a { color: var(--link); }
     position-anchor: --workspace-trigger;
   }
 }
+/* 排序下拉。与 #workspace-menu 同一套路数:先给一组硬编码回退位,
+   支持锚点定位的浏览器再吸附到触发钮下方。它靠搜索行右端,所以
+   回退位从右边量(right),否则窄侧栏里会溢出到视口外。 */
+#history-order-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  top: 78px;
+  right: 18px;
+  left: auto;
+  min-inline-size: 7rem;
+  inline-size: max-content;
+  max-inline-size: 12rem;
+}
+@supports (position-area: block-end) {
+  #history-order-btn { anchor-name: --history-order-trigger; }
+  #history-order-menu {
+    position-anchor: --history-order-trigger;
+    /* span-inline-start:菜单向左展开,右缘与触发钮对齐 —— 触发钮本身
+       已经贴在搜索行最右侧,向右展开会顶出浮层。 */
+    position-area: block-end span-inline-start;
+    position-try-fallbacks: flip-block, flip-inline;
+    top: auto;
+    right: auto;
+    margin-block-start: 4px;
+  }
+}
+
 /* 目录名不换行;路径提示吃掉剩余宽度并省略。长路径的尾部信息量更大,
    所以用 rtl 把省略号放到开头(内容仍按 ltr 正常显示)。 */
 #workspace-menu .menu-item { align-items: center; }
@@ -261,7 +313,10 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
 #history-popover {
   display: none;
   position: absolute;
-  top: calc(100% + 6px);
+  /* 紧贴 header 底边:100% 就是 header 的下沿(#header 是 position:relative
+     的定位父级)。之前多加的 6px 会在两者之间留一条缝,浮层看起来像浮在
+     半空,而不是从标题栏里拉下来的。 */
+  top: 100%;
   left: 10px;
   right: 10px;
   max-height: 60vh;
@@ -269,14 +324,40 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
   background: var(--bg-overlay);
   backdrop-filter: blur(8px);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  /* 顶部两角拉直:浮层现在与 header 底边严丝合缝,留着圆角会在贴合处
+     露出两个小豁口,把下面的内容透出来。 */
+  border-radius: 0 0 12px 12px;
+  /* 上边框省掉:header 自己已经有一条 border-bottom,两条叠在一起是 2px。 */
+  border-top: none;
   box-shadow: var(--shadow-pop);
   z-index: 30;
   /* 顶部不留内边距:sticky 搜索行自带上留白。留了的话滚动内容会在行的
      上方多出一条同高的缝,条目正好从那儿穿过去。 */
   padding: 0 6px 6px;
+  /* 系统默认那条 17px 的经典滚动条紧贴右边缘,会一路盖到右下角的
+     12px 圆角上("穿模")—— 圆角裁的是 border box,而滚动条画在
+     padding box 里,不受 border-radius 约束。
+     换成细滚动条并自定义配色,再配合下面的 ::-webkit-scrollbar 让滑块
+     用 background-clip 留出内缩边距,滑块就退到圆角弧线以内了。 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 #history-popover.open { display: block; }
+/* WebKit/Blink:轨道透明,滑块靠 border + background-clip 造出内缩效果 ——
+   直接给 margin 会让滑块与轨道错位,而透明 border 是唯一能让滑块本身
+   变窄、同时保持点击热区的做法。底部再多留 12px,正好避开右下圆角。 */
+#history-popover::-webkit-scrollbar { width: 10px; }
+#history-popover::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block-end: 12px;
+}
+#history-popover::-webkit-scrollbar-thumb {
+  background: var(--border);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+#history-popover::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
 /* 搜索行钉在浮层顶部:列表滚动时它保持可见。
    top 必须是 0 而不是 -6px —— 负值会在行的上方留出一条 6px 的窗口,
    滚动中的条目正好从那里穿过去(实测能看到半截标题)。
@@ -348,14 +429,44 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 /* 悬浮时分叉/重命名按钮会盖住这一小块区域,先把时间/状态点隐去避免文字重叠。
    键盘高亮行要走同一套 —— 否则方向键选中时按钮浮出来会和时间戳叠在一起。 */
 .history-item:hover .h-when-row,
-.history-item.selected .h-when-row,
-.history-item:hover .h-dot,
-.history-item.selected .h-dot { visibility: hidden; }
-.history-item .h-dot {
+.history-item.selected .h-when-row { visibility: hidden; }
+/* 行首状态槽位。宽度与 macOS 的 statusSlotWidth 同为 12px,并且**无论是否点灯
+   都占满**——否则标题会随会话状态变化左右跳动。行首不需要像旧的 .h-dot 那样在
+   hover 时隐藏:.h-actions 是绝对定位在行的右端的,盖不到这里。 */
+.history-item .h-state {
   flex-shrink: 0;
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--ok); animation: pulse 1.2s infinite;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  position: relative;
 }
+/* 双层观感照搬 macOS 的 WebStateDot:10% 透明外圈 + 实心内点,
+   让小圆点在浅色和深色主题下都有足够的存在感。 */
+.history-item .h-state:not(.h-state-idle)::after {
+  content: "";
+  position: absolute; inset: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* 正在执行:脉冲蓝点。用 --link 而不是 --accent —— 后者在两个主题里分别是
+   近黑/近白的单色文字色,点出来看不出"在忙"。--link 是两个主题各自调过的蓝,
+   正对应 macOS WebStateDot 的 systemBlue。与 .subagent-dot.running 共用 pulse。 */
+.history-item .h-state-ongoing {
+  color: var(--link);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  animation: pulse 1.2s infinite;
+}
+/* 执行完未读:绿点,不动画 —— 它报的是一个已经结束的事实,不是进行中的活动。 */
+.history-item .h-state-done {
+  color: var(--ok);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+/* 失败未读:红点。 */
+.history-item .h-state-error {
+  color: var(--danger);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+/* 空闲行:只占位,不画任何东西。 */
+.history-item .h-state-idle { background: none; }
 .history-item .h-actions {
   position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
   display: none; gap: 2px;
