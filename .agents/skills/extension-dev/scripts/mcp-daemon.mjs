@@ -80,8 +80,8 @@ export function startDaemon(options = {}) {
       socket.end();
     }
     if (bound) for (const file of [paths.socket, paths.pid]) fs.rmSync(file, { force: true });
-    try { fs.closeSync(logFd); } catch { /* 已关闭 */ }
     log(`daemon stopped: ${reason || "requested"}`);
+    try { fs.closeSync(logFd); } catch { /* 已关闭 */ }
     resolveStopped();
     if (options.exitProcess) process.exit(0);
   }
@@ -123,6 +123,7 @@ export function startDaemon(options = {}) {
       child = null;
       starting = false;
       ready = false;
+      if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null; }
       failPending("chrome-devtools-mcp exited before responding");
       if (!stopped) log("child exited; will restart on next call");
     });
