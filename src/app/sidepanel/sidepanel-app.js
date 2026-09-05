@@ -269,6 +269,9 @@ export function createSidepanelApp(root, deps) {
       elements.send.title = t("send");
       elements.send.disabled = !connected || !hasInput;
     }
+    // FileReader 对大图可能需要明显时间。此时 pending 只包含已读完的附件；允许
+    // 发送会把文字先发出，再由成功路径 clear() 清掉仍在读的图片占位。
+    if (deps.attachments.reading) elements.send.disabled = true;
   }
 
   // 忙时普通 Enter 的投递偏好。宿主设置里可改;这里缓存一份供发送路径同步取用,
@@ -303,7 +306,7 @@ export function createSidepanelApp(root, deps) {
     const attachments = deps.attachments.pending;
     const pickedElements = picker.picked;
     // 只选了元素、一个字没打也算有内容:元素本身就是这一轮的指代对象。
-    if (!state.sessionId || sending) return;
+    if (!state.sessionId || sending || deps.attachments.reading) return;
     // 插队手势不该被"停止"按钮态吃掉:agent 正跑时发送键显示为停止,
     // 但 ⌥⌘↩ 的语义是插队发送,不是中断。
     // 这一条必须排在"没有内容就返回"之前:停止态恰恰是输入框为空时才出现的

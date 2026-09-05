@@ -84,6 +84,9 @@ export function createAttachmentTray() {
     // 只暴露读完的附件:占位项的 part 还是 null,漏出去会被拼进消息体发给宿主。
     // 张数/字节校验读的是内部的 pending(含占位),所以上限依然按占位算。
     get pending() { return pending.filter((item) => item.part); },
+    // 读取期间不能发送：否则文字会先发出去，随后 clear() 消费占位，用户选中的
+    // 图片被静默丢弃。单独暴露状态而不是把空 part 泄漏给消息构造层。
+    get reading() { return pending.some((item) => !item.part); },
     get limits() { return limits; },
     setLimits(next) { limits = next ?? null; },
     onChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
@@ -101,12 +104,14 @@ export function createAttachmentTray() {
       // 校验,张数与总字节上限双双被突破,直到发送时才被宿主拒绝。
       const slot = { part: null, previewUrl: null, bytes: file.size };
       pending.push(slot);
+      for (const listener of listeners) listener(this.pending);
       let part;
       try {
         part = await fileToContentPart(file);
       } catch (error) {
         const at = pending.indexOf(slot);
         if (at !== -1) pending.splice(at, 1);
+        for (const listener of listeners) listener(this.pending);
         throw error;
       }
       // clear() 可能在读取期间消费了整条草稿。已撤销的占位不能在异步读取

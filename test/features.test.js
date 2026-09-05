@@ -156,6 +156,29 @@ describe("attachments", () => {
     createObjectURL.mockRestore();
     vi.unstubAllGlobals();
   });
+
+  it("异步读取期间暴露 reading 状态并通知 UI", async () => {
+    vi.stubGlobal("FileReader", undefined);
+    const tray = createAttachmentTray();
+    const states = [];
+    tray.onChange(() => states.push({ reading: tray.reading, count: tray.pending.length }));
+    let finishRead;
+    const file = new File([new Uint8Array([0])], "slow.png", { type: "image/png" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: () => new Promise((resolve) => { finishRead = resolve; })
+    });
+
+    const adding = tray.addFile(file);
+    expect(tray.reading).toBe(true);
+    expect(states).toEqual([{ reading: true, count: 0 }]);
+    finishRead(new Uint8Array([1]).buffer);
+    await adding;
+
+    expect(tray.reading).toBe(false);
+    expect(states.at(-1)).toEqual({ reading: false, count: 1 });
+    tray.clear();
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("model-service", () => {
