@@ -704,8 +704,16 @@ export function createSidepanelApp(root, deps) {
       : workspace?.path
         ? { cwd: workspace.path }
         : {};
-    const sessionId = await deps.sessions.create(input);
-    await openSession(sessionId, { fresh: true, _retried });
+    try {
+      const sessionId = await deps.sessions.create(input);
+      await openSession(sessionId, { fresh: true, _retried });
+      return sessionId;
+    } catch (error) {
+      // 该函数直接作为 click handler；错误若继续冒泡只会变成控制台里的
+      // unhandled rejection，用户看起来像是按钮完全没反应。
+      showToast(format(error));
+      return null;
+    }
   }
 
   function isSessionUnopenable(error) {

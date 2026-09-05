@@ -111,6 +111,19 @@ describe("新建会话", () => {
     expect(app.state.sessionId).toBe("new-session-1");
     expect(d.attachments.clear).toHaveBeenCalledTimes(1);
   });
+
+  it("创建失败时显示错误且不产生未处理拒绝", async () => {
+    const d = deps();
+    d.sessions.create.mockRejectedValueOnce(new Error("backend offline"));
+    const app = createSidepanelApp(document, d);
+    app.state.sessionId = "old-session";
+
+    await expect(app.newSession()).resolves.toBeNull();
+
+    expect(app.state.sessionId).toBe("old-session");
+    expect(d.attachments.clear).not.toHaveBeenCalled();
+    expect(document.querySelector("#toast").textContent).toContain("backend offline");
+  });
 });
 
 describe("session.create 的归属参数互斥", () => {
