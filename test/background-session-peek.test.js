@@ -329,7 +329,27 @@ describe("session/list 刷新竞态", () => {
     } });
     resolveList({ items: [{ sessionId: "stale", blank: false, updatedAt: 1 }] });
     await refresh;
-    expect(service.listStore.get().map((item) => item.sessionId)).toEqual(["live"]);
+    // 快照里原本已有的其它会话也不能整批丢掉；只让实时变更覆盖同 id 行。
+    expect(service.listStore.get().map((item) => item.sessionId)).toEqual(["live", "stale"]);
+  });
+
+  it("等待 HTTP 快照期间到达的实时更新覆盖同 id 的旧快照", async () => {
+    let resolveList;
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method) => method === "session/list"
+      ? new Promise((resolve) => { resolveList = resolve; })
+      : Promise.resolve({}));
+    const service = createSessionService(connection);
+    service.listStore.replaceAll([{ sessionId: "a", blank: false, running: false, updatedAt: 1 }]);
+
+    const refresh = service.refreshList();
+    service.handleHostFrame({ payload: { type: "host/session-status", sessionId: "a", running: true } });
+    resolveList({ items: [{ sessionId: "a", blank: false, running: false, updatedAt: 2 }] });
+    await refresh;
+
+    expect(service.listStore.get()).toEqual([
+      expect.objectContaining({ sessionId: "a", running: true })
+    ]);
   });
 
   it("两个并发刷新只允许后发请求落地", async () => {

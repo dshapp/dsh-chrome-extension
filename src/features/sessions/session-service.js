@@ -187,18 +187,38 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     async refreshList() {
       const token = ++listRefreshToken;
       const rosterRevision = listStore.revision;
+      // 保留请求发出时的对象引用。listStore 的单行更新是 immutable 的，因此回包
+      // 时可精确识别等待期间新增/变化/删除了哪些 id，而不必因任意一条实时帧就
+      // 丢弃整份基线快照。
+      const before = new Map(listStore.get().map((item) => [item.sessionId, item]));
       const value = await connection.call(RPC.sessionList, { _request: {} });
-      // 后发 refresh 或等待期间落地的实时 roster 更新都比这份 HTTP 快照新。
-      // 直接 replaceAll 会让刚创建/删除/变更状态的会话倒退，等下次刷新才恢复。
-      if (token !== listRefreshToken || rosterRevision !== listStore.revision) return listStore.get();
+      // 后发 refresh 的结果更权威；旧请求绝不能覆盖它。
+      if (token !== listRefreshToken) return listStore.get();
       // 与本文件其余各处解包一致地兜底。裸取的话,一个不带 items 的回包会抛
       // TypeError,而 resync() 的第一行就是它 —— 断线重连的收敛会整个失败,
       // 当前会话的 loadHistory 也跟着不执行。
-      listStore.replaceAll((value?.items ?? []).filter(
+      let items = (value?.items ?? []).filter(
         (item) => !item.blank
           && !archivedSessionIds.has(item.sessionId)
           && !removedSessionIds.has(item.sessionId)
-      ));
+      );
+      if (rosterRevision !== listStore.revision) {
+        const current = listStore.get();
+        const currentById = new Map(current.map((item) => [item.sessionId, item]));
+        // 请求期间从本地名单消失的 id 不能被旧 HTTP 回包复活。
+        const removedDuringRequest = new Set(
+          [...before.keys()].filter((sessionId) => !currentById.has(sessionId))
+        );
+        const merged = new Map(items
+          .filter((item) => !removedDuringRequest.has(item.sessionId))
+          .map((item) => [item.sessionId, item]));
+        // 新增或对象引用变化的行来自实时通道，比请求发出时的基线更新。
+        for (const item of current) {
+          if (before.get(item.sessionId) !== item) merged.set(item.sessionId, item);
+        }
+        items = [...merged.values()];
+      }
+      listStore.replaceAll(items);
       return listStore.get();
     },
 
