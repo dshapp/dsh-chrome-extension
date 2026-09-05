@@ -40,6 +40,7 @@ export function createComposerDock({ elements, deps, state, showToast, format })
   // 并在投影确认退出前保持可见但禁用(乐观切换会让 chip 闪烁)。
   let planLeaving = false;
   let modelLoadGeneration = 0;
+  let modelSelectionGeneration = 0;
   let presetLoadGeneration = 0;
 
   function renderPlanChip(planMode) {
@@ -219,6 +220,9 @@ export function createComposerDock({ elements, deps, state, showToast, format })
           const entry = all.find((m) => m.id === id);
           if (!entry || !state.sessionId) return;
           const targetSessionId = state.sessionId;
+          const selectionGeneration = entry.effort
+            ? modelSelectionGeneration
+            : ++modelSelectionGeneration;
           elements.modelMenu.hidePopover();
           try {
             if (entry.effort) {
@@ -231,16 +235,25 @@ export function createComposerDock({ elements, deps, state, showToast, format })
                 reasoningEffort: entry.effort
               } });
             } else {
+              // 先更新目标模型。用户可能不等网络回包就继续点推理档；若仍保留旧
+              // currentModel，第二个请求会把推理档错误地应用到旧模型。
+              state.currentModel = { provider: entry.provider, model: entry.model };
               await deps.connection.call(RPC.sessionSelectModel, { request: {
                 sessionId: targetSessionId, provider: entry.provider, model: entry.model
               } });
-              if (state.sessionId !== targetSessionId) return;
+              if (state.sessionId !== targetSessionId
+                || selectionGeneration !== modelSelectionGeneration) return;
               // 同步当前模型:推理档选择依赖 state.currentModel 来定位要修的模型,
               // 不更新的话,切模型后立即选推理档会作用到上一份快照里的旧模型。
-              state.currentModel = { provider: entry.provider, model: entry.model };
               elements.modelLabel.textContent = entry.label;
             }
           } catch (error) {
+            // 当前这次模型选择失败时，以宿主目录重新收敛本地乐观状态；若后面
+            // 已有更新的选择，则由更新选择负责，不能让旧失败把它冲回去。
+            if (!entry.effort && state.sessionId === targetSessionId
+              && selectionGeneration === modelSelectionGeneration) {
+              void refreshModelMenu();
+            }
             showToast(format(error));
           }
         }

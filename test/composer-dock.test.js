@@ -113,12 +113,37 @@ describe("composer-dock 模型与推理档", () => {
       .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await flush();
     state.sessionId = "s2";
+    state.currentModel = { provider: "p1", model: "m1" };
     elements.modelLabel.textContent = "Session 2 Model";
     resolveSelection({});
     await flush();
 
     expect(elements.modelLabel.textContent).toBe("Session 2 Model");
     expect(state.currentModel).toEqual({ provider: "p1", model: "m1" });
+  });
+
+  it("模型请求未返回时立刻选推理档会作用到目标模型", async () => {
+    const { dock, call, elements } = setup(FIXTURE);
+    let resolveModel;
+    call.mockImplementation((method, payload) => {
+      if (method === "session/selectModel" && !payload.request.reasoningEffort) {
+        return new Promise((resolve) => { resolveModel = resolve; });
+      }
+      return Promise.resolve({});
+    });
+    await dock.refreshModelMenu();
+
+    elements.modelMenu.querySelector('[data-item-id="p1::m2"]')
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    elements.modelMenu.querySelector('[data-item-id="effort::high"]')
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    const effortCall = call.mock.calls.find(([method, payload]) =>
+      method === "session/selectModel" && payload?.request?.reasoningEffort === "high");
+    expect(effortCall[1].request).toMatchObject({ provider: "p1", model: "m2" });
+    resolveModel({});
+    await flush();
   });
 });
 
