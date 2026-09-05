@@ -6,7 +6,7 @@
 import { renderAttachmentTray, mountDropZone } from "../../features/attachments/index.js";
 import { t } from "../../shared/i18n.js";
 
-export function mountAttachmentControls({ elements, deps, showToast, onChange, root = document.body }) {
+export function mountAttachmentControls({ elements, deps, showToast, formatError = (error) => error?.message ?? String(error), onChange, root = document.body }) {
   function render() {
     renderAttachmentTray(elements.previewStrip, deps.attachments.pending, {
       onRemove: (index) => deps.attachments.remove(index)
@@ -19,7 +19,7 @@ export function mountAttachmentControls({ elements, deps, showToast, onChange, r
       try {
         await deps.attachments.addFile(file);
       } catch (error) {
-        showToast(error.message);
+        showToast(formatError(error));
       }
     }
   }

@@ -538,7 +538,7 @@ export function createSidepanelApp(root, deps) {
 
   // 必须排在 mountTriggerMenu 之前:浮层的「添加图片」行要拿它的 pickImage。
   const attachmentControls = mountAttachmentControls({
-    elements, deps, showToast, onChange: () => updateSendState(),
+    elements, deps, showToast, formatError: format, onChange: () => updateSendState(),
     // 拖放的响应区是整个侧栏,不只是 composer。
     root: root.body ?? root
   });
