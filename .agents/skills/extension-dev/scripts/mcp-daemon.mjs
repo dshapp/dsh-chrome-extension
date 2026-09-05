@@ -11,7 +11,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const DEFAULT_IDLE_MS = 30 * 60 * 1000;
+// Chrome re-prompts "Allow remote debugging?" on every new browser-level CDP
+// connection, so the daemon must outlive idle gaps: expiring it would make the
+// next tool call reconnect and prompt again. 0 disables the idle timer entirely;
+// set CHROME_DEVTOOLS_MCP_IDLE_MS to a positive value to opt back in.
+const DEFAULT_IDLE_MS = 0;
 const HANDSHAKE_TIMEOUT_MS = 60_000;
 const FIRST_CALL_ID = 100;
 
