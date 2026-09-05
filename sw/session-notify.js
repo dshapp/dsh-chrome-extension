@@ -9,7 +9,10 @@
 
 import { createSettings } from "../src/platform/storage/settings.js";
 import { createApiClient } from "../src/platform/dsh/api-client.js";
-import { createBackgroundNotifier } from "../src/features/notifications/background-notifier.js";
+import {
+  createBackgroundNotifier,
+  pollSessionStatuses,
+} from "../src/features/notifications/background-notifier.js";
 import {
   sessionIdFromNotificationId,
   createPendingSessionOpen,
@@ -29,10 +32,7 @@ async function pollSessions() {
   await notifier.loadRunning();
   try {
     const api = createApiClient({ baseUrl: await settings.getBackendUrl() });
-    const value = await api.call("session.list", {});
-    for (const item of value.items ?? []) {
-      notifier.observeStatus(item.sessionId, item.running);
-    }
+    await pollSessionStatuses(api, notifier);
   } catch {
     // Backend unreachable: stay quiet and retry on the next tick.
   }

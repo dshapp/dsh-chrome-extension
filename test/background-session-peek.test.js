@@ -7,7 +7,10 @@ import { JSDOM } from "jsdom";
 import { createSessionService } from "../src/features/sessions/session-service.js";
 import { createSessionListStore } from "../src/features/sessions/session-list-store.js";
 import { SessionAwaitingKind } from "../src/features/sessions/session-row-trailing.js";
-import { createBackgroundNotifier } from "../src/features/notifications/background-notifier.js";
+import {
+  createBackgroundNotifier,
+  pollSessionStatuses,
+} from "../src/features/notifications/background-notifier.js";
 import { mountHistoryDrawer } from "../src/app/sidepanel/sidepanel-overlays.js";
 
 const CURRENT = "session-current";
@@ -510,6 +513,26 @@ describe("后台失败通知文案与开关", () => {
 
     const bare = createBackgroundNotifier({ notifications: undefined, settings: {} });
     expect(() => bare.reportFailure("s1", "x")).not.toThrow();
+  });
+});
+
+describe("后台通知轮询协议", () => {
+  it("使用 0.1.2 的 session/list 端点和 _request 参数", async () => {
+    const api = { call: vi.fn().mockResolvedValue({
+      items: [
+        { sessionId: "running", running: true },
+        { sessionId: "idle", running: false }
+      ]
+    }) };
+    const notifier = { observeStatus: vi.fn() };
+
+    await pollSessionStatuses(api, notifier);
+
+    expect(api.call).toHaveBeenCalledWith("session/list", { _request: {} });
+    expect(notifier.observeStatus.mock.calls).toEqual([
+      ["running", true],
+      ["idle", false]
+    ]);
   });
 });
 

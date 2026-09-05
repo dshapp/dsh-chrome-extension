@@ -4,8 +4,18 @@
 // MV3 会回收空闲 worker,运行集合若只驻内存,短任务在两次轮询之间完成就会
 // 漏报。所以把 running 集合持久化到 storage.local,worker 重启后先恢复再轮询。
 import { notificationIdForSession } from "./notification-click.js";
+import { RPC } from "../../platform/dsh/rpc-methods.js";
 
 const RUNNING_KEY = "dsh_running_sessions";
+
+/// 拉取宿主的会话状态并喂给通知边沿检测器。独立成纯函数，避免 service worker
+/// 的静默 catch 把端点拼写或参数信封回归永久藏起来。
+export async function pollSessionStatuses(api, notifier) {
+  const value = await api.call(RPC.sessionList, { _request: {} });
+  for (const item of value?.items ?? []) {
+    notifier.observeStatus(item.sessionId, item.running);
+  }
+}
 
 export function createBackgroundNotifier({ notifications, settings, storage }) {
   const area = storage ?? (typeof chrome !== "undefined" ? chrome.storage?.local : null);
