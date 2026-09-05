@@ -582,7 +582,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       switch (payload.type) {
         case HOST.sessionStatus:
           listStore.setStatus(payload.sessionId, payload.running);
-          if (isCurrent(payload.sessionId)) { store.setRunning(payload.running); notifyRuntime(); }
+          // 当前时间线的运行态只由 durable turn/start、turn/end 驱动。
+          // `$events` 的 status=false 可能先于 follow 流里的末尾事件到达；若在这里
+          // 提前清零，UI 会短暂解锁发送按钮，消费者也会读到尚未结算的 step/tail。
+          // 列表行仍可消费这个轻量状态，后台会话无需物化完整事件流。
           break;
         case HOST.sessionAdded: {
           if (removedSessionIds.has(payload.sessionId) || archivedSessionIds.has(payload.sessionId)) break;

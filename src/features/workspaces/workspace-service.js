@@ -60,7 +60,10 @@ export function createWorkspaceService(connection, { onArchivedChange } = {}) {
     // 打开系统目录选择器;取消返回 null。
     async pickDirectory() {
       const value = await connection.call("directoryPicker/pick", {}, 120000);
-      return value.path ?? null;
+      // DSH 0.1.2 直接返回 string | null；旧版曾返回 { path }。
+      // 只按对象读取会把一次成功选择静默折算成“取消”。
+      if (typeof value === "string") return value;
+      return value?.path ?? null;
     },
     async createForPath(path) {
       const value = await connection.call(RPC.workspaceCreate, { request: { path } });

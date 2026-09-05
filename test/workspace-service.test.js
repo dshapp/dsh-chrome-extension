@@ -52,6 +52,19 @@ describe("workspace/follow 归档集合", () => {
   });
 });
 
+describe("目录选择器返回值", () => {
+  it("接受 DSH 0.1.2 的 string | null 协议", async () => {
+    const { service, connection } = harness();
+    connection.call.mockResolvedValueOnce("/tmp/picked-workspace");
+
+    await expect(service.pickDirectory()).resolves.toBe("/tmp/picked-workspace");
+    expect(connection.call).toHaveBeenCalledWith("directoryPicker/pick", {}, 120000);
+
+    connection.call.mockResolvedValueOnce(null);
+    await expect(service.pickDirectory()).resolves.toBeNull();
+  });
+});
+
 describe("workspace 删除 tombstone", () => {
   it("迟到的 upsert 与旧 baseline 不能复活已删除 workspace", () => {
     const { service, onFrame } = harness();

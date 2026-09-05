@@ -83,6 +83,29 @@ describe("后台会话活跃排序", () => {
   });
 });
 
+describe("当前会话运行态的事件顺序", () => {
+  it("host status=false 早于 durable turn/end 时不提前结束当前轮", async () => {
+    const service = await serviceOn(CURRENT);
+    service.listStore.replaceAll([{ sessionId: CURRENT, updatedAt: 1, running: true }]);
+    service.handleMuxFrame(eventFrame(CURRENT, {
+      type: "turn/start", seq: 1, time: 100, data: { turn: 1 }
+    }));
+    expect(service.getRuntimeSnapshot().running).toBe(true);
+
+    service.handleHostFrame({ payload: {
+      type: "host/session-status", sessionId: CURRENT, running: false
+    } });
+
+    expect(service.listStore.get()[0].running).toBe(false);
+    expect(service.getRuntimeSnapshot().running).toBe(true);
+
+    service.handleMuxFrame(eventFrame(CURRENT, {
+      type: "turn/end", seq: 2, time: 200, data: { turn: 1, reason: { kind: "completed" } }
+    }));
+    expect(service.getRuntimeSnapshot().running).toBe(false);
+  });
+});
+
 describe("$events ready 主机上下文", () => {
   it("异步到达的 host.home 会触发运行快照更新", async () => {
     const service = await serviceOn(CURRENT);
