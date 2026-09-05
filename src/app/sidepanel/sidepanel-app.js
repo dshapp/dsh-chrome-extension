@@ -717,7 +717,11 @@ export function createSidepanelApp(root, deps) {
     // 离开当前会话前存草稿。
     setDraft(state.sessionId, elements.input.value);
 
+    const previousSessionId = state.sessionId;
     state.sessionId = sessionId;
+    // 附件没有像文字草稿那样按 sessionId 持久化。切换时若继续保留，会把上一
+    // 会话选择的图片静默带到下一会话；读取中的占位也必须一并作废。
+    if (previousSessionId !== sessionId) deps.attachments.clear();
     awaitingTurnStart = false;
     chatRenderer.reset();
     // 切会话必须拆掉旧交互卡:它的 document 级键盘监听会一直活着。
@@ -788,7 +792,9 @@ export function createSidepanelApp(root, deps) {
     const token = ++openSessionToken;
     setDraft(state.sessionId, elements.input.value);
 
+    const previousSessionId = state.sessionId;
     state.sessionId = childId;
+    if (previousSessionId !== childId) deps.attachments.clear();
     awaitingTurnStart = false;
     chatRenderer.reset();
     takeoverCard?.dispose?.();

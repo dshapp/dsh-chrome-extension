@@ -100,6 +100,17 @@ describe("新建会话", () => {
     await app.newSession();
     expect(d.sessions.create).toHaveBeenCalled();
   });
+
+  it("切到新会话时清掉上一会话的附件", async () => {
+    const d = deps();
+    const app = createSidepanelApp(document, d);
+    app.state.sessionId = "old-session";
+
+    await app.newSession();
+
+    expect(app.state.sessionId).toBe("new-session-1");
+    expect(d.attachments.clear).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("session.create 的归属参数互斥", () => {
