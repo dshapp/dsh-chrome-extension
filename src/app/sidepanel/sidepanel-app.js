@@ -357,6 +357,9 @@ export function createSidepanelApp(root, deps) {
       // 回填的是原始草稿(带占位符)+ 原胶囊,不是展开后的文本,
       // 否则失败一次胶囊就退化成裸路径。
       setInputText(draft, sentOccurrences);
+      // 清空草稿时按钮已被置为 disabled；回填不会派发 input 事件，必须显式
+      // 重算，否则纯文本发送失败后只能再敲一个字符才能重试。
+      updateSendState();
     } finally {
       sending = false;
       elements.input.focus();

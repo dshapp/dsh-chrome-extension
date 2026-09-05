@@ -349,6 +349,24 @@ describe("应用接线冒烟", () => {
     expect(text).toContain("[指令]");
   });
 
+  it("纯文本发送失败后回填草稿并重新启用发送按钮", async () => {
+    mountDom();
+    const { deps } = stubDeps();
+    deps.sessions.prompt.mockRejectedValueOnce(new Error("offline"));
+    const app = createSidepanelApp(document, deps);
+    app.state.sessionId = "s1";
+    app.state.streamState = "connected";
+    const input = document.querySelector("#input");
+    const send = document.querySelector("#send");
+    input.value = "重试这条消息";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+
+    await app.sendMessage();
+
+    expect(input.value).toBe("重试这条消息");
+    expect(send.disabled).toBe(false);
+  });
+
   it("已选元素条显示数量并可清空", () => {
     mountDom();
     const { deps } = stubDeps();
