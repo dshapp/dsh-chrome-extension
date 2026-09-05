@@ -109,6 +109,9 @@ export function createAttachmentTray() {
         if (at !== -1) pending.splice(at, 1);
         throw error;
       }
+      // clear() 可能在读取期间消费了整条草稿。已撤销的占位不能在异步读取
+      // 完成后复活，更不能创建一个没有任何引用可供 revoke 的 Blob URL。
+      if (!pending.includes(slot)) return;
       slot.part = part;
       slot.previewUrl = URL.createObjectURL(file);
       for (const listener of listeners) listener(this.pending);
@@ -117,8 +120,14 @@ export function createAttachmentTray() {
       // 索引来自 DOM 的 data-index,重渲染竞态或被改写时可能是 NaN / 负数 / 越界。
       // splice 对这些值另有语义(-1 删最后一个、NaN 当 0),删掉的都不是用户点的
       // 那张,而目标那张的 blob 还留着没回收。对齐 element-picker.remove 的护栏。
-      if (!Number.isInteger(index) || index < 0 || index >= pending.length) return;
-      const [removed] = pending.splice(index, 1);
+      // UI 只渲染已读完的附件；读取中的占位仍在 pending 内，不能直接拿 UI
+      // 索引去 splice，否则乱序完成时会删除另一张仍在读取的图片。
+      const visible = pending.filter((item) => item.part);
+      if (!Number.isInteger(index) || index < 0 || index >= visible.length) return;
+      const target = visible[index];
+      const at = pending.indexOf(target);
+      if (at === -1) return;
+      const [removed] = pending.splice(at, 1);
       if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
       for (const listener of listeners) listener(this.pending);
     },

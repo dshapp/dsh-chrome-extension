@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { fileToContentPart, validateImage, createAttachmentTray, formatBytes } from "../src/features/attachments/attachments.js";
 import { flattenModelGroups, parseModelSelectValue, buildModelSelectOptions } from "../src/features/models/model-service.js";
 import { applyFenceRules, FENCE_RULE_ID, rulesForBackendUrl } from "../src/platform/dsh/fence-rules.js";
@@ -107,6 +107,54 @@ describe("attachments", () => {
     await Promise.allSettled(["a", "b", "c", "d", "e"].map((n) => tray.addFile(big(`${n}.png`))));
     const total = tray.pending.reduce((sum, p) => sum + p.bytes, 0);
     expect(total).toBeLessThanOrEqual(100);
+  });
+
+  it("读取乱序时 remove 的索引对应 UI 可见附件", async () => {
+    vi.stubGlobal("FileReader", undefined);
+    const tray = createAttachmentTray();
+    tray.setLimits({ mediaTypes: ["image/png"], maxImageBytes: 1e9, maxImagesPerMessage: 9, maxMessageImageBytes: 1e9 });
+    const reads = new Map();
+    const delayed = (name) => {
+      const file = new File([new Uint8Array([0])], name, { type: "image/png" });
+      Object.defineProperty(file, "arrayBuffer", {
+        value: () => new Promise((resolve) => reads.set(name, resolve))
+      });
+      return file;
+    };
+    const first = tray.addFile(delayed("slow.png"));
+    const second = tray.addFile(delayed("fast.png"));
+    reads.get("fast.png")(new Uint8Array([2]).buffer);
+    await second;
+
+    expect(tray.pending.map((item) => item.part.name)).toEqual(["fast.png"]);
+    tray.remove(0);
+    expect(tray.pending).toEqual([]);
+
+    reads.get("slow.png")(new Uint8Array([1]).buffer);
+    await first;
+    expect(tray.pending.map((item) => item.part.name)).toEqual(["slow.png"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("读取期间 clear 后不创建游离的预览 URL", async () => {
+    vi.stubGlobal("FileReader", undefined);
+    const createObjectURL = vi.spyOn(URL, "createObjectURL");
+    const tray = createAttachmentTray();
+    let finishRead;
+    const file = new File([new Uint8Array([0])], "late.png", { type: "image/png" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: () => new Promise((resolve) => { finishRead = resolve; })
+    });
+
+    const adding = tray.addFile(file);
+    tray.clear();
+    finishRead(new Uint8Array([1]).buffer);
+    await adding;
+
+    expect(tray.pending).toEqual([]);
+    expect(createObjectURL).not.toHaveBeenCalled();
+    createObjectURL.mockRestore();
+    vi.unstubAllGlobals();
   });
 });
 
