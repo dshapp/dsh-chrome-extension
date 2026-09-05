@@ -432,6 +432,31 @@ describe("follow 缺口修复与地址路由", () => {
     await vi.waitFor(() => expect(service.getRuntimeSnapshot().lastSeq).toBe(7));
   });
 
+  it("连续事件之后才出现缺口时，分页上界推进到缺口前一条", async () => {
+    let resolvePage;
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method) => method === "session/page"
+      ? new Promise((resolve) => { resolvePage = resolve; })
+      : Promise.resolve({}));
+    const service = createSessionService(connection);
+    await service.open(CURRENT);
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: {
+      type: "snapshot", cursor: 5,
+      records: [entry(1), entry(2), entry(3), entry(4), entry(5)]
+    } });
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: entry(6) });
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: entry(8) });
+
+    expect(connection.call).toHaveBeenCalledWith("session/page", { request: {
+      address: { kind: "session", sessionId: CURRENT }, throughSeq: 7, maxMessages: 50
+    } });
+
+    resolvePage({ records: [entry(3), entry(4), entry(5), entry(6), entry(7)] });
+    await vi.waitFor(() => expect(service.getRuntimeSnapshot().lastSeq).toBe(8));
+    expect(service.getRuntimeSnapshot().nodes.map((node) => node.messageId))
+      .toEqual(["m3", "m4", "m5", "m6", "m7", "m8"]);
+  });
+
   it("子代理缺口与 resync 都保持完整 subagent address", async () => {
     const address = { parentSessionId: "parent", childSessionId: "child", mode: "continuable" };
     const connection = fakeConnection();

@@ -96,8 +96,14 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     if (repairingGap) return;
     const sessionId = currentSessionId;
     const address = currentFollowAddress;
-    const throughSeq = historyCursors.get(sessionId);
-    if (!sessionId || !address || !Number.isInteger(throughSeq)) {
+    const snapshotCursor = historyCursors.get(sessionId);
+    const incomingSeq = entry?.event?.seq;
+    // cursor 是 follow 打开时的固定切点。流在此后可能已连续推进很久才丢帧，
+    // 此时仍用旧 cursor 分页只会重读快照，永远取不到真正缺失的事件。
+    const throughSeq = Number.isInteger(snapshotCursor) && Number.isInteger(incomingSeq)
+      ? Math.max(snapshotCursor ?? -1, incomingSeq - 1)
+      : snapshotCursor;
+    if (!sessionId || !address || !Number.isInteger(snapshotCursor) || !Number.isInteger(throughSeq)) {
       const buffered = gapRepairBuffer;
       gapRepairBuffer = [];
       for (const pending of buffered) store.applyEvent(pending.event, pending.view);
