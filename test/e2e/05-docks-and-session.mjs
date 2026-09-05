@@ -1,22 +1,22 @@
 // E2E 5:本轮补齐的功能面 —— goal 生命周期、投影驱动的停靠区、agent 预设、
 // 归档、@ 引用来源、附件限制。全部打真实后端。
 import assert from "node:assert/strict";
-import { rpc, openDownlink, waitFor, sleep } from "./harness.mjs";
+import { connection, openDownlink, waitFor, sleep } from "./harness.mjs";
 import { createSessionService } from "../../src/features/sessions/session-service.js";
 import { createGoalService } from "../../src/features/goals/goal-service.js";
 import { createReferenceService } from "../../src/features/references/reference-service.js";
 import { createCommandService } from "../../src/features/commands/command-service.js";
 import { activeGoal, contextRatio, statsText } from "../../src/features/docks/session-docks.js";
 import { validateImage } from "../../src/features/attachments/attachments.js";
-const CWD = "/Users/user/dshmac/extension/dsh-chrome";
+const CWD = process.cwd();
 const results = [];
 const check = (n,f)=>{ try{f();results.push(["PASS",n]);}catch(e){results.push(["FAIL",n,e.message]);} };
-const conn = { call: rpc, respond: async()=>({accepted:true}) };
+const conn = connection;
 const service = createSessionService(conn);
 const goals = createGoalService(conn);
 const refs = createReferenceService(conn);
 const cmds = createCommandService(conn);
-const sessionId = (await rpc("session.create",{cwd:CWD})).sessionId;
+const sessionId = await service.create({ cwd: CWD });
 const dl = openDownlink((f,s)=>{ if(s==="mux") service.handleMuxFrame(f); else service.handleHostFrame(f); });
 await dl.ready; await service.open(sessionId,{cwd:CWD});
 const snap = () => service.getRuntimeSnapshot();

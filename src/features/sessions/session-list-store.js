@@ -12,6 +12,9 @@ export const SessionOrderBy = Object.freeze({
 
 export function createSessionListStore() {
   let summaries = [];
+  // 只跟踪会话摘要本身的写入，供异步 session/list 判断等待期间是否已有
+  // 更新的实时帧落地；草稿/未读徽章变化不应让一次基线刷新无故作废。
+  let revision = 0;
   const listeners = new Set();
   // 挂起请求与草稿按会话单独记,而不是塞进 summary:
   // 这两样的权威来源是实时帧和输入框,不是 session.list 的基线快照 ——
@@ -39,6 +42,9 @@ export function createSessionListStore() {
   // sessionId → summary 索引表。侧栏行状态/标题/活跃排序是每帧事件驱动的,
   // 之前都用 summaries.find(...) 线性查找,会话一多就成了 O(n²) 热点。
   const byId = new Map();
+  // projection block 的 asOfSeq 只是整块快照切点；实时 key 会乱序到达，
+  // 因此必须逐 key 记版本，不能让 usage@20 挡掉 title@15。
+  const projectionSeqBySession = new Map();
   // 子代理名册缓存:每次写 summaries 都换新数组引用,用引用判断失效,名册变化才重建。
   let subagentCache = null;
   let subagentCacheFor = null;
@@ -100,6 +106,7 @@ export function createSessionListStore() {
     if (!existing) {
       summaries = [...summaries, summary];
       byId.set(summary.sessionId, summary);
+      revision += 1;
       return;
     }
     const merged = { ...existing, ...summary };
@@ -108,6 +115,7 @@ export function createSessionListStore() {
     next[index] = merged;
     summaries = next;
     byId.set(summary.sessionId, merged);
+    revision += 1;
   }
 
   /// 单行的状态档位。事实全部取自本 store 已经维护着的那几个集合 ——
@@ -125,6 +133,7 @@ export function createSessionListStore() {
   }
 
   return {
+    get revision() { return revision; },
     /// 注入手动顺序账本。由 app 层组合(store 不自己去碰 storage)。
     attachOrderStore(store) { orderStore = store ?? null; },
 
@@ -135,7 +144,7 @@ export function createSessionListStore() {
      * @param {string} orderBy SessionOrderBy 之一。
      * @returns {Array} 排好序的新数组。
      */
-    sortBy(visible, orderBy) {
+    sortBy(visible, orderBy, workspaceSessionIds = null) {
       const rows = [...(visible ?? [])];
       // 排序控制器还没就绪时(首帧)按默认档,而不是抛错或给出空列表。
       if (!orderBy) return rows.sort(byUpdatedDesc);
@@ -145,14 +154,36 @@ export function createSessionListStore() {
         const subagentRoots = computeRunningSubagentRoots(summaries);
         return sortByStatus(rows, (summary) => rankOf(summary, subagentRoots));
       }
+      if (orderBy === SessionOrderBy.manual && Array.isArray(workspaceSessionIds)) {
+        // 选中 workspace 后，手动序的权威是宿主 workspace.sessionIds；本地账本
+        // 只属于「全部」/临时目录。未列入权威数组的 cwd 兜底行按最近更新追加。
+        const positions = new Map(workspaceSessionIds.map((id, index) => [id, index]));
+        return rows.sort((left, right) => {
+          const a = positions.get(left.sessionId);
+          const b = positions.get(right.sessionId);
+          if (a !== undefined && b !== undefined) return a - b;
+          if (a !== undefined) return -1;
+          if (b !== undefined) return 1;
+          return byUpdatedDesc(left, right);
+        });
+      }
       if (orderBy === SessionOrderBy.manual && orderStore) return orderStore.sort(rows);
       return rows.sort(byUpdatedDesc);
     },
 
     replaceAll(items) {
       summaries = [...(items ?? [])].sort(byUpdatedDesc);
+      revision += 1;
       byId.clear();
-      for (const item of summaries) byId.set(item.sessionId, item);
+      projectionSeqBySession.clear();
+      for (const item of summaries) {
+        byId.set(item.sessionId, item);
+        const block = item.projections;
+        if (block?.values && Number.isInteger(block.asOfSeq)) {
+          projectionSeqBySession.set(item.sessionId,
+            new Map(Object.keys(block.values).map((key) => [key, block.asOfSeq])));
+        }
+      }
       // 基线快照也要过一遍边沿判定:另一个客户端在我们离线时跑完的会话,
       // 只有靠这里的 true→false 才会被发现。首次观察不产生提醒的规则
       // 保证冷启动不会把一屏 idle 会话全点亮。
@@ -245,14 +276,35 @@ export function createSessionListStore() {
       });
       notify();
     },
+    setProjection(sessionId, key, value, seq) {
+      const target = byId.get(sessionId);
+      if (!target || !key) return;
+      const versions = projectionSeqBySession.get(sessionId) ?? new Map();
+      const nextSeq = Number.isInteger(seq) ? seq : (target.projections?.asOfSeq ?? 0);
+      if (nextSeq <= (versions.get(key) ?? -1)) return;
+      versions.set(key, nextSeq);
+      projectionSeqBySession.set(sessionId, versions);
+      upsert({
+        ...target,
+        projections: {
+          ...target.projections,
+          asOfSeq: Math.max(target.projections?.asOfSeq ?? 0, nextSeq),
+          values: { ...target.projections?.values, [key]: value }
+        }
+      });
+      notify();
+    },
     remove(sessionId) {
+      const existed = byId.has(sessionId);
       summaries = summaries.filter((item) => item.sessionId !== sessionId);
       byId.delete(sessionId);
+      projectionSeqBySession.delete(sessionId);
       awaitingKinds.delete(sessionId);
       draftSessionIds.delete(sessionId);
       completedSessionIds.delete(sessionId);
       erroredSessionIds.delete(sessionId);
       previousRunning.delete(sessionId);
+      if (existed) revision += 1;
       notify();
     },
     /// 记录/清除某个会话的挂起请求。kind 传 null 表示已解决。

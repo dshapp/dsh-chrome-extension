@@ -146,7 +146,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       : scoped;
     // 排序放在过滤之后:手动序与状态序都只对**当前可见的这批**行成立
     //(见 session-order-store 的"交集安全")。
-    return listStore?.sortBy ? listStore.sortBy(matched, ordering?.orderBy()) : matched;
+    return listStore?.sortBy
+      ? listStore.sortBy(matched, ordering?.orderBy(), sessionIds)
+      : matched;
   }
 
   /// 列表正在刷新:显示加载态。切换工作目录 / 首次打开浮层时,旧列表不再适用,
@@ -359,7 +361,14 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       } else if (actionButton.dataset.action === "archive") {
         // 归档不是删除:宿主保留日志,只是从活动列表移出。
         await deps.sessions.archive(sessionId);
-        refresh();
+        if (sessionId === activeSessionId) {
+          // 当前转录已经不属于活动列表；继续停在这里会留下一个标题仍选中、
+          // 但历史里找不到的幽灵会话。与 Mac 一致，归档当前项后进入新会话。
+          hide();
+          await newSession();
+        } else {
+          refresh();
+        }
       }
     } catch (error) {
       alert(deps.formatErrorDetails(error));

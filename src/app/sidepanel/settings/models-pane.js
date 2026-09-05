@@ -24,6 +24,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
   let loading = true;
   let addSearch = "";
   let savedProviderName = null;
+  let loadGeneration = 0;
 
   function rowFor(provider) {
     return state?.rows.find((entry) => entry.entry.provider === provider) ?? null;
@@ -219,18 +220,22 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
   }
 
   async function refresh() {
+    const generation = ++loadGeneration;
     loading = true; loadError = null; render();
     try {
       const [providerState, catalog] = await Promise.all([
         settingsService.loadProviderRows(),
         deps.models.refresh().then(() => null).catch(() => null)
       ]);
+      if (generation !== loadGeneration) return;
       state = { ...providerState, failures: providerState.failures ?? [] };
       void catalog;
       loadError = null;
     } catch (error) {
+      if (generation !== loadGeneration) return;
       loadError = deps.formatErrorDetails(error);
     } finally {
+      if (generation !== loadGeneration) return;
       loading = false;
       render();
     }

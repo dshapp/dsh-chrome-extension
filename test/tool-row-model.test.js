@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { toolRowModel, classifyTool, ToolVariant, planSummary } from "../src/features/chat/tool-row-model.js";
+import { toolRowModel, classifyTool, ToolVariant, planSummary, hasResultText } from "../src/features/chat/tool-row-model.js";
 import { toolCallNode, toolResult, ToolRowState } from "../src/features/sessions/chat-nodes.js";
 import { setLang } from "../src/shared/i18n.js";
 
@@ -160,5 +160,18 @@ describe("output", () => {
   it("空内容的失败回退到结构化错误行", () => {
     const m = toolRowModel(settle(call("bash", "{}"), { isError: true, content: [], error: { name: "E", code: "c1" } }));
     expect(m.output).toBe("E: c1");
+  });
+
+  it("折叠态只探测是否有输出，不会读取文本内容", () => {
+    let reads = 0;
+    const block = { type: "text" };
+    Object.defineProperty(block, "text", { get() { reads += 1; return "large output"; } });
+    const node = settle(call("bash", "{}"), { isError: false, content: [block] });
+    const model = toolRowModel(node);
+    expect(reads).toBe(0);
+    expect(hasResultText(node.result)).toBe(true);
+    expect(reads).toBe(1);
+    expect(model.output).toBe("large output");
+    expect(reads).toBe(2);
   });
 });

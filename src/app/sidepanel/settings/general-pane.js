@@ -39,6 +39,7 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
   let snapshot = { namespaces: new Map(), writable: false, hasDocument: false };
   let presets = [];
   let busy = false;
+  let loadGeneration = 0;
 
   /// 写一个 ui-* 命名空间的单个字段,并就地刷新。宿主是权威:写完重新 describe,
   /// 而不是乐观改本地 —— 只读部署会静默拒绝,乐观 UI 会显示一个假的成功。
@@ -225,12 +226,15 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
   }
 
   async function refresh() {
+    const generation = ++loadGeneration;
     const notificationsEnabled = await deps.settings.getNotificationsEnabled();
+    if (generation !== loadGeneration) return;
     try {
       const [describe, presetList] = await Promise.all([
         settingsService.describe(),
         settingsService.presetList().catch(() => null)
       ]);
+      if (generation !== loadGeneration) return;
       snapshot = {
         namespaces: new Map((describe?.namespaces ?? []).map((namespace) => [namespace.ns, namespace])),
         writable: describe?.writable === true,
@@ -238,12 +242,14 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
       };
       presets = presetList?.presets ?? [];
     } catch (error) {
+      if (generation !== loadGeneration) return;
       // 宿主读不到时仍要让扩展本地项(通知/语言)可用,所以只把宿主段落降级为提示。
       snapshot = { namespaces: new Map(), writable: false, hasDocument: false };
       presets = [];
       host.innerHTML = notice(deps.formatErrorDetails(error));
       return;
     }
+    if (generation !== loadGeneration) return;
     await render(notificationsEnabled);
   }
 

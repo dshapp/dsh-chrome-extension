@@ -127,19 +127,23 @@ export function mountHistoryOrdering({
       const full = fullRows().map((item) => item.sessionId);
       const move = resolveReorder({ movedId, overId, after, visible, full });
       if (!move) return;
-      // 先落本地账本:它是手动序的权威,而且要立刻看见效果。
-      orderStore?.reorder?.(move.movedId, move.beforeId, full);
       // 拖过之后自然进入手动档 —— 否则用户拖完看不到任何变化,会以为没生效。
       if (orderBy !== SessionOrderBy.manual) {
         orderBy = SessionOrderBy.manual;
         void persist(orderBy);
         paint();
       }
-      rerender();
-      // 再把顺序告诉宿主(选中了具体工作目录时才谈得上归属)。
+      // 具体 workspace 的手动序属于宿主 sessionIds；只有「全部」/临时目录
+      // 才写浏览器本地账本。两份账不能同时写，否则宿主失败回滚后 UI 仍会被
+      // 本地旧顺序重新排回去。
       const ws = workspaceId?.();
       if (ws && workspaces?.moveSession) {
-        void workspaces.moveSession(ws, move.movedId, move.beforeId);
+        const settled = workspaces.moveSession(ws, move.movedId, move.beforeId);
+        rerender(); // service 在第一个 await 前已发布乐观 sessionIds。
+        void Promise.resolve(settled).then(() => rerender());
+      } else {
+        orderStore?.reorder?.(move.movedId, move.beforeId, full);
+        rerender();
       }
     }
   });

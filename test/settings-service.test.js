@@ -77,10 +77,11 @@ describe("API 密钥校验", () => {
 
 describe("容量拼写", () => {
   it("K / M 后缀折算成 token 数", () => {
-    expect(parseCapacitySpelling("128K")).toBe(131072);
-    expect(parseCapacitySpelling("1M")).toBe(1048576);
+    expect(parseCapacitySpelling("128K")).toBe(128000);
+    expect(parseCapacitySpelling("1M")).toBe(1000000);
     expect(parseCapacitySpelling("8192")).toBe(8192);
-    expect(parseCapacitySpelling(" 64k ")).toBe(65536);
+    expect(parseCapacitySpelling(" 64k ")).toBe(64000);
+    expect(parseCapacitySpelling("0.5K")).toBe(500);
   });
 
   it("无法识别的拼写返回 null", () => {
@@ -90,9 +91,10 @@ describe("容量拼写", () => {
   });
 
   it("整除才折算回后缀写法", () => {
-    expect(formatCapacitySpelling(131072)).toBe("128K");
-    expect(formatCapacitySpelling(1048576)).toBe("1M");
-    expect(formatCapacitySpelling(1000)).toBe("1000");
+    expect(formatCapacitySpelling(128000)).toBe("128K");
+    expect(formatCapacitySpelling(1000000)).toBe("1M");
+    expect(formatCapacitySpelling(131072)).toBe("131072");
+    expect(formatCapacitySpelling(1000)).toBe("1K");
     expect(formatCapacitySpelling(null)).toBe("");
   });
 
@@ -109,6 +111,13 @@ describe("模型目录校验", () => {
 
   it("空目录合法", () => {
     expect(validateCatalogRows([])).toBeNull();
+  });
+
+  it("容量必须是正整数 token 数", () => {
+    expect(validateCatalogRows([row({ contextWindow: "0" })])).toEqual({ kind: "contextInvalid", index: 0 });
+    expect(validateCatalogRows([row({ contextWindow: "1.2" })])).toEqual({ kind: "contextInvalid", index: 0 });
+    expect(validateCatalogRows([row({ maxTokens: "1.2345K" })])).toEqual({ kind: "maxTokensInvalid", index: 0 });
+    expect(validateCatalogRows([row({ contextWindow: "0.5K", maxTokens: "2K" })])).toBeNull();
   });
 
   it("缺模型 ID 报出行号", () => {
@@ -143,7 +152,7 @@ describe("模型目录写回 op", () => {
     expect(op).toEqual({
       op: "set",
       path: ["providers", "acme", "models"],
-      value: [{ id: "m", name: "M", contextWindow: 131072, maxTokens: 8192, input: ["text", "image"] }]
+      value: [{ id: "m", name: "M", contextWindow: 128000, maxTokens: 8000, input: ["text", "image"] }]
     });
   });
 
@@ -170,7 +179,7 @@ describe("目录是否与已存一致", () => {
 
   it("首尾空白与等价容量拼写不算改动", () => {
     expect(modelCatalogMatchesSaved(
-      [{ modelId: " m ", name: " M ", contextWindow: "131072", maxTokens: "", supportsImage: false }],
+      [{ modelId: " m ", name: " M ", contextWindow: "128000", maxTokens: "", supportsImage: false }],
       saved
     )).toBe(true);
   });
@@ -185,7 +194,7 @@ describe("目录是否与已存一致", () => {
 describe("从已存 profile 还原目录行", () => {
   it("读出 id/名称/容量/图像,并标记为既有行", () => {
     const rows = hydrateCatalogRows(["p"], {
-      p: { models: [{ id: "m", name: "M", contextWindow: 131072, input: ["text", "image"] }] }
+      p: { models: [{ id: "m", name: "M", contextWindow: 128000, input: ["text", "image"] }] }
     });
     expect(rows).toEqual([{
       modelId: "m", name: "M", contextWindow: "128K", maxTokens: "",
@@ -237,11 +246,12 @@ describe("提供方联结(loadProviderRows)", () => {
   function connectionWith({ providers, namespaces, writable = true, credentials }) {
     return {
       call: vi.fn(async (method) => {
-        if (method === "llm.providers") return { providers };
-        if (method === "settings.describe") return { namespaces, writable, hasDocument: true };
-        if (method === "credentials.describe") {
+        if (method === "llm/listConfigurableProviders") return { providers };
+        if (method === "llm/listProviders") return providers.map((entry) => ({ id: entry.provider }));
+        if (method === "settings/describe") return { namespaces, writable, hasDocument: true };
+        if (method === "credentials/describe") {
           if (credentials instanceof Error) throw credentials;
-          return { credentials };
+          return credentials;
         }
         throw new Error(`unexpected ${method}`);
       })
@@ -322,12 +332,12 @@ describe("保存提供方", () => {
       [{ op: "set", path: ["p", "baseURL"], value: "u" }],
       "sk-key"
     );
-    expect(calls[0][0]).toBe("settings.mutate");
+    expect(calls[0][0]).toBe("settings/mutate");
     expect(calls[0][1].ops).toEqual([
       { op: "set", path: ["p", "baseURL"], value: "u" },
       { op: "set", path: ["p", "apiKeyEnv"], value: "ACME_API_KEY" }
     ]);
-    expect(calls[1]).toEqual(["credentials.set", { ref: "ACME_API_KEY", value: "sk-key" }]);
+    expect(calls[1]).toEqual(["credentials/set", { ref: "ACME_API_KEY", value: "sk-key" }]);
   });
 
   it("已有 apiKeyEnv 时不重复写引用", async () => {
@@ -336,7 +346,7 @@ describe("保存提供方", () => {
       { entry: { provider: "a", settingsNs: "ns", settingsPath: [] }, apiKeyEnv: "REF", credential: null },
       [], "sk-key"
     );
-    expect(calls[0]).toEqual(["credentials.set", { ref: "REF", value: "sk-key" }]);
+    expect(calls[0]).toEqual(["credentials/set", { ref: "REF", value: "sk-key" }]);
   });
 
   it("没有 op 也没有密钥时不发任何请求", async () => {
@@ -382,7 +392,7 @@ describe("删除提供方", () => {
       apiKeyEnv: "ACME_API_KEY",
       credential: { configured: true, writable: true }
     });
-    expect(calls.map(([method]) => method)).toEqual(["credentials.unset", "settings.mutate"]);
+    expect(calls.map(([method]) => method)).toEqual(["credentials/unset", "settings/mutate"]);
     expect(calls[1][1].ops).toEqual([{ op: "unset", path: ["providers", "acme"] }]);
   });
 
@@ -397,7 +407,7 @@ describe("删除提供方", () => {
       apiKeyEnv: "SHARED_KEY",
       credential: { configured: true, writable: true }
     });
-    expect(calls).toEqual(["settings.mutate"]);
+    expect(calls).toEqual(["settings/mutate"]);
   });
 
   it("不可删的行直接跳过", async () => {
@@ -449,9 +459,38 @@ describe("自动拉取模型列表的判定", () => {
 });
 
 describe("插件清单调用约定", () => {
-  it("空参也要包一层 args", async () => {
+  it("空参由 API client 包装 args", async () => {
     const call = vi.fn().mockResolvedValue({ entries: [] });
     await createSettingsService({ call }).pluginInventory();
-    expect(call).toHaveBeenCalledWith("pluginInventory/list", { args: {} });
+    expect(call).toHaveBeenCalledWith("pluginInventory/list", {});
+  });
+});
+
+describe("settings namespace revision 竞态", () => {
+  it("较旧的 mutation 回包不能覆盖较新的 revision", async () => {
+    let resolveOld;
+    let resolveNew;
+    const call = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve; }));
+    const service = createSettingsService({ call });
+    const old = service.mutate("race", [{ op: "set", path: ["winner"], value: "old" }], 1);
+    const fresh = service.mutate("race", [{ op: "set", path: ["winner"], value: "new" }], 1);
+    resolveNew({ ns: "race", revision: 3, value: { winner: "new" } });
+    await expect(fresh).resolves.toMatchObject({ revision: 3, value: { winner: "new" } });
+    resolveOld({ ns: "race", revision: 2, value: { winner: "old" } });
+    await expect(old).resolves.toMatchObject({ revision: 3, value: { winner: "new" } });
+  });
+
+  it("迟到的 describe 也采用已缓存的较新 namespace", async () => {
+    const call = vi.fn()
+      .mockResolvedValueOnce({ ns: "race", revision: 4, value: { winner: "new" } })
+      .mockResolvedValueOnce({ namespaces: [
+        { ns: "race", revision: 2, value: { winner: "old" } }
+      ], writable: true });
+    const service = createSettingsService({ call });
+    await service.update("race", { winner: "new" }, 3);
+    const described = await service.describe();
+    expect(described.namespaces[0]).toMatchObject({ revision: 4, value: { winner: "new" } });
   });
 });

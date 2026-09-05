@@ -6,6 +6,11 @@ const root = path.resolve(import.meta.dirname, "..");
 const install = fs.readFileSync(path.join(root, "install.sh"), "utf8");
 
 describe("beginner-friendly dsh-chrome installer contract", () => {
+  it("pins DSH 0.1.2-rc.1 and uses the complete public prerelease registry by default", () => {
+    expect(install).toContain('DSH_VERSION="0.1.2-rc.1"');
+    expect(install).toContain('DSH_REGISTRY:-https://registry.npmjs.org/');
+  });
+
   it("derives and validates the extension id without asking the user", () => {
     expect(install).toContain("derive_extension_id()");
     expect(install).toContain('EXTENSION_MANIFEST="$SCRIPT_DIR/manifest.json"');
@@ -49,5 +54,10 @@ describe("beginner-friendly dsh-chrome installer contract", () => {
     expect(install).toContain('"dshBin": "$DSH_BIN_ABS"');
     const host = fs.readFileSync(path.join(root, "native-host", "dsh-native-host.js"), "utf8");
     expect(host).toContain("dsh-chrome-update.json");
+  });
+
+  it("preserves a custom DSH_HOME when Chrome launches the native host", () => {
+    expect(install).toContain("printf -v DSH_HOME_QUOTED '%q' \"$DSH_HOME\"");
+    expect(install).toContain("export DSH_HOME=$DSH_HOME_QUOTED");
   });
 });

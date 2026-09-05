@@ -4,10 +4,9 @@ import { createDshConnection } from "../src/platform/dsh/dsh-connection.js";
 
 function frameJson() {
   return JSON.stringify({
-    type: "server-request",
-    rpcId: "r1",
-    method: "session/subscribed",
-    payload: { type: "session/subscribed", sessionId: "s1" }
+    type: "item",
+    streamId: "events",
+    value: { type: "ready", clientId: "c1" }
   });
 }
 
@@ -66,7 +65,7 @@ describe("dsh-connection 帧监听器隔离", () => {
     await connB.dispose();
 
     // 触发 A 的下行帧。
-    const aMux = sockets.find((s) => s.url.includes("127.0.0.1:3080") && s.url.endsWith("events.mux"));
+    const aMux = sockets.find((s) => s.url.includes("127.0.0.1:3080") && s.url.endsWith("remote.mux"));
     aMux.onmessage({ data: frameJson() });
 
     expect(listenerA).toHaveBeenCalledTimes(1);
@@ -106,7 +105,7 @@ describe("dsh-connection 启动前改后端地址", () => {
     // 帧要真能送达订阅者。
     const listener = vi.fn();
     conn.onFrame(listener);
-    const mux = sockets.find((s) => s.url.endsWith("events.mux"));
+    const mux = sockets.find((s) => s.url.endsWith("remote.mux"));
     mux.onmessage({ data: frameJson() });
     expect(listener).toHaveBeenCalledTimes(1);
 

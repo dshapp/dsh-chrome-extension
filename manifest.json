@@ -18,7 +18,8 @@
     "declarativeNetRequest",
     "notifications",
     "contextMenus",
-    "nativeMessaging"
+    "nativeMessaging",
+    "cookies"
   ],
   "host_permissions": [
     "<all_urls>"

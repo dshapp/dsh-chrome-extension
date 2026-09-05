@@ -3,7 +3,7 @@
 
 /// 撤销交互的应答体。
 ///
-/// **details 是必填的。** 宿主 /api/respond 用 clientResponseSchema 解析整个响应,
+/// **details 是必填的。** 宿主 `$events/result` 用 rpcErrorSchema 解析失败结果,
 /// 其 error 分支是 rpcErrorSchema 判别联合——每个分支都要求 details
 /// (cancelled 取空对象)。少这个键会解析失败,宿主回 {accepted:false, reason:"bad-response"},
 /// 卡片就永远停在那里、交互再也推进不下去。Mac 端与 web 端发的都是 details: {}。

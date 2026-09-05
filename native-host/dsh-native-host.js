@@ -14,10 +14,57 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import net from "node:net";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HOST_NAME = "com.dsh.chrome";
+const COOKIE_MAX_AGE_MS = 29 * 24 * 60 * 60 * 1000;
+const COOKIE_RECORD = "client-connection/browser-session";
+
+function base64url(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function browserSessionSecret() {
+  const dshHome = process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+  const file = path.join(dshHome, ".credentials.yaml");
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+  const record = lines.findIndex((line) => line.trimStart().startsWith(`${COOKIE_RECORD}:`));
+  if (record < 0) throw new Error(`${file}: record ${COOKIE_RECORD} not found`);
+  const indent = lines[record].length - lines[record].trimStart().length;
+  let version = null;
+  let encoded = null;
+  for (const line of lines.slice(record + 1)) {
+    if (!line.trim()) continue;
+    const currentIndent = line.length - line.trimStart().length;
+    if (currentIndent <= indent) break;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("version:")) version = trimmed.slice(8).trim().replace(/^['\"]|['\"]$/g, "");
+    if (trimmed.startsWith("secret:")) encoded = trimmed.slice(7).trim().replace(/^['\"]|['\"]$/g, "");
+  }
+  if (version !== "1") throw new Error(`${file}: unsupported browser-session payload version`);
+  if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error(`${file}: invalid browser-session secret`);
+  const secret = Buffer.from(encoded, "base64url");
+  if (secret.length !== 32) throw new Error(`${file}: browser-session secret must be 32 bytes`);
+  return secret;
+}
+
+function signBrowserSession(host = "127.0.0.1", port = 3080, now = Date.now()) {
+  const authority = `${host}:${port}`;
+  if (authority !== "127.0.0.1:3080") throw new Error("DSH 0.1.2 requires authority 127.0.0.1:3080");
+  const issuedAt = Math.trunc(now);
+  const expiresAt = issuedAt + COOKIE_MAX_AGE_MS;
+  const payload = JSON.stringify({ version: 1, authority, issuedAt, expiresAt });
+  const body = base64url(payload);
+  const signature = crypto.createHmac("sha256", browserSessionSecret()).update(body).digest("base64url");
+  return {
+    ok: true,
+    name: "dsh-auth-" + crypto.createHash("sha256").update(authority).digest("base64url"),
+    value: `v1.${body}.${signature}`,
+    expirationDate: expiresAt / 1000
+  };
+}
 
 /**
  * install.sh 落盘的那份配置。它记着本次装出来的 dsh 绝对路径
@@ -178,6 +225,7 @@ async function dispatch(msg) {
       if (msg.target === "web") return await startWeb(msg);
       return { ok: false, reason: "unknown-target" };
     case "status": return await status();
+    case "cookie": return signBrowserSession(msg.host, Number(msg.port));
     default: return { ok: false, reason: "unknown-cmd" };
   }
 }

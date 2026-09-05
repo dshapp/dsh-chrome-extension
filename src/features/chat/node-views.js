@@ -6,7 +6,7 @@
 import { t } from "../../shared/i18n.js";
 import { mdToHtml, escapeHtml } from "../../shared/md-to-html.js";
 import { NodeKind, AssistantStatus, ToolRowState, blocksToText } from "../sessions/chat-nodes.js";
-import { toolRowModel, resultText, ToolVariant } from "./tool-row-model.js";
+import { toolRowModel, resultText, hasResultText, ToolVariant } from "./tool-row-model.js";
 import { getToolIconSvg, getToolPresentation } from "./tool-presentation.js";
 import { decorateCodeBlocks, renderMarkdownInto, fmtTime } from "./chat-view.js";
 import { openCardDetail } from "./card-detail.js";
@@ -282,7 +282,7 @@ function hasToolDetail(node, model) {
   if (node.name === "exit_plan_mode" && planText(node)) return true;
   if (node.argsRaw) return true;
   if (node.result) {
-    if (resultText(node.result)) return true;
+    if (hasResultText(node.result)) return true;
     if ((node.result.content ?? []).some((b) => b?.type === "image" && b.data)) return true;
   }
   return false;

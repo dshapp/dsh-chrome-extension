@@ -1,12 +1,12 @@
 // E2E 1:开真会话,发真 prompt,让模型真的调工具,验证重写后的 store 归并结果。
 import assert from "node:assert/strict";
-import { rpc, openDownlink, waitFor } from "./harness.mjs";
+import { rpc, connection, openDownlink, waitFor } from "./harness.mjs";
 import { createSessionStore } from "../../src/features/sessions/session-store.js";
 import { createSessionService } from "../../src/features/sessions/session-service.js";
 import { toolRowModel } from "../../src/features/chat/tool-row-model.js";
 import { agentStatusLabel } from "../../src/features/chat/chat-renderer.js";
 
-const CWD = "/Users/user/dshmac/extension/dsh-chrome";
+const CWD = process.cwd();
 const results = [];
 const check = (name, fn) => {
   try { fn(); results.push(["PASS", name]); }
@@ -14,18 +14,13 @@ const check = (name, fn) => {
 };
 
 // 用真实的 connection 门面驱动真实的 session-service —— 与插件运行时同一条代码路径。
-const connection = {
-  call: (method, payload) => rpc(method, payload),
-  respond: async () => ({ accepted: true })
-};
 const service = createSessionService(connection);
 
-const sessionId = (await rpc("session.create", { cwd: CWD })).sessionId;
+const sessionId = await service.create({ cwd: CWD });
 console.log("会话:", sessionId);
 
 const downlink = openDownlink((frame, stream) => {
   if (stream === "mux") service.handleMuxFrame(frame);
-  else service.handleHostFrame(frame);
 });
 await downlink.ready;
 
@@ -121,11 +116,10 @@ check("运行期出现过细分状态文案", () => {
 // 历史重放必须与实时归并收敛到同一结果 —— 这是断线重连的正确性前提。
 const replay = createSessionStore();
 replay.reset(sessionId);
-const hist = await rpc("session.history", { sessionId });
-for (const e of hist.events ?? []) replay.applyEvent(e.event, e.view);
-for (const [k, v] of Object.entries(hist.projections?.values ?? {})) {
-  replay.applyProjection(k, v, hist.projections?.seqs?.[k]);
-}
+const hist = await rpc("session/page", { request: {
+  address: { kind: "session", sessionId }, throughSeq: s.lastSeq, maxMessages: 500
+} });
+for (const e of hist.records ?? []) replay.applyEvent(e.event, e.view);
 const replayKinds = replay.getSnapshot().nodes.map((n) => n.kind);
 check("历史重放与实时归并一致", () => {
   assert.deepEqual(replayKinds, kinds, `重放=${replayKinds.join(",")} 实时=${kinds.join(",")}`);
@@ -134,7 +128,7 @@ check("历史重放与实时归并一致", () => {
 // 乱序投递也必须收敛到同一结果。
 const shuffled = createSessionStore();
 shuffled.reset(sessionId);
-const evts = [...(hist.events ?? [])];
+const evts = [...(hist.records ?? [])];
 // 把每相邻两条对调,模拟轻度乱序
 for (let i = 0; i + 1 < evts.length; i += 2) { const t = evts[i]; evts[i] = evts[i+1]; evts[i+1] = t; }
 for (const e of evts) shuffled.applyEvent(e.event, e.view);
@@ -146,7 +140,8 @@ check("轻度乱序不改变节点种类集合", () => {
 });
 
 downlink.close();
-await rpc("session.cancel", { sessionId }).catch(() => {});
+await service.cancel(sessionId).catch(() => {});
+await service.archive(sessionId).catch(() => {});
 
 console.log("\n=== E2E 1 结果 ===");
 for (const [status, name, msg] of results) {

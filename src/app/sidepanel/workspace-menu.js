@@ -35,7 +35,7 @@ function basename(path) {
   return String(path || "").replace(/\/+$/, "").split("/").pop() || path || "";
 }
 
-/// @param hostCwd 读取宿主自身 cwd 的函数(host.describe 的 cwd)。未选工作目录
+/// @param hostCwd 读取宿主自身 cwd 的函数（来自 `$events` ready.host.home）。未选工作目录
 ///        的会话都落在这里,所以它就是「临时目录」这一项的过滤路径。
 export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCwd } = {}) {
   let workspaces = [];
@@ -48,6 +48,7 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
   let heroMode = false;
   // 选中了「临时目录」这一项(与选中某个 workspace 互斥;两者都没有 = 全部)。
   let tempSelected = false;
+  const followsWorkspaceState = typeof deps.workspaces?.subscribe === "function";
 
   function selected() {
     return workspaces.find((item) => item.workspaceId === selectedId) ?? null;
@@ -136,12 +137,19 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
   /// 拖动工作目录改顺序。
   ///
   /// 先本地重排再上报:菜单要立刻跟手。顺序**必须**记在宿主上,不能只在本地 ——
-  /// refresh() 每次都用 workspace.list 的结果整个替换 workspaces,
+  /// workspace/follow 的 baseline 会整个替换 workspaces,
   /// 纯本地的移动会在下一次刷新时被打回原形(对齐 macOS moveWorkspace 的注释)。
   ///
   /// 上报失败就把本地这一步回滚:与其让用户看着一个假的顺序、下次刷新又变回去,
   /// 不如当场退回去 —— 位置没记上是小事,不弹错误打断他。
   async function reorderWorkspace(movedId, beforeId) {
+    // 正式 workspace service 会同步发布乐观顺序，并在异步回包时做窄合并/回滚；
+    // 菜单只消费它的状态，避免自己保存一份会覆盖 follow 增量的旧快照。
+    if (followsWorkspaceState) {
+      await deps.workspaces.moveWorkspace?.(movedId, beforeId);
+      return;
+    }
+    // 简化的嵌入方没有 subscribe 时保留本地退化行为。
     const before = workspaces;
     const next = workspaces.filter((item) => item.workspaceId !== movedId);
     const moved = workspaces.find((item) => item.workspaceId === movedId);
@@ -215,8 +223,19 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
   markTrigger(elements.heroWorkspace, true);
   markTrigger(elements.hdrWorkspace, false);
 
+  deps.workspaces?.subscribe?.((next) => {
+    workspaces = next ?? [];
+    if (selectedId && !workspaces.some((item) => item.workspaceId === selectedId)) {
+      selectedId = null;
+      void writeStoredId(null);
+    }
+    paint();
+    renderMenu();
+    onChange?.(selected());
+  });
+
   return {
-    // 拉取列表并恢复上次选择;workspace.list 失败时退化为只有「全部」。
+    // 等待 workspace/follow baseline 并恢复上次选择；失败时退化为只有「全部」。
     async refresh() {
       try {
         workspaces = await deps.workspaces.refresh();

@@ -67,7 +67,7 @@ export function createSidepanelApp(root, deps) {
     models: [],
     cwd: null,
     hostHome: null,
-    // 宿主自身的工作目录(host.describe 的 cwd)。未选工作目录创建的会话都落在
+    // 宿主自身的工作目录（来自 `$events` ready.host.home）。未选工作目录创建的会话都落在
     // 这里,所以它同时是历史过滤「临时目录」这一项的路径。
     hostCwd: null,
     // 子代理会话:队列与当前轮都不归本端管,插队不可用。
@@ -102,6 +102,7 @@ export function createSidepanelApp(root, deps) {
 
   function applySnapshot(snapshot) {
     if (snapshot.running) awaitingTurnStart = false;
+    state.hostHome = deps.sessions.hostHome ?? state.hostHome;
     const previousCwd = state.cwd;
     state.cwd = snapshot.cwd ?? state.cwd;
     // 冷启动也走这里(首个快照带来 cwd),所以入口的首次出现靠这一行 ——
@@ -167,7 +168,7 @@ export function createSidepanelApp(root, deps) {
       return;
     }
 
-    const onRespond = (rpcId, result) => deps.connection.respond(rpcId, result);
+    const onRespond = (eventId, result) => deps.sessions.respondInteraction(eventId, result);
     if (takeover.kind === "approval") {
       takeoverCard = createApprovalCard(takeover.approval, { onRespond, store: deps.sessions.store });
     } else {
@@ -283,7 +284,7 @@ export function createSidepanelApp(root, deps) {
   /// 插队快捷键不依赖它可用,只是决定普通 Enter 的那一面。
   async function loadBusyEnter() {
     try {
-      const described = await deps.connection.call("settings.describe", {});
+      const described = await deps.connection.call(RPC.settingsDescribe, {});
       for (const namespace of described?.namespaces ?? []) {
         if (namespace?.ns !== "ui-conversation") continue;
         const value = namespace.value;
@@ -732,8 +733,7 @@ export function createSidepanelApp(root, deps) {
     subagentCatalog.refresh();
 
     try {
-      if (fresh) await deps.sessions.open(sessionId);
-      else await deps.sessions.loadHistory(sessionId);
+      await deps.sessions.open(sessionId);
     } catch (error) {
       if (!_retried && isSessionUnopenable(error)) {
         showToast(format(error));
@@ -938,12 +938,11 @@ export function createSidepanelApp(root, deps) {
     try {
       await deps.connection.ensureStarted();
       setStreamState(deps.connection.streamState);
-      // host.describe 提供 home,工具行用它把残留的绝对路径缩写成 ~;
+      // `$events` ready 提供 home,工具行用它把残留的绝对路径缩写成 ~;
       // cwd 则是「临时目录」过滤项的路径。这一步在下面的 workspaceMenu.refresh()
       // 之前完成,所以菜单首次渲染就能拿到 hostCwd,不需要补渲。
-      const described = await deps.connection.call("host.describe", {}).catch(() => null);
-      state.hostHome = described?.home ?? described?.homeDir ?? null;
-      state.hostCwd = described?.cwd ?? null;
+      state.hostHome = deps.sessions.hostHome ?? null;
+      state.hostCwd = null;
     } catch (error) {
       showToast(format(error));
     }

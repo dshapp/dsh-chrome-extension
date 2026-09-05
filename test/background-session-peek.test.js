@@ -6,9 +6,9 @@ import { describe, it, expect, vi } from "vitest";
 import { JSDOM } from "jsdom";
 import { createSessionService } from "../src/features/sessions/session-service.js";
 import { createSessionListStore } from "../src/features/sessions/session-list-store.js";
+import { SessionAwaitingKind } from "../src/features/sessions/session-row-trailing.js";
 import { createBackgroundNotifier } from "../src/features/notifications/background-notifier.js";
 import { mountHistoryDrawer } from "../src/app/sidepanel/sidepanel-overlays.js";
-import { MUX } from "../src/platform/dsh/rpc-methods.js";
 
 const CURRENT = "session-current";
 const OTHER = "session-other";
@@ -16,20 +16,21 @@ const OTHER = "session-other";
 function fakeConnection() {
   return {
     call: vi.fn(async (method) => {
-      if (method === "session.history") return { events: [] };
-      if (method === "session.list") return { items: [] };
+      if (method === "session/list") return { items: [] };
       return {};
-    })
+    }),
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn()
   };
 }
 
 async function serviceOn(sessionId, options) {
   const service = createSessionService(fakeConnection(), options);
-  await service.loadHistory(sessionId);
+  await service.open(sessionId);
   return service;
 }
 
-const eventFrame = (sessionId, event) => ({ payload: { type: MUX.sessionEvent, sessionId, event } });
+const eventFrame = (sessionId, event) => ({ type: "item", streamId: `follow:${sessionId}`, value: { event } });
 const turnEnd = (reason) => ({ type: "turn/end", seq: 9, time: 1000, data: { turn: 1, reason } });
 
 describe("后台会话失败上报", () => {
@@ -82,25 +83,372 @@ describe("后台会话活跃排序", () => {
   });
 });
 
+describe("$events ready 主机上下文", () => {
+  it("异步到达的 host.home 会触发运行快照更新", async () => {
+    const service = await serviceOn(CURRENT);
+    const listener = vi.fn();
+    service.onRuntimeChange(listener);
+    service.handleMuxFrame({ type: "item", streamId: "events", value: {
+      type: "ready", clientId: "client-1", host: { home: "/Users/me" }
+    } });
+    expect(service.hostHome).toBe("/Users/me");
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("后台会话标题投影", () => {
   it("非当前会话的 title 投影写进列表行的 projections.values.title", async () => {
     const service = await serviceOn(CURRENT);
     service.listStore.replaceAll([{ sessionId: OTHER, updatedAt: 1, projections: { values: { title: "旧" } } }]);
-    service.handleMuxFrame({ payload: { type: MUX.sessionProjection, sessionId: OTHER, key: "title", value: "新标题", seq: 7 } });
+    service.handleMuxFrame({ type: "item", streamId: "control", value: { type: "projection", sessionId: OTHER, key: "title", value: "新标题", seq: 7 } });
     expect(service.listStore.get()[0].projections.values.title).toBe("新标题");
   });
 
   it("当前会话的 title 投影仍走 store 快照", async () => {
     const service = await serviceOn(CURRENT);
-    service.handleMuxFrame({ payload: { type: MUX.sessionProjection, sessionId: CURRENT, key: "title", value: "当前标题", seq: 7 } });
+    service.handleMuxFrame({ type: "item", streamId: "control", value: { type: "projection", sessionId: CURRENT, key: "title", value: "当前标题", seq: 7 } });
     expect(service.getRuntimeSnapshot().title).toBe("当前标题");
   });
 
-  it("title 之外的后台投影仍然丢弃", async () => {
+  it("title 之外的后台投影也写进列表摘要", async () => {
     const service = await serviceOn(CURRENT);
     service.listStore.replaceAll([{ sessionId: OTHER, updatedAt: 1 }]);
-    service.handleMuxFrame({ payload: { type: MUX.sessionProjection, sessionId: OTHER, key: "stats", value: { x: 1 }, seq: 7 } });
-    expect(service.listStore.get()[0].projections).toBeUndefined();
+    service.handleMuxFrame({ type: "item", streamId: "control", value: { type: "projection", sessionId: OTHER, key: "stats", value: { x: 1 }, seq: 7 } });
+    expect(service.listStore.get()[0].projections).toEqual({ asOfSeq: 7, values: { stats: { x: 1 } } });
+  });
+
+  it("重命名后台会话不改当前标题，且后续宿主投影仍可推进", async () => {
+    const connection = fakeConnection();
+    connection.call.mockImplementation(async (method, payload) => {
+      if (method === "session/rename") return { title: payload.request.title };
+      if (method === "session/list") return { items: [
+        { sessionId: CURRENT, updatedAt: 2 },
+        { sessionId: OTHER, updatedAt: 1, projections: { values: { title: "后台新名" } } }
+      ] };
+      return {};
+    });
+    const service = createSessionService(connection);
+    await service.open(CURRENT);
+    service.store.setTitle("当前标题");
+    service.listStore.replaceAll([
+      { sessionId: CURRENT, updatedAt: 2 },
+      { sessionId: OTHER, updatedAt: 1, projections: { values: { title: "后台旧名" } } }
+    ]);
+
+    await service.rename(OTHER, "后台新名");
+    expect(service.getRuntimeSnapshot().title).toBe("当前标题");
+    expect(service.listStore.get().find((row) => row.sessionId === OTHER)?.projections?.values?.title)
+      .toBe("后台新名");
+
+    await service.rename(CURRENT, "手工标题");
+    expect(service.getRuntimeSnapshot().title).toBe("手工标题");
+    service.handleMuxFrame({ type: "item", streamId: "control", value: {
+      type: "projection", sessionId: CURRENT, key: "title", value: "宿主后续标题", seq: 7
+    } });
+    expect(service.getRuntimeSnapshot().title).toBe("宿主后续标题");
+  });
+});
+
+describe("session/control baseline 缓存", () => {
+  it("baseline 早于会话选择到达时，打开后仍恢复队列、任务和投影", async () => {
+    const service = createSessionService(fakeConnection());
+    service.handleMuxFrame({
+      type: "item", streamId: "control", value: {
+        type: "baseline",
+        value: {
+          queues: { [CURRENT]: [{ id: "q1" }] },
+          jobs: { [CURRENT]: [{ id: "j1" }] },
+          projections: { [CURRENT]: { asOfSeq: 4, values: {
+            title: "缓存标题",
+            modelSelection: { lastUsed: null, next: { provider: "p", model: "m" } }
+          } } }
+        }
+      }
+    });
+    await service.open(CURRENT);
+    expect(service.getRuntimeSnapshot()).toMatchObject({
+      title: "缓存标题",
+      queue: [{ id: "q1" }],
+      jobs: [{ id: "j1" }],
+      modelSelection: { next: { provider: "p", model: "m" } }
+    });
+  });
+});
+
+describe("后台 waterfall 缓存", () => {
+  it("未打开会话收到审批后，切入该会话仍能显示卡片", async () => {
+    const service = await serviceOn(CURRENT);
+    service.listStore.replaceAll([{ sessionId: OTHER, updatedAt: 1 }]);
+    service.handleMuxFrame({ type: "item", streamId: "events", value: {
+      type: "waterfall", event: "approval/request", eventId: "event-1", agentId: OTHER,
+      request: { approvalId: "approval-1", toolName: "bash", reason: "needs access" }
+    } });
+    await service.open(OTHER);
+    expect(service.getRuntimeSnapshot().pendingApproval).toMatchObject({
+      eventId: "event-1", approvalId: "approval-1", toolName: "bash"
+    });
+    service.handleMuxFrame({ type: "item", streamId: "events", value: { type: "cancel", eventId: "event-1" } });
+    expect(service.getRuntimeSnapshot().pendingApproval).toBeNull();
+  });
+
+  it("同会话审批优先于提问，撤销审批后恢复提问标记", async () => {
+    const service = await serviceOn(CURRENT);
+    service.listStore.replaceAll([{ sessionId: CURRENT, updatedAt: 1 }]);
+    service.handleMuxFrame({ type: "item", streamId: "events", value: {
+      type: "waterfall", event: "approval/request", eventId: "approval-1", agentId: CURRENT,
+      request: { approvalId: "a1", toolName: "bash" }
+    } });
+    service.handleMuxFrame({ type: "item", streamId: "events", value: {
+      type: "waterfall", event: "user-questions/request", eventId: "question-1", agentId: CURRENT,
+      request: { questions: [{ id: "q1", question: "Continue?" }] }
+    } });
+    expect(service.listStore.awaitingUser(CURRENT)).toBe(SessionAwaitingKind.approval);
+
+    service.handleMuxFrame({ type: "item", streamId: "events", value: {
+      type: "cancel", eventId: "approval-1"
+    } });
+    expect(service.getRuntimeSnapshot().pendingApproval).toBeNull();
+    expect(service.getRuntimeSnapshot().pendingQuestion?.eventId).toBe("question-1");
+    expect(service.listStore.awaitingUser(CURRENT)).toBe(SessionAwaitingKind.question);
+  });
+});
+
+describe("mux 逻辑流错误隔离", () => {
+  it("子流 error 不重建仍健康的 mux 连接", () => {
+    const connection = { ...fakeConnection(), forceReconnect: vi.fn() };
+    const service = createSessionService(connection);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    service.handleMuxFrame({ type: "error", streamId: "events", error: { message: "closed" } });
+    service.handleMuxFrame({ type: "error", streamId: "control", error: { message: "closed" } });
+    expect(connection.forceReconnect).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(2);
+
+    warn.mockRestore();
+  });
+});
+
+describe("归档会话持久过滤", () => {
+  it("workspace 快照先到或后到都不会让归档会话复活", async () => {
+    const connection = fakeConnection();
+    connection.call.mockResolvedValue({
+      items: [
+        { sessionId: "active", updatedAt: 2, blank: false },
+        { sessionId: "archived", updatedAt: 1, blank: false }
+      ]
+    });
+    const service = createSessionService(connection);
+
+    service.setArchivedSessionIds(["archived"]);
+    await service.refreshList();
+    expect(service.listStore.get().map((item) => item.sessionId)).toEqual(["active"]);
+
+    service.setArchivedSessionIds([]);
+    await service.refreshList();
+    expect(service.listStore.get().map((item) => item.sessionId)).toEqual(["active", "archived"]);
+    service.setArchivedSessionIds(["archived"]);
+    expect(service.listStore.get().map((item) => item.sessionId)).toEqual(["active"]);
+  });
+
+  it("归档或删除后的迟到 added 帧不能复活会话", async () => {
+    const service = await serviceOn(CURRENT);
+    service.listStore.replaceAll([
+      { sessionId: "archived", updatedAt: 2 },
+      { sessionId: "removed", updatedAt: 1 }
+    ]);
+    service.setArchivedSessionIds(["archived"]);
+    service.handleHostFrame({ payload: { type: "host/session-removed", sessionId: "removed" } });
+    service.handleHostFrame({ payload: { type: "host/session-added", sessionId: "archived" } });
+    service.handleHostFrame({ payload: { type: "host/session-added", sessionId: "removed" } });
+    expect(service.listStore.get()).toEqual([]);
+  });
+
+  it("并发归档的乱序回包不会互相丢失 tombstone", async () => {
+    const pending = new Map();
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method, payload) => {
+      if (method !== "workspace/archiveSession") return Promise.resolve({});
+      return new Promise((resolve) => pending.set(payload.request.sessionId, resolve));
+    });
+    const service = createSessionService(connection);
+    service.listStore.replaceAll([
+      { sessionId: "a", updatedAt: 2 },
+      { sessionId: "b", updatedAt: 1 }
+    ]);
+
+    const first = service.archive("a");
+    const second = service.archive("b");
+    pending.get("b")({ archivedSessionIds: ["b"] });
+    await second;
+    pending.get("a")({ archivedSessionIds: ["a"] });
+    await first;
+
+    service.handleHostFrame({ payload: { type: "host/session-added", sessionId: "a" } });
+    service.handleHostFrame({ payload: { type: "host/session-added", sessionId: "b" } });
+    expect(service.listStore.get()).toEqual([]);
+  });
+});
+
+describe("session/list 刷新竞态", () => {
+  it("等待 HTTP 快照期间到达的实时新增不会被旧快照覆盖", async () => {
+    let resolveList;
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method) => method === "session/list"
+      ? new Promise((resolve) => { resolveList = resolve; })
+      : Promise.resolve({}));
+    const service = createSessionService(connection);
+    const refresh = service.refreshList();
+    service.handleHostFrame({ payload: {
+      type: "host/session-added", sessionId: "live", blank: false, updatedAt: 2
+    } });
+    resolveList({ items: [{ sessionId: "stale", blank: false, updatedAt: 1 }] });
+    await refresh;
+    expect(service.listStore.get().map((item) => item.sessionId)).toEqual(["live"]);
+  });
+
+  it("两个并发刷新只允许后发请求落地", async () => {
+    const resolvers = [];
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method) => method === "session/list"
+      ? new Promise((resolve) => { resolvers.push(resolve); })
+      : Promise.resolve({}));
+    const service = createSessionService(connection);
+    const first = service.refreshList();
+    const second = service.refreshList();
+    resolvers[1]({ items: [{ sessionId: "new", blank: false, updatedAt: 2 }] });
+    await second;
+    resolvers[0]({ items: [{ sessionId: "old", blank: false, updatedAt: 1 }] });
+    await first;
+    expect(service.listStore.get().map((item) => item.sessionId)).toEqual(["new"]);
+  });
+});
+
+describe("会话分页切换竞态", () => {
+  it("切到新会话后，旧会话迟到的 page 不能把当前会话切回去", async () => {
+    let resolvePage;
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method) => {
+      if (method === "session/page") {
+        return new Promise((resolve) => { resolvePage = resolve; });
+      }
+      return Promise.resolve({});
+    });
+    const service = createSessionService(connection);
+    await service.open(CURRENT);
+    service.handleMuxFrame({
+      type: "item", streamId: `follow:${CURRENT}`,
+      value: { type: "snapshot", cursor: 12, records: [] }
+    });
+    const stalePage = service.loadHistory(CURRENT);
+
+    await service.open(OTHER);
+    resolvePage({ records: [{ event: { type: "user/message", seq: 1, data: { content: "stale" } } }] });
+    await stalePage;
+
+    expect(service.currentSessionId).toBe(OTHER);
+    expect(service.getRuntimeSnapshot().sessionId).toBe(OTHER);
+  });
+
+  it("两个并发 open 即使旧 attach 后返回，也由最后一次调用赢得 follow", async () => {
+    const resolvers = new Map();
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method, args) => {
+      if (method !== "session/create") return Promise.resolve({});
+      const id = args.request.sessionId;
+      return new Promise((resolve) => { resolvers.set(id, resolve); });
+    });
+    const service = createSessionService(connection);
+    service.listStore.replaceAll([
+      { sessionId: CURRENT, cwd: "/w", updatedAt: 2 },
+      { sessionId: OTHER, cwd: "/w", updatedAt: 1 }
+    ]);
+
+    const first = service.open(CURRENT);
+    const second = service.open(OTHER);
+    resolvers.get(OTHER)({ sessionId: OTHER });
+    await second;
+    resolvers.get(CURRENT)({ sessionId: CURRENT });
+    await first;
+
+    expect(service.currentSessionId).toBe(OTHER);
+    const follows = connection.subscribe.mock.calls.filter(([id]) => id.startsWith("follow:"));
+    expect(follows.map(([id]) => id)).toEqual([`follow:${OTHER}`]);
+  });
+});
+
+describe("follow 缺口修复与地址路由", () => {
+  const entry = (seq, text = String(seq)) => ({
+    event: { type: "user/message", seq, time: seq, data: {
+      message: { id: `m${seq}`, content: [{ type: "text", text }], source: { kind: "user" } }
+    } }
+  });
+
+  it("发现 seq 缺口后用权威 cursor 回填，并拼接等待期间的实时帧", async () => {
+    let resolvePage;
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method) => method === "session/page"
+      ? new Promise((resolve) => { resolvePage = resolve; })
+      : Promise.resolve({}));
+    const service = createSessionService(connection);
+    await service.open(CURRENT);
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: {
+      type: "snapshot", cursor: 5, records: [entry(1)]
+    } });
+
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: entry(6) });
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: entry(7) });
+    expect(connection.call).toHaveBeenCalledWith("session/page", { request: {
+      address: { kind: "session", sessionId: CURRENT }, throughSeq: 5, maxMessages: 50
+    } });
+    expect(service.getRuntimeSnapshot().lastSeq).toBe(1);
+
+    resolvePage({ records: [entry(1), entry(2), entry(3), entry(4), entry(5)] });
+    await vi.waitFor(() => expect(service.getRuntimeSnapshot().lastSeq).toBe(7));
+  });
+
+  it("子代理缺口与 resync 都保持完整 subagent address", async () => {
+    const address = { parentSessionId: "parent", childSessionId: "child", mode: "continuable" };
+    const connection = fakeConnection();
+    connection.call.mockImplementation(async (method) => {
+      if (method === "session/page") return { records: [entry(8)] };
+      if (method === "session/list") return { items: [] };
+      return {};
+    });
+    const service = createSessionService(connection);
+    await service.loadSubagentHistory(address);
+    service.handleMuxFrame({ type: "item", streamId: "follow:child", value: {
+      type: "snapshot", cursor: 8, records: [entry(6)]
+    } });
+    service.handleMuxFrame({ type: "item", streamId: "follow:child", value: entry(9) });
+    await vi.waitFor(() => expect(service.getRuntimeSnapshot().lastSeq).toBe(9));
+    await service.resync();
+
+    const pages = connection.call.mock.calls.filter(([method]) => method === "session/page");
+    expect(pages).toHaveLength(2);
+    for (const [, args] of pages) {
+      expect(args.request.address).toEqual({ kind: "subagent", ...address });
+    }
+  });
+
+  it("较新的 follow snapshot 使在途旧 page 作废", async () => {
+    let resolvePage;
+    const connection = fakeConnection();
+    connection.call.mockImplementation((method) => method === "session/page"
+      ? new Promise((resolve) => { resolvePage = resolve; })
+      : Promise.resolve({}));
+    const service = createSessionService(connection);
+    await service.open(CURRENT);
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: {
+      type: "snapshot", cursor: 4, records: [entry(4)]
+    } });
+    const stale = service.loadHistory(CURRENT);
+    service.handleMuxFrame({ type: "item", streamId: `follow:${CURRENT}`, value: {
+      type: "snapshot", cursor: 10, records: [entry(10)]
+    } });
+    resolvePage({ records: [entry(2)] });
+    await stale;
+
+    expect(service.getRuntimeSnapshot().lastSeq).toBe(10);
   });
 });
 

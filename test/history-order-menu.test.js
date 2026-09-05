@@ -5,7 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mountHistoryOrdering } from "../src/app/sidepanel/history-ordering.js";
 
-function setup() {
+function setup({ orderStore = null, workspaceId = () => null, workspaces = null,
+  visibleRows = () => [], fullRows = () => [] } = {}) {
   document.body.innerHTML = `
     <div id="history-popover" class="open">
       <div id="history-search-wrap">
@@ -18,14 +19,21 @@ function setup() {
   const ordering = mountHistoryOrdering({
     popover: document.querySelector("#history-popover"),
     list: document.querySelector("#history-list-inner"),
-    orderStore: null,
-    workspaceId: () => null,
-    workspaces: null,
-    visibleRows: () => [],
-    fullRows: () => [],
+    orderStore,
+    workspaceId,
+    workspaces,
+    visibleRows,
+    fullRows,
     rerender
   });
   return { ordering, rerender };
+}
+
+function fireDrag(target, type, clientY = 0) {
+  const event = new window.Event(type, { bubbles: true, cancelable: true });
+  event.clientY = clientY;
+  event.dataTransfer = { setData: vi.fn(), types: [] };
+  target.dispatchEvent(event);
 }
 
 const trigger = () => document.querySelector("#history-order-btn");
@@ -92,5 +100,46 @@ describe("排序下拉", () => {
     menu().hidePopover = hide;
     items().find((i) => i.dataset.itemId === "manual").click();
     expect(hide).toHaveBeenCalled();
+  });
+
+  it("workspace 内拖拽只写宿主顺序，不污染浏览器本地账本", async () => {
+    const rows = ["a", "b", "c"].map((sessionId) => ({ sessionId }));
+    const orderStore = { load: vi.fn(), reorder: vi.fn() };
+    const moveSession = vi.fn().mockResolvedValue(true);
+    setup({
+      orderStore,
+      workspaceId: () => "w1",
+      workspaces: { moveSession },
+      visibleRows: () => rows,
+      fullRows: () => rows
+    });
+    const list = document.querySelector("#history-list-inner");
+    list.innerHTML = rows.map((row, index) =>
+      `<li class="history-item" data-session-id="${row.sessionId}"></li>`).join("");
+    [...list.children].forEach((row, index) => {
+      row.getBoundingClientRect = () => ({ top: index * 20, height: 20, bottom: index * 20 + 20 });
+    });
+    fireDrag(list.children[2], "dragstart");
+    fireDrag(list.children[0], "drop", 2);
+    expect(moveSession).toHaveBeenCalledWith("w1", "c", "a");
+    expect(orderStore.reorder).not.toHaveBeenCalled();
+  });
+
+  it("全部视图拖拽只写浏览器本地账本", () => {
+    const rows = ["a", "b", "c"].map((sessionId) => ({ sessionId }));
+    const orderStore = { load: vi.fn(), reorder: vi.fn() };
+    const moveSession = vi.fn();
+    setup({ orderStore, workspaceId: () => null, workspaces: { moveSession },
+      visibleRows: () => rows, fullRows: () => rows });
+    const list = document.querySelector("#history-list-inner");
+    list.innerHTML = rows.map((row) =>
+      `<li class="history-item" data-session-id="${row.sessionId}"></li>`).join("");
+    [...list.children].forEach((row, index) => {
+      row.getBoundingClientRect = () => ({ top: index * 20, height: 20, bottom: index * 20 + 20 });
+    });
+    fireDrag(list.children[2], "dragstart");
+    fireDrag(list.children[0], "drop", 2);
+    expect(orderStore.reorder).toHaveBeenCalledWith("c", "a", ["a", "b", "c"]);
+    expect(moveSession).not.toHaveBeenCalled();
   });
 });

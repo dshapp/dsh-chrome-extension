@@ -121,19 +121,19 @@ describe("session.create 的归属参数互斥", () => {
     const svc = createSessionService({ call });
     await svc.create({ workspaceId: "w1", cwd: "/p" });
     const [, payload] = call.mock.calls[0];
-    expect(payload.workspaceId).toBe("w1");
-    expect(payload).not.toHaveProperty("cwd");
+    expect(payload.request.workspaceId).toBe("w1");
+    expect(payload.request).not.toHaveProperty("cwd");
   });
 
   it("open() 的 attach 路径同样不会同时带两者", async () => {
     const call = vi.fn().mockImplementation((method) =>
-      method === "session.history" ? Promise.resolve({ events: [], projections: { values: {} } })
+      method === "session/page" ? Promise.resolve({ records: [], projections: { values: {} } })
         : Promise.resolve({ sessionId: "s1" }));
     const svc = createSessionService({ call });
     await svc.open("s1", { workspaceId: "w1", cwd: "/p" });
-    const createCall = call.mock.calls.find(([m]) => m === "session.create");
-    expect(createCall[1].workspaceId).toBe("w1");
-    expect(createCall[1]).not.toHaveProperty("cwd");
+    const createCall = call.mock.calls.find(([m]) => m === "session/create");
+    expect(createCall[1].request.workspaceId).toBe("w1");
+    expect(createCall[1].request).not.toHaveProperty("cwd");
   });
 });
 
@@ -144,8 +144,8 @@ describe("open() 绝不发裸 sessionId(session-conflict 回归)", () => {
   const mk = (onCreate) => {
     const seen = [];
     const call = vi.fn().mockImplementation((method, payload) => {
-      if (method === "session.create") { seen.push(payload); return onCreate(payload); }
-      if (method === "session.history") return Promise.resolve(hist);
+      if (method === "session/create") { seen.push(payload.request); return onCreate(payload.request); }
+      if (method === "session/page") return Promise.resolve(hist);
       return Promise.resolve({});
     });
     return { call, seen };
@@ -158,7 +158,7 @@ describe("open() 绝不发裸 sessionId(session-conflict 回归)", () => {
     const svc = createSessionService({ call });
     await svc.open("s-stale");
     expect(seen).toEqual([]);
-    expect(call.mock.calls.some(([m]) => m === "session.history")).toBe(true);
+    expect(call.mock.calls.some(([m]) => m === "session/page")).toBe(false);
   });
 
   it("列表里记过 cwd:用它当锚点", async () => {
@@ -196,9 +196,9 @@ describe("未选工作目录也能新建会话(临时目录)", () => {
     const id = await svc.create({});
     expect(id).toBe("s-tmp");
     const [method, payload] = call.mock.calls[0];
-    expect(method).toBe("session.create");
-    expect(payload).not.toHaveProperty("workspaceId");
-    expect(payload).not.toHaveProperty("cwd");
+    expect(method).toBe("session/create");
+    expect(payload.request).not.toHaveProperty("workspaceId");
+    expect(payload.request).not.toHaveProperty("cwd");
   });
 
   it("locationOf(null/undefined) 为空对象,不会凭空造出归属参数", () => {

@@ -1,10 +1,28 @@
 // 会话列表 store 的行首状态派生:未读完成绿点、失败红点、子代理运行祖先集合。
 import { describe, it, expect } from "vitest";
 import {
-  createSessionListStore, computeRunningSubagentRoots
+  createSessionListStore, computeRunningSubagentRoots, SessionOrderBy
 } from "../src/features/sessions/session-list-store.js";
 
 const s = (sessionId, extra = {}) => ({ sessionId, updatedAt: 1000, running: false, ...extra });
+
+describe("workspace 手动顺序", () => {
+  it("选中 workspace 时采用宿主 sessionIds，不读浏览器本地账本", () => {
+    const store = createSessionListStore();
+    store.attachOrderStore({ sort: () => { throw new Error("不应读取本地账本"); } });
+    const rows = [s("a", { updatedAt: 30 }), s("b", { updatedAt: 20 }), s("c", { updatedAt: 10 })];
+    expect(store.sortBy(rows, SessionOrderBy.manual, ["c", "a", "b"])
+      .map((row) => row.sessionId)).toEqual(["c", "a", "b"]);
+  });
+
+  it("权威数组未提到的 cwd 兜底行按最近更新追加", () => {
+    const store = createSessionListStore();
+    const rows = [s("extra-old", { updatedAt: 1 }), s("b", { updatedAt: 2 }),
+      s("extra-new", { updatedAt: 4 }), s("a", { updatedAt: 3 })];
+    expect(store.sortBy(rows, SessionOrderBy.manual, ["a", "b"])
+      .map((row) => row.sessionId)).toEqual(["a", "b", "extra-new", "extra-old"]);
+  });
+});
 
 describe("未读完成提醒(绿点)", () => {
   it("首次观察到 idle 的会话不产生未读 —— 冷启动不该一屏全绿", () => {
@@ -225,5 +243,36 @@ describe("名单剪枝", () => {
     store.replaceAll([s("a", { updatedAt: 2000 }), s("b")]);
     expect(store.awaitingUser("a")).toBe("approval");
     expect(store.hasDraft("a")).toBe(true);
+  });
+});
+
+describe("列表投影版本", () => {
+  it("不同 projection key 独立比较 seq", () => {
+    const store = createSessionListStore();
+    store.replaceAll([s("a", { projections: {
+      asOfSeq: 10, values: { title: "旧标题", tokenUsage: { outputTokens: 1 } }
+    } })]);
+
+    store.setProjection("a", "tokenUsage", { outputTokens: 2 }, 20);
+    store.setProjection("a", "title", "新标题", 15);
+    store.setProjection("a", "title", "同序重复", 15);
+    store.setProjection("a", "title", "迟到旧值", 14);
+
+    expect(store.get()[0].projections).toMatchObject({
+      asOfSeq: 20,
+      values: { title: "新标题", tokenUsage: { outputTokens: 2 } }
+    });
+  });
+
+  it("replaceAll 与 remove 会重建或清理逐 key 版本", () => {
+    const store = createSessionListStore();
+    store.replaceAll([s("a", { projections: { asOfSeq: 8, values: { title: "基线" } } })]);
+    store.setProjection("a", "title", "太旧", 7);
+    expect(store.get()[0].projections.values.title).toBe("基线");
+
+    store.remove("a");
+    store.replaceAll([s("a", { projections: { asOfSeq: 2, values: { title: "重建" } } })]);
+    store.setProjection("a", "title", "更新", 3);
+    expect(store.get()[0].projections.values.title).toBe("更新");
   });
 });

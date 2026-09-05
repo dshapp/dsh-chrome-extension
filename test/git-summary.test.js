@@ -18,6 +18,16 @@ describe("git-summary 解析", () => {
     expect(parseNumstat(out)).toEqual({ added: 10, removed: 2, files: 2 });
   });
 
+  it("解析 -z 输出时不会把 rename 的两个路径误算成记录", () => {
+    const out = "2\t3\t\u0000old/name.js\u0000new/name.js\u00001\t0\trequest => response.md\u0000";
+    expect(parseNumstat(out)).toEqual({ added: 3, removed: 3, files: 2 });
+  });
+
+  it("-z 输出保留文件名里的 tab 与换行", () => {
+    const out = "-\t-\tfolder/tab\tand\nline.bin\u0000";
+    expect(parseNumstat(out)).toEqual({ added: 0, removed: 0, files: 1 });
+  });
+
   it("空输出是干净工作树", () => {
     expect(parseNumstat("")).toEqual({ added: 0, removed: 0, files: 0 });
   });
@@ -108,6 +118,7 @@ describe("git-summary 读取", () => {
       localBranches: ["main", "feat/x"], isWorktree: true
     });
     expect(summary.upstream.ahead).toBe(1);
+    expect(client.git).toHaveBeenCalledWith("/repo", ["diff", "--numstat", "-z"]);
   });
 
   it("单条命令失败不让整份摘要失败", async () => {

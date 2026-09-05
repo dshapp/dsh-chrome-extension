@@ -131,6 +131,20 @@ export function resultText(result) {
   return parts.join("\n");
 }
 
+/// 详情入口只需要知道是否存在可显示文本，不应为此拼接整份工具输出。
+export function hasResultText(result) {
+  for (const block of result?.content ?? []) {
+    if (block?.type === "text") {
+      if (block.text) return true;
+      continue;
+    }
+    try {
+      if (JSON.stringify(block)) return true;
+    } catch { /* 跳过不可序列化块 */ }
+  }
+  return Boolean(result?.error);
+}
+
 /// 已结算结果的首行,不构建整体。
 /// 折叠行的错误摘要只要一行,而经由 resultText 会先把所有内容块拼起来——
 /// 为了读首行而整份复制一个几 MB 的构建日志,这行既不显示它也不需要它。
@@ -259,8 +273,6 @@ export function toolRowModel(node, { cwd = null, home = null } = {}) {
     ? `${node.name} · ${base}`
     : (replacement ?? base);
 
-  const output = done ? (node.result ? (resultText(node.result) || null) : null) : null;
-
   // ask 行的中止结论沿用其他被打断调用的共享 stopped(琥珀)语义。
   if (node.name === "ask_user_question" && node.result?.error?.code === "ASK_ABORTED") {
     state = ToolRowState.stopped;
@@ -279,7 +291,10 @@ export function toolRowModel(node, { cwd = null, home = null } = {}) {
     summary,
     filePath: deriveFilePath(variant, args),
     summarySuffix: errorSummary == null && node.name === "todo_write" ? todoSummary(argsRaw)?.suffix ?? null : null,
-    output,
+    // 保留既有模型 API，但把完整输出延迟到真正读取时。折叠行渲染不再复制日志。
+    get output() {
+      return done && node.result ? (resultText(node.result) || null) : null;
+    },
     errorSummary,
     state: resolvedState
   };

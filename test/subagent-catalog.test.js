@@ -47,6 +47,36 @@ describe("createSubagentCatalogState", () => {
     c.close();
     expect(c.expanded.size).toBe(0);
   });
+
+  it("较早的强制刷新晚返回时不覆盖较新的成功结果", async () => {
+    const c = createSubagentCatalogState();
+    const pending = [];
+    const loader = vi.fn(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+
+    const oldLoad = c.load("p", loader, { force: true });
+    const newLoad = c.load("p", loader, { force: true });
+    pending[1].resolve({ entries: [{ kind: "child", id: "new" }] });
+    await newLoad;
+    pending[0].resolve({ entries: [{ kind: "child", id: "old" }] });
+    await oldLoad;
+
+    expect(c.stateFor("p").value.entries[0].id).toBe("new");
+  });
+
+  it("较早请求的迟到失败不覆盖较新的成功结果", async () => {
+    const c = createSubagentCatalogState();
+    const pending = [];
+    const loader = vi.fn(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+
+    const oldLoad = c.load("p", loader, { force: true });
+    const newLoad = c.load("p", loader, { force: true });
+    pending[1].resolve({ entries: [] });
+    await newLoad;
+    pending[0].reject(new Error("stale"));
+    await oldLoad;
+
+    expect(c.stateFor("p")).toMatchObject({ phase: "ready", value: { entries: [] }, error: null });
+  });
 });
 
 describe("healthyCount / catalogVisible / catalogTriggerLabel", () => {

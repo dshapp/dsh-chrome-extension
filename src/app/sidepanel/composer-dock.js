@@ -39,6 +39,8 @@ export function createComposerDock({ elements, deps, state, showToast, format })
   // 读 projections.plan 折算出的目标态。开启时显示药丸,点击执行 /plan off,
   // 并在投影确认退出前保持可见但禁用(乐观切换会让 chip 闪烁)。
   let planLeaving = false;
+  let modelLoadGeneration = 0;
+  let presetLoadGeneration = 0;
 
   function renderPlanChip(planMode) {
     const chip = elements.planChip;
@@ -175,10 +177,13 @@ export function createComposerDock({ elements, deps, state, showToast, format })
   async function refreshModelMenu() {
     const sessionId = state.sessionId;
     if (!sessionId) return;
+    const generation = ++modelLoadGeneration;
     try {
-      const sessionModels = await deps.connection.call(RPC.sessionModels, { sessionId });
+      const sessionModels = deps.sessions.models
+        ? await deps.sessions.models(sessionId)
+        : await deps.connection.call(RPC.sessionModels, {});
       // 等待期间切走了会话:迟到的响应不得更新当前(别的)会话的模型菜单。
-      if (state.sessionId !== sessionId) return;
+      if (generation !== modelLoadGeneration || state.sessionId !== sessionId) return;
       state.currentModel = sessionModels.current ?? null;
       // current 只带 {provider, model} 两个 id,展示名要回 groups 里查;
       // 查不到(目录里没有这个模型)才退回 id,总比空着强。
@@ -218,16 +223,16 @@ export function createComposerDock({ elements, deps, state, showToast, format })
             if (entry.effort) {
               const current = state.currentModel;
               if (!current) return;
-              await deps.connection.call(RPC.sessionSelectModel, {
+              await deps.connection.call(RPC.sessionSelectModel, { request: {
                 sessionId: state.sessionId,
                 provider: current.provider,
                 model: current.model,
                 reasoningEffort: entry.effort
-              });
+              } });
             } else {
-              await deps.connection.call(RPC.sessionSelectModel, {
+              await deps.connection.call(RPC.sessionSelectModel, { request: {
                 sessionId: state.sessionId, provider: entry.provider, model: entry.model
-              });
+              } });
               // 同步当前模型:推理档选择依赖 state.currentModel 来定位要修的模型,
               // 不更新的话,切模型后立即选推理档会作用到上一份快照里的旧模型。
               state.currentModel = { provider: entry.provider, model: entry.model };
@@ -260,8 +265,10 @@ export function createComposerDock({ elements, deps, state, showToast, format })
 
   async function refreshPresetMenu() {
     if (!state.sessionId) return;
+    const generation = ++presetLoadGeneration;
     try {
       const value = await deps.sessions.listAgentPresets();
+      if (generation !== presetLoadGeneration) return;
       const presets = value?.presets ?? [];
       presetRoster = presets;
       if (!presets.length) { elements.presetBtn.hidden = true; return; }

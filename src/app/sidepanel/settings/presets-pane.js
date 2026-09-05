@@ -14,6 +14,7 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
   let writable = false;
   let loading = true;
   let loadError = null;
+  let loadGeneration = 0;
 
   function renderPresetRow(preset) {
     const isDefault = preset.id === defaultId || preset.isDefault === true;
@@ -117,12 +118,14 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
   }
 
   async function refresh() {
+    const generation = ++loadGeneration;
     loading = true; loadError = null; render();
     try {
       const [list, describe] = await Promise.all([
         settingsService.presetList(),
         settingsService.describe().catch(() => null)
       ]);
+      if (generation !== loadGeneration) return;
       presets = list?.presets ?? [];
       writable = describe?.writable === true;
       const namespace = (describe?.namespaces ?? []).find((entry) => entry.ns === "agent-presets");
@@ -132,8 +135,10 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
         : presets.find((preset) => preset.isDefault)?.id ?? null;
       loadError = null;
     } catch (error) {
+      if (generation !== loadGeneration) return;
       loadError = deps.formatErrorDetails(error);
     } finally {
+      if (generation !== loadGeneration) return;
       loading = false;
       render();
     }

@@ -3,6 +3,8 @@
 import { createApiClient, DshRpcError, DshTransportError } from "./api-client.js";
 import { createDownlink, DshStreamState } from "./downlink.js";
 import { applyFenceRules, clearFenceRules } from "./fence-rules.js";
+import { installSessionCookie } from "./session-cookie.js";
+import { ensureServerRunning } from "./native-supervisor.js";
 
 export { DshRpcError, DshTransportError, DshStreamState };
 
@@ -15,9 +17,29 @@ export function createDshConnection(options) {
   let backendUrl = options.baseUrl || null;
   let api = null;
   let downlink = null;
+  const subscriptions = new Map();
   // 下行流是否已经开过。不能拿 api/downlink 是否为空来推断:setBackendUrl 会在
   // 启动前就把两者建好,那时流还没开,而 `!api` 的守卫已经不成立了。
   let started = false;
+  let authPromise = null;
+
+  async function ensureAuth() {
+    if (!authPromise) {
+      authPromise = (async () => {
+        await ensureServerRunning("web", { backendUrl });
+        return installSessionCookie(backendUrl);
+      })().catch((error) => {
+        authPromise = null;
+        throw error;
+      });
+    }
+    return authPromise;
+  }
+
+  async function refreshAuth() {
+    authPromise = null;
+    return ensureAuth();
+  }
 
   const onFrame = (frame, stream) => {
     for (const listener of frameListeners) listener(frame, stream);
@@ -25,14 +47,20 @@ export function createDshConnection(options) {
 
   async function ensureStarted() {
     if (!backendUrl) backendUrl = await settings.getBackendUrl();
+    await ensureAuth();
     if (!api) {
-      api = createApiClient({ baseUrl: backendUrl, fetch: options.fetch });
+      api = createApiClient({ baseUrl: backendUrl, fetch: options.fetch, onUnauthorized: refreshAuth });
       downlink = createDownlink({
         apiClient: api,
         onFrame,
         onStateChange: options.onStateChange,
-        onGenerationReady: options.onGenerationReady
+        onGenerationReady: options.onGenerationReady,
+        recoverConnection: async () => {
+          await ensureServerRunning("web", { backendUrl });
+          return refreshAuth();
+        }
       });
+      for (const sub of subscriptions.values()) downlink.subscribe(sub.streamId, sub.endpoint, sub.args);
       if (dnr) await applyFenceRules(dnr, backendUrl);
     }
     if (!started) {
@@ -47,18 +75,28 @@ export function createDshConnection(options) {
       await ensureStarted();
       return api.call(method, payload, timeoutMs);
     },
-    async respond(rpcId, result) {
+    async settleRemoteEvent(clientId, eventId, outcome) {
       await ensureStarted();
-      return api.respond(rpcId, result);
+      return api.settleRemoteEvent(clientId, eventId, outcome);
     },
     onFrame(listener) {
       frameListeners.add(listener);
       return () => frameListeners.delete(listener);
     },
+    subscribe(streamId, endpoint, args = {}) {
+      const sub = { streamId, endpoint, args };
+      subscriptions.set(streamId, sub);
+      downlink?.subscribe(streamId, endpoint, args);
+    },
+    unsubscribe(streamId) {
+      subscriptions.delete(streamId);
+      downlink?.unsubscribe(streamId);
+    },
     get streamState() {
       return downlink?.state ?? DshStreamState.DISCONNECTED;
     },
-    // 应用层请求重建连接(stream/error 帧):委托给 downlink 的退避重连。
+    // 应用层显式请求重建整条 mux 时使用；单个逻辑流 error 不应走这里，
+    // 否则一个永久不可用的 endpoint 会拖着所有健康流进入重连风暴。
     forceReconnect() {
       downlink?.forceReconnect?.();
     },
@@ -72,13 +110,20 @@ export function createDshConnection(options) {
       const hadStarted = started;
       downlink?.stop();
       backendUrl = normalized;
-      api = createApiClient({ baseUrl: normalized, fetch: options.fetch });
+      authPromise = null;
+      await ensureAuth();
+      api = createApiClient({ baseUrl: normalized, fetch: options.fetch, onUnauthorized: refreshAuth });
       downlink = createDownlink({
         apiClient: api,
         onFrame,
         onStateChange: options.onStateChange,
-        onGenerationReady: options.onGenerationReady
+        onGenerationReady: options.onGenerationReady,
+        recoverConnection: async () => {
+          await ensureServerRunning("web", { backendUrl });
+          return refreshAuth();
+        }
       });
+      for (const sub of subscriptions.values()) downlink.subscribe(sub.streamId, sub.endpoint, sub.args);
       if (dnr) await applyFenceRules(dnr, normalized);
       if (hadStarted) downlink.start();
       return normalized;
@@ -90,6 +135,7 @@ export function createDshConnection(options) {
       api = null;
       downlink = null;
       started = false;
+      authPromise = null;
     },
     ensureStarted
   });

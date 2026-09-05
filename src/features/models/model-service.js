@@ -1,5 +1,6 @@
-// 模型目录:llm.models 全量 + session.models 当前会话可路由模型/当前选择。
-// 选择写回走 session.selectModel(provider, model, reasoningEffort?)。
+// 模型目录:session/modelCatalog 全量；当前选择由 session/control 投影提供。
+// 选择写回走 session/selectModel(provider, model, reasoningEffort?)。
+import { RPC } from "../../platform/dsh/rpc-methods.js";
 export function flattenModelGroups(groups) {
   const models = [];
   for (const group of groups ?? []) {
@@ -16,25 +17,29 @@ export function findModel(models, provider, modelId) {
 
 export function createModelService(connection) {
   let catalog = [];
+  let refreshGeneration = 0;
   const listeners = new Set();
 
   return {
     get catalog() { return catalog; },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     async refresh() {
-      const value = await connection.call("llm.models", {});
+      const generation = ++refreshGeneration;
+      const value = await connection.call(RPC.sessionModels, {});
+      if (generation !== refreshGeneration) return catalog;
       catalog = flattenModelGroups(value.groups);
       for (const listener of listeners) listener(catalog, value.failures);
       return catalog;
     },
     // 当前会话模型状态:{current, routable, groups, failures}
     async sessionModels(sessionId) {
-      return connection.call("session.models", { sessionId });
+      const value = await connection.call(RPC.sessionModels, {});
+      return { ...value, current: null };
     },
     async select(sessionId, provider, model, reasoningEffort) {
-      return connection.call("session.selectModel", {
+      return connection.call(RPC.sessionSelectModel, { request: {
         sessionId, provider, model, ...(reasoningEffort ? { reasoningEffort } : {})
-      });
+      } });
     }
   };
 }

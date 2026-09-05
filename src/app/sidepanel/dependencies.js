@@ -21,23 +21,33 @@ export function createSidepanelDependencies(options = {}) {
   const lifecycle = {};
   const connection = options.connection || createDshConnection({
     settings,
-    onGenerationReady: () => { void lifecycle.sessions?.resync?.(); }
+    onGenerationReady: () => {
+      lifecycle.sessions?.generationOpened?.();
+      void lifecycle.sessions?.refreshList?.();
+    }
   });
   // 后台会话失败提醒:service worker 的轮询只报"完成",失败细节只存在于
   // 被丢弃的 turn/end 帧里,所以由侧栏的帧偷看喂给系统通知。
   const notifier = options.notifier
     || createBackgroundNotifier({ notifications: globalThis.chrome?.notifications, settings });
+  let sessions = options.sessions || null;
+  const workspaces = options.workspaces || createWorkspaceService(connection, {
+    onArchivedChange: (ids) => sessions?.setArchivedSessionIds?.(ids)
+  });
+  sessions ||= (lifecycle.sessions = createSessionService(connection, {
+    onBackgroundTurnFailure: (sessionId, message) => notifier.reportFailure(sessionId, message)
+  }));
+  lifecycle.sessions ||= sessions;
+  sessions.setArchivedSessionIds?.(workspaces.archivedSessionIds ?? []);
 
   return Object.freeze({
     settings,
     connection,
-    sessions: options.sessions || (lifecycle.sessions = createSessionService(connection, {
-      onBackgroundTurnFailure: (sessionId, message) => notifier.reportFailure(sessionId, message)
-    })),
+    sessions,
     models: options.models || createModelService(connection),
     skills: options.skills || createSkillService(connection),
     commands: options.commands || createCommandService(connection),
-    workspaces: options.workspaces || createWorkspaceService(connection),
+    workspaces,
     references: options.references || createReferenceService(connection),
     goals: options.goals || createGoalService(connection),
     // '@' 浮层的额外候选来源(可插拔契约,见 trigger-menu.js 的 extraSources)。

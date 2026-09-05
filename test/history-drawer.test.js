@@ -24,6 +24,7 @@ function setup({ sessions = SESSIONS } = {}) {
   // jsdom 没实现 scrollIntoView。
   dom.window.Element.prototype.scrollIntoView = function () {};
   const openSession = vi.fn();
+  const newSession = vi.fn();
   const deps = {
     sessions: {
       refreshList: vi.fn(async () => sessions),
@@ -34,8 +35,8 @@ function setup({ sessions = SESSIONS } = {}) {
     },
     formatErrorDetails: (e) => String(e)
   };
-  const drawer = mountHistoryDrawer(deps, openSession, vi.fn(), null, { workspacePath: () => null });
-  return { drawer, doc, openSession, deps, dom };
+  const drawer = mountHistoryDrawer(deps, openSession, newSession, null, { workspacePath: () => null });
+  return { drawer, doc, openSession, newSession, deps, dom };
 }
 
 const rows = (doc) => [...doc.querySelectorAll(".history-item")];
@@ -80,6 +81,27 @@ describe("历史行内操作图标", () => {
       expect(button.getAttribute("aria-label")).toBeTruthy();
       expect(button.getAttribute("type")).toBe("button");
     }
+  });
+
+  it("归档当前会话后进入新会话，不停在已消失的转录", async () => {
+    const { drawer, doc, deps, newSession, dom } = setup();
+    await drawer.refresh();
+    drawer.setActive("s1", "第一个");
+    doc.querySelector('[data-session-id="s1"] button[data-action="archive"]')
+      .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await vi.waitFor(() => expect(deps.sessions.archive).toHaveBeenCalledWith("s1"));
+    await vi.waitFor(() => expect(newSession).toHaveBeenCalledTimes(1));
+  });
+
+  it("归档非当前会话只刷新列表", async () => {
+    const { drawer, doc, deps, newSession, dom } = setup();
+    await drawer.refresh();
+    drawer.setActive("s1", "第一个");
+    doc.querySelector('[data-session-id="s2"] button[data-action="archive"]')
+      .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await vi.waitFor(() => expect(deps.sessions.archive).toHaveBeenCalledWith("s2"));
+    expect(newSession).not.toHaveBeenCalled();
+    expect(deps.sessions.refreshList).toHaveBeenCalledTimes(2);
   });
 });
 

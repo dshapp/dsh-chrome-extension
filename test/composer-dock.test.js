@@ -31,8 +31,7 @@ function baseElements() {
 
 function setup(sessionModels) {
   const call = vi.fn(async (method) => {
-    if (method === "session.models") return sessionModels;
-    if (method === "session.selectModel") return {};
+    if (method === "session/selectModel") return {};
     return {};
   });
   const elements = baseElements();
@@ -40,10 +39,10 @@ function setup(sessionModels) {
   const deps = {
     connection: { call },
     commands: { execute: vi.fn() },
-    sessions: { listStore: { get: () => [] }, getRuntimeSnapshot: () => ({}) }
+    sessions: { models: vi.fn().mockResolvedValue(sessionModels), listStore: { get: () => [] }, getRuntimeSnapshot: () => ({}) }
   };
   const dock = createComposerDock({ elements, deps, state, showToast: vi.fn(), format: (e) => String(e) });
-  return { dock, call, elements, state };
+  return { dock, call, elements, state, deps };
 }
 
 const FIXTURE = {
@@ -69,9 +68,9 @@ describe("composer-dock 模型与推理档", () => {
     m2.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await flush();
 
-    const modelCall = call.mock.calls.find(([m]) => m === "session.selectModel");
+    const modelCall = call.mock.calls.find(([m]) => m === "session/selectModel");
     expect(modelCall).toBeTruthy();
-    expect(modelCall[1]).toMatchObject({ provider: "p1", model: "m2" });
+    expect(modelCall[1].request).toMatchObject({ provider: "p1", model: "m2" });
     expect(elements.modelLabel.textContent).toBe("Model 2");
 
     // 再点击推理档 high:必须作用在刚选的 m2 上,而不是旧模型 m1
@@ -80,9 +79,26 @@ describe("composer-dock 模型与推理档", () => {
     high.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await flush();
 
-    const effortCall = call.mock.calls.find(([m, p]) => m === "session.selectModel" && p?.reasoningEffort);
+    const effortCall = call.mock.calls.find(([m, p]) => m === "session/selectModel" && p?.request?.reasoningEffort);
     expect(effortCall).toBeTruthy();
-    expect(effortCall[1]).toMatchObject({ provider: "p1", model: "m2", reasoningEffort: "high" });
+    expect(effortCall[1].request).toMatchObject({ provider: "p1", model: "m2", reasoningEffort: "high" });
+  });
+
+  it("同一会话的旧模型目录响应不能覆盖后发刷新", async () => {
+    const { dock, elements, deps } = setup(FIXTURE);
+    let resolveOld;
+    let resolveNew;
+    deps.sessions.models
+      .mockReset()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve; }));
+    const oldRequest = dock.refreshModelMenu();
+    const newRequest = dock.refreshModelMenu();
+    resolveNew({ ...FIXTURE, current: { provider: "p1", model: "m2" } });
+    await newRequest;
+    resolveOld(FIXTURE);
+    await oldRequest;
+    expect(elements.modelLabel.textContent).toBe("Model 2");
   });
 });
 
@@ -117,5 +133,34 @@ describe("composer-dock 预设菜单", () => {
     elements.presetMenu.querySelector('[data-item-id="a"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await flush();
     expect(selectAgentPreset).toHaveBeenLastCalledWith("s1", "a");
+  });
+
+  it("较早的预设列表响应晚到时不会覆盖较新的列表", async () => {
+    let resolveOld;
+    let resolveNew;
+    const elements = baseElements();
+    const state = { sessionId: "s1", currentModel: null };
+    const listAgentPresets = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve; }));
+    const deps = {
+      connection: { call: vi.fn(async () => ({})) },
+      commands: { execute: vi.fn() },
+      sessions: {
+        listAgentPresets,
+        selectAgentPreset: vi.fn(),
+        listStore: { get: () => [{ sessionId: "s1", agentPreset: "new" }] },
+        getRuntimeSnapshot: () => ({ agentPreset: "new" })
+      }
+    };
+    const dock = createComposerDock({ elements, deps, state, showToast: vi.fn(), format: String });
+    const oldRequest = dock.refreshPresetMenu();
+    const newRequest = dock.refreshPresetMenu();
+    resolveNew({ presets: [{ id: "new", name: "New" }] });
+    await newRequest;
+    resolveOld({ presets: [{ id: "old", name: "Old" }] });
+    await oldRequest;
+    expect(elements.presetLabel.textContent).toBe("New");
+    expect(elements.presetMenu.querySelector('[data-item-id="old"]')).toBeNull();
   });
 });

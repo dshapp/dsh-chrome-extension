@@ -23,7 +23,7 @@ export const NO_REPOSITORY = Object.freeze({
   upstream: null
 });
 
-/// 解析 `git diff --numstat`。
+/// 解析 `git diff --numstat -z`；也兼容旧的换行格式，方便已有调用与测试。
 ///
 /// 二进制文件 git 用 `-\t-` 表示「没有 diff 内容」,不能当 0 行处理 —— 那会让
 /// 一个二进制改动在计数上凭空消失。这里单独标记并计入 changedFiles。
@@ -31,9 +31,17 @@ export function parseNumstat(stdout) {
   let added = 0;
   let removed = 0;
   let files = 0;
-  for (const line of String(stdout ?? "").split("\n")) {
-    if (!line.trim()) continue;
-    const [a, r] = line.split("\t");
+  const text = String(stdout ?? "");
+  const records = text.includes("\0") ? text.split("\0") : text.split("\n");
+  for (let index = 0; index < records.length; index += 1) {
+    const header = records[index];
+    if (!header) continue;
+    const fields = header.split("\t");
+    if (fields.length < 3) continue;
+    const [a, r] = fields;
+    // `-z` 的 rename/copy 记录把 header path 留空，随后分别给出旧、新路径。
+    // 摘要只计文件数，无需保留路径，但仍必须消费两个字段，避免把它们误当记录。
+    if (text.includes("\0") && fields.slice(2).join("\t") === "") index += 2;
     files += 1;
     if (a === "-" || r === "-") continue; // 二进制:计文件数,不计行数
     added += Number.parseInt(a, 10) || 0;
@@ -120,7 +128,7 @@ export function createGitSummaryReader(client) {
       // 其余读取互不依赖,并发发出:串行会让切换会话时入口明显迟滞。
       const [statusOut, numstatOut, branchesOut, gitDirOut] = await Promise.all([
         read(cwd, ["status", "--porcelain=v2", "--branch"]),
-        read(cwd, ["diff", "--numstat"]),
+        read(cwd, ["diff", "--numstat", "-z"]),
         read(cwd, ["branch", "--format=%(refname:short)"]),
         read(cwd, ["rev-parse", "--git-dir"])
       ]);

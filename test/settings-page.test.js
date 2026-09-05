@@ -38,13 +38,13 @@ function stubDeps(overrides = {}) {
     calls.push([method, payload]);
     if (overrides.fail?.[method]) throw new Error(overrides.fail[method]);
     switch (method) {
-      case "settings.describe":
+      case "settings/describe":
         return { namespaces: overrides.namespaces ?? NAMESPACES, writable: overrides.writable ?? true, hasDocument: true };
-      case "settings.mutate":
-      case "settings.update":
+      case "settings/mutate":
+      case "settings/update":
         return { ns: payload.ns, revision: 99, value: {}, user: {}, base: {} };
-      case "settings.openDocument": return { opened: true };
-      case "agentPreset.list":
+      case "settings/openSettingsDocument": return { opened: true };
+      case "agentPresets/list":
         return {
           authorable: true,
           presets: [
@@ -53,24 +53,25 @@ function stubDeps(overrides = {}) {
             { id: "mine", trust: "user", name: "我的预设", description: "d3" }
           ]
         };
-      case "agentPreset.read": return { agentPreset: payload.agentPreset, content: "plugins:\n  - a" };
-      case "llm.providers":
+      case "agentPresets/read": return { agentPreset: payload.agentPreset, content: "plugins:\n  - a" };
+      case "llm/listConfigurableProviders":
         return {
           providers: [
             { provider: "deepseek-official", displayName: "DeepSeek", settingsNs: "llm-deepseek", settingsPath: [] },
             { provider: "acme", displayName: "Acme", settingsNs: "llm-pi-ai", settingsPath: ["providers", "acme"] }
           ]
         };
-      case "credentials.describe":
-        return { credentials: { DEEPSEEK_API_KEY: { configured: true, writable: true } } };
-      case "credentials.set": return {};
+      case "llm/listProviders": return [{ id: "deepseek-official" }, { id: "acme" }];
+      case "credentials/describe":
+        return { DEEPSEEK_API_KEY: { configured: true, writable: true } };
+      case "credentials/set": return {};
       case "pluginInventory/list":
+        if (overrides.pluginInventory) return overrides.pluginInventory();
         return { entries: [
           { entryId: "include:llm", moduleName: "@deepseek-ai/dsh-llm", enabled: true, fiberPhase: "active" },
           { entryId: "include:hmr", moduleName: "@deepseek-ai/cordis-plugin-hmr", enabled: false, fiberPhase: null }
         ] };
-      case "llm.discoverModels": return { models: overrides.discovered ?? [] };
-      case "host.describe": return { home: "/Users/u", version: "1.2.3" };
+      case "llm/discoverModels": return { models: overrides.discovered ?? [] };
       default: return {};
     }
   });
@@ -91,6 +92,7 @@ function stubDeps(overrides = {}) {
         setNotificationsEnabled: vi.fn().mockResolvedValue(undefined)
       },
       models: { refresh: vi.fn().mockResolvedValue([]) },
+      sessions: { hostHome: "/Users/u" },
       setLang: vi.fn(),
       getLang: () => "zh",
       formatErrorDetails: (error) => String(error?.message ?? error),
@@ -235,7 +237,7 @@ describe("通用 pane", () => {
     select.value = "danger-full-access";
     select.dispatchEvent(new Event("change"));
     await flush(); await flush();
-    const mutate = calls.find(([method, payload]) => method === "settings.mutate" && payload.ns === "permission");
+    const mutate = calls.find(([method, payload]) => method === "settings/mutate" && payload.ns === "permission");
     expect(mutate[1]).toMatchObject({
       ns: "permission",
       ops: [{ op: "set", path: ["defaultPreset"], value: "danger-full-access" }],
@@ -249,7 +251,7 @@ describe("通用 pane", () => {
     select.value = "steer";
     select.dispatchEvent(new Event("change"));
     await flush(); await flush();
-    expect(calls.find(([m, p]) => m === "settings.mutate" && p.ns === "ui-conversation")[1].ops)
+    expect(calls.find(([m, p]) => m === "settings/mutate" && p.ns === "ui-conversation")[1].ops)
       .toEqual([{ op: "set", path: ["busyEnter"], value: "steer" }]);
   });
 
@@ -260,7 +262,7 @@ describe("通用 pane", () => {
     select.dispatchEvent(new Event("change"));
     await flush(); await flush();
     expect(deps.setLang).toHaveBeenCalledWith("en");
-    expect(calls.find(([m, p]) => m === "settings.mutate" && p.ns === "locale")).toBeTruthy();
+    expect(calls.find(([m, p]) => m === "settings/mutate" && p.ns === "locale")).toBeTruthy();
   });
 
   it("通知开关写扩展本地存储,不打宿主", async () => {
@@ -339,7 +341,7 @@ describe("模型 pane", () => {
     input.dispatchEvent(new Event("input"));
     document.querySelector("#prov-save").click();
     await flush(); await flush(); await flush();
-    const mutate = calls.find(([m, p]) => m === "settings.mutate" && p.ns === "llm-deepseek");
+    const mutate = calls.find(([m, p]) => m === "settings/mutate" && p.ns === "llm-deepseek");
     expect(mutate[1].ops).toEqual([{ op: "set", path: ["baseURL"], value: "https://x/v1" }]);
   });
 
@@ -404,16 +406,16 @@ describe("模型 pane", () => {
     typeInto("#cst-baseurl", "https://gw/v1");
     typeInto("#cst-key", "sk-1");
     // 防抖窗口内不该发请求。
-    expect(calls.some(([m]) => m === "llm.discoverModels")).toBe(false);
+    expect(calls.some(([m]) => m === "llm/discoverModels")).toBe(false);
     await settle(800);
-    expect(calls.some(([m]) => m === "llm.discoverModels")).toBe(true);
+    expect(calls.some(([m]) => m === "llm/discoverModels")).toBe(true);
   });
 
   it("自定义提供方:只填地址不填密钥不会自动拉取", async () => {
     const { calls } = await openCustomSheet();
     typeInto("#cst-baseurl", "https://gw/v1");
     await settle(800);
-    expect(calls.some(([m]) => m === "llm.discoverModels")).toBe(false);
+    expect(calls.some(([m]) => m === "llm/discoverModels")).toBe(false);
   });
 
   it("自定义提供方:拉到列表后模型 ID 只剩下拉框,文本框和拉取按钮都消失", async () => {
@@ -462,8 +464,8 @@ describe("模型 pane", () => {
     document.querySelector("#cst-save").click();
     await flush(); await flush(); await flush();
 
-    expect(calls.find(([m]) => m === "settings.update")).toBeUndefined();
-    const mutate = calls.find(([m, p]) => m === "settings.mutate" && p.ns === "llm-pi-ai");
+    expect(calls.find(([m]) => m === "settings/update")).toBeUndefined();
+    const mutate = calls.find(([m, p]) => m === "settings/mutate" && p.ns === "llm-pi-ai");
     expect(mutate[1].ops).toEqual([
       { op: "set", path: ["providers", "acme2"], value: expect.objectContaining({ baseURL: "https://gw/v1" }) }
     ]);
@@ -472,7 +474,7 @@ describe("模型 pane", () => {
   });
 
   it("目录加载失败时给出重试", async () => {
-    await open({ fail: { "llm.providers": "网络断了" } });
+    await open({ fail: { "llm/listConfigurableProviders": "网络断了" } });
     clickTab("models");
     await flush(); await flush(); await flush();
     expect(document.querySelector("#prov-retry")).toBeTruthy();
@@ -524,7 +526,7 @@ describe("预设 pane", () => {
     await flush(); await flush(); await flush();
     document.querySelector("#pset-row-standard").click();
     await flush(); await flush(); await flush();
-    const mutate = calls.find(([m, p]) => m === "settings.mutate" && p.ns === "agent-presets");
+    const mutate = calls.find(([m, p]) => m === "settings/mutate" && p.ns === "agent-presets");
     expect(mutate[1].ops).toEqual([{ op: "set", path: ["default"], value: "standard" }]);
   });
 
@@ -596,7 +598,7 @@ describe("插件 pane", () => {
     expect(document.querySelector("#plug-save-shell").disabled).toBe(false);
     document.querySelector("#plug-save-shell").click();
     await flush(); await flush(); await flush();
-    const mutate = calls.find(([m, p]) => m === "settings.mutate" && p.ns === "shell");
+    const mutate = calls.find(([m, p]) => m === "settings/mutate" && p.ns === "shell");
     expect(mutate[1]).toMatchObject({
       ops: [{ op: "set", path: ["timeoutMs"], value: 30000 }],
       expectedRevision: 4
@@ -650,6 +652,30 @@ describe("插件 pane", () => {
     expect(pane.textContent).toContain("cordis-plugin-hmr");
     expect(pane.textContent).not.toContain("dsh-llm");
   });
+
+  it("较早的插件清单响应晚到时不会覆盖较新的列表", async () => {
+    let resolveOld;
+    let resolveNew;
+    const pluginInventory = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve; }));
+    await open({ pluginInventory });
+    clickTab("plugins");
+    await flush(); await flush();
+    document.querySelector('[data-subtab="inventory"]').click();
+    await flush();
+    // 加载尚未完成时切回再进，制造第二个 inventory 请求。
+    document.querySelector('[data-subtab="configurable"]').click();
+    document.querySelector('[data-subtab="inventory"]').click();
+    await vi.waitFor(() => expect(pluginInventory).toHaveBeenCalledTimes(2));
+    resolveNew({ entries: [{ entryId: "new", moduleName: "new-plugin", enabled: true }] });
+    await flush(); await flush();
+    resolveOld({ entries: [{ entryId: "old", moduleName: "old-plugin", enabled: true }] });
+    await flush(); await flush();
+    const pane = document.querySelector("#settings-pane-plugins");
+    expect(pane.textContent).toContain("new-plugin");
+    expect(pane.textContent).not.toContain("old-plugin");
+  });
 });
 
 describe("服务端 pane", () => {
@@ -697,9 +723,9 @@ describe("服务端 pane", () => {
     await flush(); await flush(); await flush();
     document.querySelector("#srv-view-log").click();
     await flush(); await flush();
-    const opened = calls.filter(([m]) => m === "host.openPath");
+    const opened = calls.filter(([m]) => m === "session/openWorkspacePath");
     expect(opened.length).toBe(1);
-    expect(opened[0][1]).toEqual({ path: "/Users/user/Library/Logs/DSHMac/dsh-web.log" });
+    expect(opened[0][1]).toEqual({ request: { path: "/Users/user/Library/Logs/DSHMac/dsh-web.log" } });
   });
 
   it("启动器没装时,日志行不画(不编造路径)", async () => {
@@ -864,9 +890,9 @@ describe("服务端 pane", () => {
     await flush(); await flush(); await flush();
     document.querySelector("#srv-reveal-home").click();
     await flush(); await flush();
-    const opened = calls.filter(([m]) => m === "host.openPath");
+    const opened = calls.filter(([m]) => m === "session/openWorkspacePath");
     expect(opened.length).toBe(1);
-    expect(opened[0][1]).toEqual({ path: "/Users/u" });
+    expect(opened[0][1]).toEqual({ request: { path: "/Users/u" } });
     expect(deps).toBeTruthy();
   });
 });
@@ -899,11 +925,11 @@ describe("模型目录变更的同步与发现", () => {
     document.querySelector("#cat-fetch").click();
     await flush(); await flush(); await flush();
 
-    const discover = calls.find(([m]) => m === "llm.discoverModels");
+    const discover = calls.find(([m]) => m === "llm/discoverModels");
     expect(discover).toBeTruthy();
-    expect(discover[1].api).toBe("openai-chat");
-    expect(discover[1].provider).toBe("acme");
-    expect(discover[1].baseURL).toBe("https://acme/v1");
+    expect(discover[1].request.api).toBe("openai-chat");
+    expect(discover[1].request.provider).toBe("acme");
+    expect(discover[1].request.baseURL).toBe("https://acme/v1");
   });
 
   it("保存提供方后通知外部刷新对话框的模型菜单", async () => {

@@ -1,7 +1,7 @@
 // E2E 2:真实交互往返。让 agent 真的发起审批与提问,用重写后的卡片逻辑应答,
 // 验证宿主接受我们的应答格式(accepted:true)且 turn 能继续推进。
 import assert from "node:assert/strict";
-import { rpc, respond, openDownlink, waitFor, sleep } from "./harness.mjs";
+import { connection, openDownlink, waitFor, sleep } from "./harness.mjs";
 import { createSessionService } from "../../src/features/sessions/session-service.js";
 import { createCommandService } from "../../src/features/commands/command-service.js";
 import {
@@ -11,32 +11,31 @@ import {
 } from "../../src/features/interactions/interaction-flow.js";
 import { toolRowModel } from "../../src/features/chat/tool-row-model.js";
 
-const CWD = "/Users/user/dshmac/extension/dsh-chrome";
+const CWD = process.cwd();
 const results = [];
 const check = (name, fn) => {
   try { fn(); results.push(["PASS", name]); }
   catch (e) { results.push(["FAIL", name, e.message]); }
 };
 const t = (k, p) => (k === "approval.escalation" ? ("工具 " + p.tool + " 请求越权执行") : k);
-const connection = { call: rpc, respond: async () => ({ accepted: true }) };
-
 async function runCase({ promptText, permission, handle }) {
   const service = createSessionService(connection);
-  const sessionId = (await rpc("session.create", { cwd: CWD })).sessionId;
+  const sessionId = await service.create({ cwd: CWD });
   const dl = openDownlink((frame, stream) => {
-    if (stream === "mux") service.handleMuxFrame(frame); else service.handleHostFrame(frame);
+    if (stream === "mux") service.handleMuxFrame(frame);
   });
   await dl.ready;
   await service.open(sessionId, { cwd: CWD });
   if (permission) {
     // 权限切换必须走 commands/execute(斜杠命令通道),当普通 prompt 发是无效的。
-    await createCommandService({ call: rpc }).execute(sessionId, permission);
+    await createCommandService(connection).execute(sessionId, permission);
     await sleep(2000);
   }
   await service.prompt(sessionId, [{ type: "text", text: promptText }]);
   const out = await handle(service, sessionId);
   dl.close();
-  await rpc("session.cancel", { sessionId }).catch(() => {});
+  await service.cancel(sessionId).catch(() => {});
+  await service.archive(sessionId).catch(() => {});
   return out;
 }
 
@@ -51,7 +50,7 @@ try {
       });
       const presentation = resolveApprovalPresentation(approval, service.store, t);
       const takeover = resolveTakeover({ question: service.getRuntimeSnapshot().pendingQuestion, approval });
-      const receipt = await respond(approval.rpcId, {
+      const receipt = await service.respondInteraction(approval.rpcId, {
         ok: true, value: { sessionId, approvalId: approval.approvalId, outcome: "allowed-once" }
       });
       await waitFor("审批被清空", () => !service.getRuntimeSnapshot().pendingApproval, { timeoutMs: 30000 });
@@ -98,7 +97,8 @@ try {
       const firstLabel = question.questions[0]?.options?.[0]?.label;
       const settled = flowChooseSettling(flow, firstLabel);
       const answers = flowAnswers(settled.state);
-      const receipt = await respond(question.rpcId, { ok: true, value: { sessionId, answer: { answers } } });
+      const receipt = await service.respondInteraction(question.rpcId,
+        { ok: true, value: { sessionId, answer: { answers } } });
       await waitFor("提问被清空", () => !service.getRuntimeSnapshot().pendingQuestion, { timeoutMs: 30000 });
       await waitFor("turn 结束", () => !service.getRuntimeSnapshot().running, { timeoutMs: 90000 });
       return { question, kind, takeover, answers, receipt, settled, snap: service.getRuntimeSnapshot() };

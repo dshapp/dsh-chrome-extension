@@ -46,23 +46,26 @@ export function apiKeyFailure(draft) {
   return null;
 }
 
-/// "128K" / "1M" / "8192" → token 数;无法识别返回 null。对齐 Mac parseCapacitySpelling。
+/// "128K" / "1M" / "8192" → token 数;无法识别返回 null。
+/// DSH 0.1.2 的模型设置契约使用十进制后缀：1K=1000、1M=1000000。
 export function parseCapacitySpelling(text) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return null;
   const match = /^(\d+(?:\.\d+)?)\s*([kKmM]?)$/.exec(trimmed);
   if (!match) return null;
-  const scale = match[2].toLowerCase() === "k" ? 1024 : match[2].toLowerCase() === "m" ? 1024 * 1024 : 1;
+  const scale = match[2].toLowerCase() === "k" ? 1_000 : match[2].toLowerCase() === "m" ? 1_000_000 : 1;
   const value = Number(match[1]) * scale;
   if (!Number.isFinite(value)) return null;
-  return Math.round(value);
+  const rounded = Math.round(value);
+  return Math.abs(value - rounded) < 1e-6 ? rounded : value;
 }
 
-/// token 数 → 展示拼写("131072" → "128K")。整除才折算,否则原样给数字。
+/// token 数 → 最短十进制后缀拼写（"128000" → "128K"）。整除才折算。
 export function formatCapacitySpelling(tokens) {
   if (tokens == null) return "";
-  if (tokens % (1024 * 1024) === 0) return `${tokens / (1024 * 1024)}M`;
-  if (tokens % 1024 === 0) return `${tokens / 1024}K`;
+  if (!Number.isInteger(tokens) || tokens <= 0) return String(tokens);
+  if (tokens % 1_000_000 === 0) return `${tokens / 1_000_000}M`;
+  if (tokens % 1_000 === 0) return `${tokens / 1_000}K`;
   return String(tokens);
 }
 
@@ -76,10 +79,14 @@ export function validateCatalogRows(rows) {
     seen.add(id);
     const name = String(row.name ?? "");
     if (name !== name.trim()) return { kind: "nameInvalid", index };
-    if (String(row.contextWindow ?? "").trim() && parseCapacitySpelling(row.contextWindow) == null) {
+    const contextWindow = parseCapacitySpelling(row.contextWindow);
+    if (String(row.contextWindow ?? "").trim()
+      && (!Number.isInteger(contextWindow) || contextWindow <= 0)) {
       return { kind: "contextInvalid", index };
     }
-    if (String(row.maxTokens ?? "").trim() && parseCapacitySpelling(row.maxTokens) == null) {
+    const maxTokens = parseCapacitySpelling(row.maxTokens);
+    if (String(row.maxTokens ?? "").trim()
+      && (!Number.isInteger(maxTokens) || maxTokens <= 0)) {
       return { kind: "maxTokensInvalid", index };
     }
   }
@@ -180,22 +187,48 @@ export function addableProviders(rows) {
 }
 
 export function createSettingsService(connection) {
+  // 同一 settings service 被多个 pane 共享；并发 describe/mutate 的回包可能乱序。
+  // 按宿主 revision 留住每个 namespace 的最新视图，旧回包只能返回较新缓存。
+  const newestNamespaces = new Map();
+  function rememberNamespace(view) {
+    if (!view?.ns) return view;
+    const current = newestNamespaces.get(view.ns);
+    if (!current || (view.revision ?? -1) >= (current.revision ?? -1)) {
+      newestNamespaces.set(view.ns, view);
+      return view;
+    }
+    return current;
+  }
+
+  async function providers() {
+    const [configurable, routed] = await Promise.all([
+      connection.call(RPC.llmConfigurableProviders, {}),
+      connection.call(RPC.llmProviders, {})
+    ]);
+    const active = new Set((Array.isArray(routed) ? routed : routed?.providers ?? []).map((item) => item.id ?? item.provider));
+    const rows = (Array.isArray(configurable) ? configurable : configurable?.providers ?? [])
+      .map((entry) => ({ ...entry, active: active.has(entry.provider), routable: active.has(entry.provider) }));
+    return { providers: rows };
+  }
   return {
     /// {namespaces:[{ns, revision, schema, value, base, user}], writable, hasDocument}
     async describe() {
-      return connection.call(RPC.settingsDescribe, {});
+      const value = await connection.call(RPC.settingsDescribe, {});
+      return { ...value, namespaces: (value?.namespaces ?? []).map(rememberNamespace) };
     },
     /// 整段 patch 写入(键是相对 ns 的路径,用 "/" 分隔)。
     async update(ns, patch, expectedRevision) {
-      return connection.call(RPC.settingsUpdate, {
+      const value = await connection.call(RPC.settingsUpdate, {
         ns, patch, ...(expectedRevision == null ? {} : { expectedRevision })
       });
+      return rememberNamespace(value);
     },
     /// 有序路径 op 写入。
     async mutate(ns, ops, expectedRevision) {
-      return connection.call(RPC.settingsMutate, {
+      const value = await connection.call(RPC.settingsMutate, {
         ns, ops, ...(expectedRevision == null ? {} : { expectedRevision })
       });
+      return rememberNamespace(value);
     },
     async openDocument() {
       return connection.call(RPC.settingsOpenDocument, {});
@@ -203,7 +236,7 @@ export function createSettingsService(connection) {
     async describeCredentials(refs) {
       if (!refs?.length) return {};
       const value = await connection.call(RPC.credentialsDescribe, { refs });
-      return value?.credentials ?? {};
+      return value ?? {};
     },
     async setCredential(ref, value) {
       return connection.call(RPC.credentialsSet, { ref, value });
@@ -212,20 +245,22 @@ export function createSettingsService(connection) {
       return connection.call(RPC.credentialsUnset, { ref });
     },
     async providers() {
-      return connection.call(RPC.llmProviders, {});
+      return providers();
     },
     async discoverModels({ settingsNs, provider, baseURL, api, apiKey }) {
       return connection.call(RPC.llmDiscoverModels, {
         settingsNs,
-        ...(provider ? { provider } : {}),
-        ...(baseURL ? { baseURL } : {}),
-        ...(api ? { api } : {}),
-        ...(apiKey ? { apiKey } : {})
+        request: {
+          ...(provider ? { provider } : {}),
+          ...(baseURL ? { baseURL } : {}),
+          ...(api ? { api } : {}),
+          ...(apiKey ? { apiKey } : {})
+        }
       });
     },
     /// 只读插件清单。远端端点固定收一个 args 对象。
     async pluginInventory() {
-      return connection.call(RPC.pluginInventoryList, { args: {} });
+      return connection.call(RPC.pluginInventoryList, {});
     },
     async presetList() {
       return connection.call(RPC.agentPresetList, {});
@@ -234,12 +269,10 @@ export function createSettingsService(connection) {
       return connection.call(RPC.agentPresetRead, { agentPreset });
     },
     async presetCopy(from, agentPreset, name) {
-      return connection.call(RPC.agentPresetCopy, {
-        from, agentPreset, ...(name ? { name } : {})
-      });
+      return connection.call(RPC.agentPresetCopy, { from, id: agentPreset });
     },
     async presetRemove(agentPreset) {
-      return connection.call(RPC.agentPresetRemove, { agentPreset });
+      return connection.call(RPC.agentPresetRemove, { id: agentPreset });
     },
     async presetOpenDocument(agentPreset) {
       return connection.call(RPC.agentPresetOpenDocument, { agentPreset });
@@ -249,7 +282,7 @@ export function createSettingsService(connection) {
     /// 凭证是"增强信息":读失败不该让整页变成错误页,只记 credentialError。
     async loadProviderRows() {
       const [providerResult, settingsResult] = await Promise.all([
-        connection.call(RPC.llmProviders, {}),
+        providers(),
         connection.call(RPC.settingsDescribe, {})
       ]);
       const namespaces = new Map(
@@ -275,7 +308,7 @@ export function createSettingsService(connection) {
       if (refs.length) {
         try {
           const value = await connection.call(RPC.credentialsDescribe, { refs });
-          const credentials = value?.credentials ?? {};
+          const credentials = value ?? {};
           for (const row of rows) {
             if (row.apiKeyEnv) row.credential = credentials[row.apiKeyEnv] ?? null;
           }

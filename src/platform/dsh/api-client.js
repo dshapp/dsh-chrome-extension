@@ -1,5 +1,5 @@
 // DSH API client:上行 HTTP POST /api/<method>(ClientRequest 信封,rpcId 关联),
-// /api/respond 回传审批/问答应答。协议:packages/host/apiproxy/src/api/rpc.ts。
+// `$events/result` 回传审批/问答应答。协议:packages/host/apiproxy/src/api/rpc.ts。
 import { toWebSocketUrl } from "../storage/settings.js";
 
 let rpcCounter = 0;
@@ -26,7 +26,7 @@ export function createApiClient(options) {
   const fetchImpl = options.fetch || ((...args) => fetch(...args));
   const mkId = options.makeRpcId || (() => `cm-dsh-${Date.now().toString(36)}-${++rpcCounter}`);
 
-  async function post(path, body, timeoutMs = 30000) {
+  async function post(path, body, timeoutMs = 30000, mayRetryAuth = true) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -34,8 +34,13 @@ export function createApiClient(options) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        credentials: "include",
         signal: options.makeSignal ? options.makeSignal(controller.signal) : controller.signal
       });
+      if (response.status === 401 && mayRetryAuth && await options.onUnauthorized?.()) {
+        clearTimeout(timer);
+        return post(path, body, timeoutMs, false);
+      }
       if (response.status === 403) {
         throw new DshTransportError("请求被 DSH 信任围栏拒绝(403):请确认 dsh web 正在运行且 DNR 规则生效");
       }
@@ -81,21 +86,31 @@ export function createApiClient(options) {
     webSocketUrl(path) {
       return toWebSocketUrl(baseUrl, path);
     },
-    async call(method, payload = {}, timeoutMs) {
+    async call(method, args = {}, timeoutMs) {
       const rpcId = mkId();
       const envelope = await post(`/api/${method}`, {
         type: "client-request",
         rpcId,
         method,
-        payload
+        payload: { args }
       }, timeoutMs);
       return parseServerResponse(envelope, rpcId);
     },
-    // 审批/问答应答:ClientResponse 信封,回显下行帧的 rpcId。
-    // 返回 RpcReceipt:{accepted:true} | {accepted:false, reason}。
-    async respond(rpcId, result) {
-      const receipt = await post("/api/respond", { type: "client-response", rpcId, result });
-      return receipt && typeof receipt === "object" ? receipt : { accepted: Boolean(receipt) };
+    async settleRemoteEvent(clientId, eventId, outcome) {
+      const method = "$events/result";
+      const rpcId = mkId();
+      const envelope = await post(`/api/${method}`, {
+        type: "client-request", rpcId, method,
+        payload: { args: { clientId, eventId, outcome } }
+      });
+      if (!envelope || envelope.type !== "server-response" || envelope.rpcId !== rpcId) {
+        throw new DshTransportError("DSH 响应信封无效");
+      }
+      if (!envelope.result?.ok && String(envelope.result?.error?.code ?? "").endsWith("bad-request")) {
+        const error = envelope.result.error;
+        throw new DshRpcError(error.code, error.message, error.details);
+      }
+      return envelope.result?.ok === true;
     },
     parseServerResponse
   });

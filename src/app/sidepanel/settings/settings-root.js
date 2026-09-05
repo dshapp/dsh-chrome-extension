@@ -84,7 +84,7 @@ export function mountSettings(deps, { onModelsChanged } = {}) {
     models: createModelsPane({
       host: view.querySelector("#settings-pane-models"), sheet, deps, settingsService, showToast,
       // 目录变了要同时刷两处:全局 llm.models 缓存,以及 composer 底栏那颗
-      // 模型菜单(它读的是 session.models,不订阅全局目录)。少刷后者的话,
+      // 模型菜单（它读的是 session/modelCatalog，不订阅设置页目录）。少刷后者的话,
       // 新配的提供方要等切会话/重开侧栏才出现在对话框下面。
       onModelsChanged: () => {
         deps.models.refresh().catch(() => {});

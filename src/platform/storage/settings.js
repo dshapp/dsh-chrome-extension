@@ -21,8 +21,9 @@ export function createSettings() {
     async getBackendUrl() {
       const area = await resolveArea();
       const value = await area.get([KEYS.backendUrl]);
-      const url = value?.[KEYS.backendUrl];
-      return typeof url === "string" && url ? url : DEFAULT_BACKEND_URL;
+      // 0.1.2 的浏览器会话 Cookie 与 authority 绑定；旧版保存的 localhost、
+      // 动态端口或远端地址不能复用，迁移时统一收敛到固定入口。
+      return DEFAULT_BACKEND_URL;
     },
     async setBackendUrl(url) {
       const normalized = normalizeBackendUrl(url);
@@ -59,7 +60,9 @@ export function normalizeBackendUrl(url) {
   parsed.hash = "";
   parsed.search = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-  return parsed.toString().replace(/\/+$/, "");
+  const normalized = parsed.toString().replace(/\/+$/, "");
+  if (normalized !== DEFAULT_BACKEND_URL) throw new Error(`DSH 0.1.2 requires ${DEFAULT_BACKEND_URL}`);
+  return normalized;
 }
 
 // 从后端 URL 推导 WS 地址(http→ws, https→wss)。

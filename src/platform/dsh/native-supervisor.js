@@ -79,4 +79,14 @@ export async function probeHost() {
   }
 }
 
+export async function requestSessionCookie(host = "127.0.0.1", port = 3080) {
+  if (!canCallNative()) return { ok: false, reason: "native-messaging-unavailable" };
+  try {
+    const reply = await chrome.runtime.sendNativeMessage(HOST_NAME, { cmd: "cookie", host, port });
+    return reply || { ok: false, reason: "empty-reply" };
+  } catch (error) {
+    return { ok: false, reason: String(error?.message || error || "native-call-failed") };
+  }
+}
+
 export const NATIVE_HOST_NAME = HOST_NAME;

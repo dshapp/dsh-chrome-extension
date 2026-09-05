@@ -62,11 +62,11 @@ export function createReferenceService(connection) {
   return {
     /// 宿主已按 query 做过匹配与排序,这里不再本地过滤。
     async files(sessionId, query) {
-      const value = await connection.call(REFERENCE_RPC.files, { args: { agentId: sessionId, query } });
+      const value = await connection.call(REFERENCE_RPC.files, { agentId: sessionId, query });
       return fileCandidates(Array.isArray(value) ? value : []);
     },
     async sessions(sessionId, query) {
-      const value = await connection.call(REFERENCE_RPC.sessions, { args: { agentId: sessionId, query } });
+      const value = await connection.call(REFERENCE_RPC.sessions, { agentId: sessionId, query });
       return sessionCandidates(Array.isArray(value) ? value : []);
     }
   };

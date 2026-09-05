@@ -61,6 +61,7 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
   let describe = null;
   let loadingCards = true;
   let cardsError = null;
+  let cardsLoadGeneration = 0;
 
   let inventory = [];
   let inventoryError = null;
@@ -68,6 +69,7 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
   let inventoryLoaded = false;
   let inventorySearch = "";
   let inventoryExpanded = null;
+  let inventoryLoadGeneration = 0;
   // 装 / 更 / 删经 daemon 代理。daemon 不可用(老版本、没跑、被关掉)时这些控件
   // 整体不渲染 —— 与"命名空间不被组装就不画卡片"同一条规则:一个点不动的按钮
   // 读起来像坏了,而不像"此部署没有它"。
@@ -353,33 +355,43 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
   }
 
   async function loadInventory() {
+    const generation = ++inventoryLoadGeneration;
     inventoryLoading = true; inventoryError = null; render();
     // 先探一次代理可用性,再决定要不要画那些按钮。清单本身来自 dsh web,
     // 与代理是两条独立链路 —— 代理不可用不该让清单也读不出来。
     await actionsUi.probe();
+    if (generation !== inventoryLoadGeneration) return;
     try {
       const value = await settingsService.pluginInventory();
+      if (generation !== inventoryLoadGeneration) return;
       inventory = value?.entries ?? [];
       inventoryLoaded = true;
     } catch (error) {
+      if (generation !== inventoryLoadGeneration) return;
       inventoryError = deps.formatErrorDetails(error);
     } finally {
+      if (generation !== inventoryLoadGeneration) return;
       inventoryLoading = false;
       render();
     }
   }
 
   async function refresh() {
+    const generation = ++cardsLoadGeneration;
     loadingCards = true; cardsError = null; render();
     try {
-      describe = await settingsService.describe();
+      const nextDescribe = await settingsService.describe();
+      if (generation !== cardsLoadGeneration) return;
+      describe = nextDescribe;
       // 干净的草稿丢弃重建,让卡片显示最新的宿主值;有未保存编辑的保留。
       for (const [ns, staged] of forms) {
         if (!staged.dirty) forms.delete(ns);
       }
     } catch (error) {
+      if (generation !== cardsLoadGeneration) return;
       cardsError = deps.formatErrorDetails(error);
     } finally {
+      if (generation !== cardsLoadGeneration) return;
       loadingCards = false;
       render();
     }

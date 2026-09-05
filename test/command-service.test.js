@@ -2,14 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import { createCommandService } from "../src/features/commands/command-service.js";
 
 describe("command-service", () => {
-  it("refresh 用 { args: { agentId } } 包装调用 commands/list,并缓存结果", async () => {
+  it("refresh 传 endpoint 参数并缓存结果", async () => {
     const call = vi.fn().mockResolvedValue([
       { name: "compact", description: "Compact older conversation history" },
       { name: "goal", description: "Set the session goal", input: { hint: "<text>" } }
     ]);
     const service = createCommandService({ call });
     const result = await service.refresh("session-1");
-    expect(call).toHaveBeenCalledWith("commands/list", { args: { agentId: "session-1" } });
+    expect(call).toHaveBeenCalledWith("commands/list", { agentId: "session-1" });
     expect(result).toHaveLength(2);
     expect(service.commands).toBe(result);
   });
@@ -29,7 +29,7 @@ describe("command-service", () => {
     // 真实网关按描述符逐字段校验:少 images 会报
     // 'args fields do not match the descriptor: missing "images"',每条斜杠命令都失败。
     expect(call).toHaveBeenCalledWith("commands/execute", {
-      args: { agentId: "session-1", line: "/compact", images: [] }
+      agentId: "session-1", line: "/compact", images: []
     });
     expect(execution).toEqual({ commandId: "c1", result: { kind: "success" } });
   });
@@ -40,7 +40,7 @@ describe("command-service", () => {
     const images = [{ data: "AAA", mediaType: "image/png" }];
     await service.execute("session-1", "/compact", images);
     expect(call).toHaveBeenCalledWith("commands/execute", {
-      args: { agentId: "session-1", line: "/compact", images }
+      agentId: "session-1", line: "/compact", images
     });
   });
 });

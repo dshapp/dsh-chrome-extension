@@ -74,6 +74,7 @@ export function createSessionStore() {
       goal: null,
       tokenUsage: null,
       permissions: null,
+      modelSelection: null,
       planMode: null,
       // 上下文压力:{ pressureTokens, projectedTokens, contextWindow }
       contextPressure: null,
@@ -1054,6 +1055,9 @@ export function createSessionStore() {
       case "permissions":
         state.permissions = isObject(value) ? value : null;
         break;
+      case "modelSelection":
+        state.modelSelection = isObject(value) ? value : null;
+        break;
       case "contextPressure":
         state.contextPressure = isObject(value) ? value : null;
         break;
@@ -1201,6 +1205,7 @@ export function createSessionStore() {
       goal: state.goal,
       tokenUsage: state.tokenUsage,
       permissions: state.permissions,
+      modelSelection: state.modelSelection,
       planMode: state.planMode,
       contextPressure: state.contextPressure,
       contextBreakdown: state.contextBreakdown,
@@ -1228,6 +1233,9 @@ export function createSessionStore() {
     setQuestion(question) { state.pendingQuestion = question ?? null; },
     setRunning(running) { state.running = Boolean(running); },
     setCwd(cwd) { state.cwd = cwd ?? null; },
+    // RPC 写回没有 projection seq，只更新派生标题，不能伪造一个无限大的
+    // projection 版本；否则宿主后续真实 title 投影会被永久判成旧帧。
+    setTitle(title) { if (typeof title === "string" && title) state.title = title; },
     setAgentPreset(preset) { state.agentPreset = preset ?? null; },
     /// 工具调用查找:审批卡要靠它拿到 bash 的 command。
     toolCall(callId) {

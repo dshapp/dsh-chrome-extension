@@ -4,75 +4,79 @@
 
 export const RPC = Object.freeze({
   // ---- session 生命周期 ----
-  sessionList: "session.list",
-  sessionSearch: "session.search",
-  sessionCreate: "session.create",
-  sessionHistory: "session.history",
-  sessionRename: "session.rename",
-  sessionFork: "session.fork",
-  sessionCancel: "session.cancel",
+  sessionList: "session/list",
+  sessionSearch: "session/search",
+  sessionCreate: "session/create",
+  sessionPage: "session/page",
+  sessionRename: "session/rename",
+  sessionFork: "session/fork",
+  sessionCancel: "session/cancel",
   // ---- 发送 / 队列 ----
-  sessionPrompt: "session.prompt",
-  sessionUpdateQueue: "session.updateQueue",
-  sessionAttachment: "session.attachment",
+  sessionPrompt: "session/prompt",
+  sessionUpdateQueue: "session/updateQueue",
+  sessionAttachment: "session/attachment",
   // ---- 模型 ----
-  sessionModels: "session.models",
-  sessionSelectModel: "session.selectModel",
-  llmProviders: "llm.providers",
-  llmModels: "llm.models",
+  sessionModels: "session/modelCatalog",
+  sessionSelectModel: "session/selectModel",
+  sessionCanOpenWorkspacePath: "session/canOpenWorkspacePath",
+  llmProviders: "llm/listProviders",
+  llmConfigurableProviders: "llm/listConfigurableProviders",
   // ---- workspace ----
-  workspaceList: "workspace.list",
-  workspaceCreate: "workspace.create",
-  workspaceRename: "workspace.rename",
-  workspaceDelete: "workspace.delete",
-  workspaceArchiveSession: "workspace.archiveSession",
+  workspaceCreate: "workspace/create",
+  workspaceRename: "workspace/rename",
+  workspaceDelete: "workspace/delete",
+  workspaceArchiveSession: "workspace/archiveSession",
   // 排序:beforeXxxId 省略即追加到末尾。前者排工作区本身,后者排某个工作区内的会话。
-  workspaceInsertBefore: "workspace.insertBefore",
-  workspaceInsertSessionBefore: "workspace.insertSessionBefore",
+  workspaceInsertBefore: "workspace/insertBefore",
+  workspaceInsertSessionBefore: "workspace/insertSessionBefore",
   // ---- host ----
-  hostDescribe: "host.describe",
-  hostListDirectory: "host.listDirectory",
-  hostCreateDirectory: "host.createDirectory",
-  hostOpenPath: "host.openPath",
+  hostOpenPath: "session/openWorkspacePath",
   // ---- 命令 / 技能 ----
   commandsList: "commands/list",
   commandsExecute: "commands/execute",
-  skillList: "skill.list",
+  skillList: "skills/list",
   // ---- agent preset ----
-  agentPresetList: "agentPreset.list",
-  agentPresetSelect: "agentPreset.select",
-  agentPresetRead: "agentPreset.read",
-  agentPresetCopy: "agentPreset.copy",
-  agentPresetRemove: "agentPreset.remove",
-  agentPresetOpenDocument: "agentPreset.openDocument",
+  agentPresetList: "agentPresets/list",
+  agentPresetSelect: "agentPresets/select",
+  agentPresetRead: "agentPresets/read",
+  agentPresetCopy: "agentPresets/copy",
+  agentPresetRemove: "agentPresets/deletePreset",
+  agentPresetOpenDocument: "settings/openAgentPresetDirectory",
   // ---- goal ----
-  goalCreate: "goal.create",
-  goalClear: "goal.clear",
-  goalEdit: "goal.edit",
-  goalPause: "goal.pause",
-  goalResume: "goal.resume",
+  goalCreate: "goals/create",
+  goalClear: "goals/clear",
+  goalEdit: "goals/edit",
+  goalPause: "goals/pause",
+  goalResume: "goals/resume",
   // ---- subagent ----
-  subagentList: "subagent.list",
-  subagentHistory: "subagent.history",
-  subagentInterrupt: "subagent.interrupt",
+  subagentList: "subagents/list",
+  subagentPrompt: "subagents/prompt",
+  subagentInterrupt: "subagents/interruptByParent",
   // ---- settings ----
-  settingsDescribe: "settings.describe",
-  settingsUpdate: "settings.update",
+  settingsDescribe: "settings/describe",
+  settingsUpdate: "settings/update",
   // 有序路径编辑({op:"set"|"unset", path:[...]}),后一个 op 观察到前一个的结果。
-  settingsMutate: "settings.mutate",
+  settingsMutate: "settings/mutate",
   // 无参:宿主原生打开用户层 settings.yaml。
-  settingsOpenDocument: "settings.openDocument",
+  settingsOpenDocument: "settings/openSettingsDocument",
   // ---- 凭证库(API 密钥不写进设置文件) ----
-  credentialsDescribe: "credentials.describe",
-  credentialsSet: "credentials.set",
-  credentialsUnset: "credentials.unset",
+  credentialsDescribe: "credentials/describe",
+  credentialsSet: "credentials/set",
+  credentialsUnset: "credentials/unset",
   // ---- 模型发现 ----
-  llmDiscoverModels: "llm.discoverModels",
+  llmDiscoverModels: "llm/discoverModels",
   // ---- 插件清单(只读)。远端端点只收一个 args 对象,空参也要包装。 ----
   pluginInventoryList: "pluginInventory/list"
 });
 
-/// 下行 mux 帧类型(events.mux)。
+export const STREAM = Object.freeze({
+  events: "$events",
+  workspaces: "workspace/follow",
+  control: "session/control",
+  follow: "session/follow"
+});
+
+/// session/follow 与 session/control 的逻辑流帧类型。
 export const MUX = Object.freeze({
   sessionEvent: "session/event",
   sessionSubscribed: "session/subscribed",
@@ -86,7 +90,7 @@ export const MUX = Object.freeze({
   streamError: "stream/error"
 });
 
-/// 下行 host 帧类型(events.host)。
+/// `$events` 事件折算后的宿主通知类型。
 export const HOST = Object.freeze({
   sessionAdded: "host/session-added",
   sessionRemoved: "host/session-removed",

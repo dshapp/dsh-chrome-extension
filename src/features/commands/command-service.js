@@ -1,13 +1,16 @@
 // 宿主斜杠命令(如 /compact /goal /permission):走 Typert Remote 通道,
-// payload 需要包一层 { args } 且字段名是 agentId(不是 sessionId),与 skill.list 等
+// API client 会统一包一层 { args }；字段名是 agentId（不是 sessionId），与 skills/list 等
 // legacy RPC 的 payload 形状不同,故不复用 skill-service 的调用方式。
 export function createCommandService(connection) {
   let commands = [];
+  let refreshGeneration = 0;
   return {
     get commands() { return commands; },
     async refresh(sessionId) {
+      const generation = ++refreshGeneration;
       if (!sessionId) return commands;
-      const value = await connection.call("commands/list", { args: { agentId: sessionId } });
+      const value = await connection.call("commands/list", { agentId: sessionId });
+      if (generation !== refreshGeneration) return commands;
       commands = value ?? [];
       return commands;
     },
@@ -18,7 +21,7 @@ export function createCommandService(connection) {
     // 缺字段会整体拒绝并报 `args fields do not match the descriptor: missing "images"`,
     // 于是每一条斜杠命令都执行失败。Mac 端的 CommandExecutePayload 同样总是带上它。
     async execute(sessionId, line, images = []) {
-      return connection.call("commands/execute", { args: { agentId: sessionId, line, images } });
+      return connection.call("commands/execute", { agentId: sessionId, line, images });
     }
   };
 }

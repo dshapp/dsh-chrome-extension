@@ -1,237 +1,217 @@
-// DSH 下行连接:两条只读流(mux + host)。浏览器扩展环境下 WebSocket 的 Origin 头
-// (chrome-extension://)无法被 declarativeNetRequest 移除(Chromium 保留 WS 握心头),
-// 而 DSH 围栏要求 Origin === Host。因此下行流通过「隐藏 iframe 加载后端同源页 +
-// content script(dsh-relay.js)内开 WS + postMessage 中继」实现。
-// 非 DOM 环境(测试)退回直连 WebSocket。
-// 断线 = 整代重开(新 generation),重连成功后由调用方用 session.history 重拉收敛。
+// DSH 0.1.2 multiplexed downlink. Chrome cannot rewrite a WebSocket Origin,
+// so extension pages keep using a same-origin hidden iframe as the carrier.
 import { createReconnectBackoff } from "./reconnect-backoff.js";
 import { ensureServerRunning } from "./native-supervisor.js";
 
-const STREAMS = ["mux", "host"];
-const STREAM_OPEN_TIMEOUT_MS = 8000;
+const OPEN_TIMEOUT_MS = 8000;
+const MAX_FRAME_BYTES = 64 * 1024 * 1024;
+const STABLE_GENERATION_MS = 30000;
 
 export const DshStreamState = Object.freeze({
-  CONNECTING: "connecting",
-  CONNECTED: "connected",
-  DISCONNECTED: "disconnected"
+  CONNECTING: "connecting", CONNECTED: "connected", DISCONNECTED: "disconnected"
 });
 
-// ---- iframe 中继载体 ----
-function createIframeCarrier(baseUrl, onFrame, onStreamDown) {
-  // 后端同源 origin:iframe 加载 ${baseUrl}/ 后其页面 origin 就是它,
-  // 中继帧必须来自这个 origin,否则任意页面都能伪装成中继向扩展注入帧。
-  const iframeOrigin = new URL(baseUrl).origin;
+function iframeCarrier(baseUrl, onOpen, onMessage, onClose) {
+  const origin = new URL(baseUrl).origin;
   const iframe = document.createElement("iframe");
-  iframe.src = `${baseUrl}/`;
+  iframe.src = origin + "/";
   iframe.hidden = true;
   iframe.setAttribute("aria-hidden", "true");
   iframe.style.cssText = "width:0;height:0;border:0;position:absolute;left:-9999px;";
-  const openedStreams = new Set();
-  let ready = false;
-
-  const messageHandler = (event) => {
-    if (event.source !== iframe.contentWindow) return;
-    // 中继帧只能来自后端同源页(iframe 自己),拒绝其余 origin 的伪造消息。
-    if (event.origin !== iframeOrigin) return;
+  let opened = false;
+  const handler = (event) => {
+    if (event.source !== iframe.contentWindow || event.origin !== origin) return;
     const data = event.data;
     if (data?.source !== "dsh-relay") return;
-    if (data.type === "ready") {
-      ready = true;
-      for (const stream of STREAMS) iframe.contentWindow.postMessage({ source: "dsh-relay-parent", type: "open", stream }, iframeOrigin);
-      return;
-    }
-    if (data.type === "open") openedStreams.add(data.stream);
-    if (data.type === "close") {
-      openedStreams.delete(data.stream);
-      onStreamDown(data.stream);
-    }
-    if (data.type === "frame" && typeof data.envelope === "string") {
-      onFrame(data.envelope, data.stream);
-    }
+    if (data.type === "ready") iframe.contentWindow.postMessage({ source: "dsh-relay-parent", type: "connect" }, origin);
+    else if (data.type === "open") { opened = true; onOpen(); }
+    else if (data.type === "frame" && typeof data.envelope === "string") onMessage(data.envelope);
+    else if (data.type === "close" || data.type === "error") { opened = false; onClose(); }
   };
-  window.addEventListener("message", messageHandler);
+  window.addEventListener("message", handler);
   document.documentElement.appendChild(iframe);
-
   return {
-    async opened(timeoutMs = STREAM_OPEN_TIMEOUT_MS) {
-      const start = Date.now();
-      while (openedStreams.size < STREAMS.length) {
-        if (Date.now() - start > timeoutMs) throw new Error(`下行流中继打开超时(${[...openedStreams].join("+")})`);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
+    send(text) {
+      if (!opened) throw new Error("DSH mux is not open");
+      iframe.contentWindow.postMessage({ source: "dsh-relay-parent", type: "frame", envelope: text }, origin);
     },
     stop() {
-      window.removeEventListener("message", messageHandler);
-      try {
-        iframe.contentWindow?.postMessage({ source: "dsh-relay-parent", type: "close", stream: "mux" }, iframeOrigin);
-        iframe.contentWindow?.postMessage({ source: "dsh-relay-parent", type: "close", stream: "host" }, iframeOrigin);
-      } catch { /* noop */ }
-      iframe.remove();
-    },
-    get openCount() { return openedStreams.size; }
+      window.removeEventListener("message", handler);
+      try { iframe.contentWindow?.postMessage({ source: "dsh-relay-parent", type: "close" }, origin); } catch {}
+      iframe.remove(); opened = false;
+    }
   };
 }
 
-// ---- 直连载体(测试/非扩展环境) ----
-function createDirectCarrier(baseUrl, onFrame, onStreamDown) {
-  const sockets = new Map();
-  // 真正完成握手(OPEN)的流。sockets.size 在 new WebSocket 时就已经 +1,
-  // 用它判就绪会在握手尚未完成时误判连接成功,导致后续读取读到一个未就绪的流。
-  const openedStreams = new Set();
-  const openSocket = (stream) => {
-    const url = baseUrl.replace(/^http/, "ws") + `/api/events.${stream}`;
-    const socket = new WebSocket(url);
-    sockets.set(stream, socket);
-    socket.onopen = () => openedStreams.add(stream);
-    socket.onmessage = (event) => onFrame(event.data, stream);
-    socket.onclose = () => {
-      sockets.delete(stream);
-      openedStreams.delete(stream);
-      onStreamDown(stream);
-    };
-  };
-  for (const stream of STREAMS) openSocket(stream);
+function directCarrier(baseUrl, onOpen, onMessage, onClose) {
+  const socket = new WebSocket(baseUrl.replace(/^http/, "ws") + "/api/remote.mux");
+  socket.onopen = onOpen;
+  socket.onmessage = (event) => onMessage(event.data);
+  socket.onclose = onClose;
+  socket.onerror = () => {};
   return {
-    async opened(timeoutMs = STREAM_OPEN_TIMEOUT_MS) {
-      const start = Date.now();
-      while (openedStreams.size < STREAMS.length) {
-        if (Date.now() - start > timeoutMs) throw new Error("下行流直连打开超时");
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
+    send(text) {
+      if (socket.readyState !== WebSocket.OPEN) throw new Error("DSH mux is not open");
+      socket.send(text);
     },
-    stop() {
-      for (const socket of sockets.values()) { socket.onopen = null; socket.onclose = null; socket.close(); }
-      sockets.clear();
-      openedStreams.clear();
-    },
-    get openCount() { return openedStreams.size; }
+    stop() { socket.onopen = null; socket.onclose = null; socket.close(); }
   };
 }
 
-function parseDownlinkFrame(text) {
-  let envelope;
-  try {
-    envelope = JSON.parse(text);
-  } catch {
-    return undefined;
+export function exceedsUtf8ByteLimit(text, limit) {
+  if (text.length > limit) return true;
+  let bytes = text.length;
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit <= 0x7f) continue;
+    if (unit <= 0x7ff) bytes += 1;
+    else if (unit >= 0xd800 && unit <= 0xdbff
+      && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 2;
+      index += 1;
+    } else bytes += 2;
+    if (bytes > limit) return true;
   }
-  if (envelope?.type !== "server-request") return undefined;
-  const method = envelope.method;
-  const payload = envelope.payload;
-  if (typeof method !== "string" || payload?.type !== method) return undefined;
-  return { rpcId: envelope.rpcId, method, payload };
+  return false;
+}
+
+export function parseMuxFrame(text) {
+  if (typeof text !== "string" || exceedsUtf8ByteLimit(text, MAX_FRAME_BYTES)) return undefined;
+  let value;
+  try { value = JSON.parse(text); } catch { return undefined; }
+  if (!value || !["item", "error", "end"].includes(value.type) || typeof value.streamId !== "string") return undefined;
+  return value;
 }
 
 export function createDownlink(options) {
   const { apiClient, onFrame, onStateChange, onGenerationReady } = options;
+  const ensureServer = options.ensureServerRunning || ensureServerRunning;
+  const recoverConnection = options.recoverConnection
+    || (() => ensureServer("web", { backendUrl: apiClient.baseUrl }));
   const backoff = createReconnectBackoff(options.backoff || {});
+  const now = options.now || Date.now;
+  const stableGenerationMs = options.stableGenerationMs ?? STABLE_GENERATION_MS;
+  const subscriptions = new Map();
+  let openedIds = new Set();
   let generation = 0;
-  let generationToken = 0;
+  let token = 0;
   let state = DshStreamState.DISCONNECTED;
   let stopped = true;
   let carrier = null;
-  let connectTimer = null;
-  // 每代 connect 失败的连续次数。达到阈值后请 native host 拉起 dsh web;
-  // 一次抖动不该立刻触发拉起,所以留出一个容忍窗口。
+  let reconnectTimer = null;
+  let openTimer = null;
   let consecutiveFailures = 0;
+  let openedAt = null;
 
-  function setState(next) {
+  const setState = (next) => {
     if (state === next) return;
     state = next;
     onStateChange?.(state, generation);
-  }
-
-  function scheduleReconnect() {
-    if (stopped) return;
-    const delay = backoff.next();
-    connectTimer = setTimeout(() => connect(), delay);
-  }
-
-  function handleEnvelope(text, stream) {
-    try {
-      const frame = parseDownlinkFrame(text);
-      if (frame) onFrame(frame, stream);
-    } catch (error) {
-      console.error("[dsh-downlink] 丢弃无法解析的帧", error);
-    }
-  }
-
-  async function connect() {
-    if (stopped) return;
-    const token = ++generationToken;
-    generation += 1;
-    setState(DshStreamState.CONNECTING);
-    try {
-      const onStreamDown = () => { if (token === generationToken) teardown(); };
-      // 浏览器扩展页面用 iframe 中继;非扩展环境(Node 测试、dev web 模式)退回直连。
-      // dev web 模式下 Origin 与 Host 同源(经 dev server 代理),无需绕围栏。
-      const isExtension = typeof location !== "undefined" && location.protocol === "chrome-extension:";
-      carrier = typeof document !== "undefined" && document.createElement && isExtension
-        ? createIframeCarrier(apiClient.baseUrl, handleEnvelope, onStreamDown)
-        : createDirectCarrier(apiClient.baseUrl, handleEnvelope, onStreamDown);
-      await carrier.opened();
-      if (token !== generationToken) return;
-      const description = await apiClient.call("host.describe", {});
-      if (token !== generationToken) return;
+  };
+  const openFrame = (sub) => JSON.stringify({
+    type: "open", streamId: sub.streamId, endpoint: sub.endpoint, payload: { args: sub.args ?? {} }
+  });
+  const sendSubscription = (sub) => {
+    if (state !== DshStreamState.CONNECTED || openedIds.has(sub.streamId)) return;
+    carrier.send(openFrame(sub));
+    openedIds.add(sub.streamId);
+  };
+  const scheduleReconnect = () => {
+    if (stopped || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, backoff.next());
+  };
+  const failGeneration = (expectedToken, { countFailure = false } = {}) => {
+    if (stopped || expectedToken !== token) return;
+    const wasStable = openedAt !== null && now() - openedAt >= stableGenerationMs;
+    let recovery = null;
+    if (wasStable) {
       backoff.reset();
       consecutiveFailures = 0;
-      setState(DshStreamState.CONNECTED);
-      onGenerationReady?.(description, generation);
-    } catch (error) {
-      if (token === generationToken) {
-        consecutiveFailures += 1;
-        teardown();
-        // 连续失败大概率是 dsh web 没启动,而非瞬时网络抖动。达到阈值后
-        // 请 native host 把它拉起来;supervisor 自带 30s 冷却,故每个 tick
-        // 调一次是安全的。native messaging 不可用时此处立即返回,无副作用。
-        if (consecutiveFailures >= 2) {
-          ensureServerRunning("web", { backendUrl: apiClient.baseUrl }).catch(() => {});
-        }
+    } else if (countFailure) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= 2) {
+        // WebSocket 握手拿不到 HTTP 401 响应体。连续短连接既可能是服务没起，
+        // 也可能是 browser-session Cookie 已过期；恢复动作必须在下一次连接前完成。
+        recovery = Promise.resolve(recoverConnection()).catch(() => {});
       }
-      console.warn("[dsh-downlink] 连接失败,稍后重试", error.message);
     }
-  }
-
-  function teardown() {
-    generationToken += 1;
-    carrier?.stop();
-    carrier = null;
+    openedAt = null;
+    token += 1;
+    clearTimeout(openTimer); openTimer = null;
+    carrier?.stop(); carrier = null; openedIds = new Set();
     setState(DshStreamState.DISCONNECTED);
-    scheduleReconnect();
+    if (recovery) recovery.finally(scheduleReconnect);
+    else scheduleReconnect();
+  };
+
+  function connect() {
+    if (stopped) return;
+    const myToken = ++token;
+    generation += 1;
+    setState(DshStreamState.CONNECTING);
+    const onOpen = () => {
+      if (myToken !== token) return;
+      clearTimeout(openTimer); openTimer = null;
+      openedIds = new Set();
+      // 握手成功不等于这一代健康。服务端接受后立刻断开时若在这里清零，
+      // 连续失败永远只能数到 1，native supervisor 也就永远不会被唤起。
+      openedAt = now();
+      setState(DshStreamState.CONNECTED);
+      for (const sub of subscriptions.values()) sendSubscription(sub);
+      onGenerationReady?.(null, generation);
+    };
+    const onMessage = (text) => {
+      if (myToken !== token) return;
+      const frame = parseMuxFrame(text);
+      if (!frame) {
+        if (typeof text === "string" && exceedsUtf8ByteLimit(text, MAX_FRAME_BYTES)) failGeneration(myToken);
+        return;
+      }
+      onFrame(frame, "mux");
+    };
+    const onClose = () => {
+      if (myToken !== token) return;
+      failGeneration(myToken, { countFailure: true });
+    };
+    const isExtension = typeof location !== "undefined" && location.protocol === "chrome-extension:";
+    carrier = typeof document !== "undefined" && document.createElement && isExtension
+      ? iframeCarrier(apiClient.baseUrl, onOpen, onMessage, onClose)
+      : directCarrier(apiClient.baseUrl, onOpen, onMessage, onClose);
+    openTimer = setTimeout(() => failGeneration(myToken, { countFailure: true }), OPEN_TIMEOUT_MS);
   }
 
   return Object.freeze({
-    start() {
-      if (!stopped) return;
-      stopped = false;
-      connect();
+    subscribe(streamId, endpoint, args = {}) {
+      const sub = { streamId, endpoint, args };
+      const previous = subscriptions.get(streamId);
+      subscriptions.set(streamId, sub);
+      const changed = previous && (previous.endpoint !== endpoint
+        || JSON.stringify(previous.args ?? {}) !== JSON.stringify(args ?? {}));
+      if (changed && state === DshStreamState.CONNECTED && openedIds.delete(streamId)) {
+        carrier.send(JSON.stringify({ type: "cancel", streamId }));
+      }
+      sendSubscription(sub);
     },
+    unsubscribe(streamId) {
+      subscriptions.delete(streamId);
+      if (state === DshStreamState.CONNECTED && openedIds.delete(streamId)) {
+        carrier.send(JSON.stringify({ type: "cancel", streamId }));
+      }
+    },
+    start() { if (stopped) { stopped = false; connect(); } },
     stop() {
-      stopped = true;
-      if (connectTimer) clearTimeout(connectTimer);
-      connectTimer = null;
-      generationToken += 1;
-      carrier?.stop();
-      carrier = null;
+      stopped = true; token += 1;
+      clearTimeout(openTimer); clearTimeout(reconnectTimer);
+      openTimer = reconnectTimer = null;
+      carrier?.stop(); carrier = null; openedIds = new Set();
       setState(DshStreamState.DISCONNECTED);
     },
-    restart() {
-      this.stop();
-      stopped = false;
-      connect();
-    },
-    // 应用层请求重建连接(stream/error 帧触发)。与 restart 不同:走 teardown 的
-    // 指数退避阶梯,而不是立即 connect,这样突发错误帧只会调度一次重连。
-    forceReconnect() {
-      teardown();
-    },
-    get state() {
-      return state;
-    },
-    get generation() {
-      return generation;
-    }
+    restart() { this.stop(); backoff.reset(); stopped = false; connect(); },
+    forceReconnect() { failGeneration(token); },
+    get state() { return state; },
+    get generation() { return generation; }
   });
 }
 
-export { parseDownlinkFrame };
+export const MUX_MAX_FRAME_BYTES = MAX_FRAME_BYTES;
+export const MUX_STABLE_GENERATION_MS = STABLE_GENERATION_MS;

@@ -64,6 +64,8 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   let dshRestartError = null;
   let dshUpdateError = null;
   let dshUpdateDone = false;
+  let refreshGeneration = 0;
+  let dshLoadGeneration = 0;
 
   function currentView() {
     return connectionView(deps.connection.streamState, deps.DshStreamState);
@@ -257,7 +259,7 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   async function openPath(path) {
     if (!path) return;
     try {
-      await deps.connection.call(RPC.hostOpenPath, { path });
+      await deps.connection.call(RPC.hostOpenPath, { request: { path } });
     } catch (error) {
       showToast?.(deps.formatErrorDetails?.(error) ?? t("srv.openFailed"));
     }
@@ -313,10 +315,14 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   /// 查一次 dsh 版本。查不到远端版本不算失败(离线是常态)。
   async function loadDsh() {
     if (!serverOps) return;
+    const generation = ++dshLoadGeneration;
     try {
-      dsh = await serverOps.version();
+      const next = await serverOps.version();
+      if (generation !== dshLoadGeneration) return;
+      dsh = next;
       dshUnsupported = false;
     } catch {
+      if (generation !== dshLoadGeneration) return;
       // 老 daemon / 没跑 / 不是 pnpm 装的 → 相关行不显示,不打扰用户。
       dshUnsupported = true;
     }
@@ -324,14 +330,19 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   }
 
   async function refresh() {
+    const generation = ++refreshGeneration;
+    let nextHostInfo;
     try {
-      hostInfo = await deps.connection.call(RPC.hostDescribe, {});
+      nextHostInfo = deps.sessions?.hostHome ? { home: deps.sessions.hostHome } : null;
     } catch {
       // 没连上:主目录行不画。这不是错误,页面顶部的状态行已经说明了。
-      hostInfo = null;
+      nextHostInfo = null;
     }
     // 只 probe 状态,不拉起进程 —— 打开设置页不该有副作用。
-    launcher = await probeHost().catch(() => null);
+    const nextLauncher = await probeHost().catch(() => null);
+    if (generation !== refreshGeneration) return;
+    hostInfo = nextHostInfo;
+    launcher = nextLauncher;
     render();
     if (!timer) timer = setInterval(paintConnection, POLL_INTERVAL_MS);
     // 桥自己按秒轮询 service worker;首次结果回来时 onChange 会触发一次重画。
@@ -345,6 +356,8 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
     /// 离开服务端页时停表:状态点不可见就不该继续跑。
     /// 桥的轮询会唤醒 service worker,更不能留着。
     stop() {
+      refreshGeneration += 1;
+      dshLoadGeneration += 1;
       if (timer) clearInterval(timer);
       timer = null;
       bridgeStatus.stop();

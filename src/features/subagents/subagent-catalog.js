@@ -6,6 +6,8 @@
 export function createSubagentCatalogState() {
   const catalogs = new Map();   // parentSessionId -> { phase, value, error }
   const expanded = new Set();   // 已展开的 child sessionId 集合
+  // 同一个 parent 可被手动重试与定时刷新同时拉取。旧响应不得覆盖后发结果。
+  const loadGenerations = new Map();
 
   function stateFor(parentId) {
     return catalogs.get(parentId) ?? { phase: "idle", value: null, error: null };
@@ -23,10 +25,14 @@ export function createSubagentCatalogState() {
       value: cur.phase === "ready" ? cur.value : null,
       error: null
     });
+    const generation = (loadGenerations.get(parentId) ?? 0) + 1;
+    loadGenerations.set(parentId, generation);
     try {
       const value = await loader(parentId);
+      if (loadGenerations.get(parentId) !== generation) return;
       catalogs.set(parentId, { phase: "ready", value, error: null });
     } catch (error) {
+      if (loadGenerations.get(parentId) !== generation) return;
       catalogs.set(parentId, { phase: "failed", value: null, error: error?.message ?? String(error) });
     }
   }

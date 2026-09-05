@@ -28,8 +28,10 @@
 # =============================================================================
 set -euo pipefail
 
-# 内部 registry,只用于 dsh CLI 自身(以及兜底装 pnpm)。
-REGISTRY="${DSH_REGISTRY:-https://npm-registry.toolsfdg.net/}"
+# dsh 0.1.2-rc.1 及其完整依赖集已发布到公共 npm。部分内网镜像的
+# prerelease 元数据不同步（包能单独查到，但解析 ^0.1.2-rc.1 仍会 ETARGET），
+# 因而默认直接使用权威源；受限网络仍可通过 DSH_REGISTRY 覆盖。
+REGISTRY="${DSH_REGISTRY:-https://registry.npmjs.org/}"
 # dsh-chrome-control 与 dsh-kimi-computer-use 是发布在公共 npm 上的包。
 # 内部源虽然代理了它们(HTTP 直接拉 packument 能看到 0.1.5/0.1.6/0.1.7),
 # 但经内部源解析时 npm 只认到 0.1.5,装 ^0.1.7 直接 ETARGET;pnpm 能过,
@@ -67,7 +69,7 @@ ALL_PKGS="$CHROME_PKG $KIMI_PKG"
 # 而这个安装器是无人值守跑的 —— 装到哪个版本必须可预期,不能取决于当天
 # latest 指向谁(尤其 latest 可能指向一个 rc)。
 # 升级就改这一行,让版本变更留在 git 历史里,而不是散在各台机器的安装时刻。
-DSH_VERSION="0.1.1-rc.2"
+DSH_VERSION="0.1.2-rc.1"
 DSH_PKG="@deepseek-ai/dsh@$DSH_VERSION"
 
 RED=""; GREEN=""; YELLOW=""; BLUE=""; BOLD=""; RESET=""
@@ -505,9 +507,13 @@ chmod +x "$HOST_JS"
 # Chrome starts GUI processes with a reduced PATH. Absolute paths keep the
 # launcher working after the terminal closes or the extension folder moves.
 NODE_BIN="$(command -v node)"
+printf -v DSH_HOME_QUOTED '%q' "$DSH_HOME"
+printf -v NODE_BIN_QUOTED '%q' "$NODE_BIN"
+printf -v HOST_JS_QUOTED '%q' "$HOST_JS"
 cat > "$WRAPPER" <<EOF
 #!/bin/bash
-exec "$NODE_BIN" "$HOST_JS"
+export DSH_HOME=$DSH_HOME_QUOTED
+exec $NODE_BIN_QUOTED $HOST_JS_QUOTED
 EOF
 chmod +x "$WRAPPER"
 ok "launcher files installed in $HOST_DIR"

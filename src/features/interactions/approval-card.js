@@ -1,4 +1,4 @@
-// 审批卡:权限确认,经 POST /api/respond 应答。
+// 审批卡:权限确认，经 `$events/result` 应答。
 // 对齐 macos/.../ComposerOverlays.swift 的 ApprovalPanel:
 // 琥珀条 + 原因 + 工具名 + (bash 时)命令代码块 + [拒绝][允许一次]。
 import { t } from "../../shared/i18n.js";

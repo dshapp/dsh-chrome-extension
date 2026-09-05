@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createApiClient, DshRpcError, DshTransportError } from "../src/platform/dsh/api-client.js";
 import { normalizeBackendUrl, toWebSocketUrl } from "../src/platform/storage/settings.js";
 
@@ -16,11 +16,12 @@ describe("api-client", () => {
         return okResponse({ type: "server-response", rpcId: calls[0].body.rpcId, result: { ok: true, value: { hello: 1 } } });
       }
     });
-    const value = await client.call("host.describe", {});
+    const value = await client.call("session/modelCatalog", {});
     expect(value).toEqual({ hello: 1 });
-    expect(calls[0].url).toBe("http://127.0.0.1:3080/api/host.describe");
+    expect(calls[0].url).toBe("http://127.0.0.1:3080/api/session/modelCatalog");
     expect(calls[0].body.type).toBe("client-request");
-    expect(calls[0].body.method).toBe("host.describe");
+    expect(calls[0].body.method).toBe("session/modelCatalog");
+    expect(calls[0].body.payload).toEqual({ args: {} });
   });
 
   it("业务错误抛 DshRpcError(code/details)", async () => {
@@ -32,7 +33,7 @@ describe("api-client", () => {
       }),
       makeRpcId: () => "fixed"
     });
-    await expect(client.call("session.history", {})).rejects.toMatchObject({
+    await expect(client.call("session/page", {})).rejects.toMatchObject({
       name: "DshRpcError", code: "session-not-found", details: { id: "s1" }
     });
     expect(DshRpcError).toBeDefined();
@@ -44,7 +45,7 @@ describe("api-client", () => {
       fetch: async () => okResponse({ type: "server-response", rpcId: "other", result: { ok: true, value: {} } }),
       makeRpcId: () => "mine"
     });
-    await expect(client.call("host.describe", {})).rejects.toBeInstanceOf(DshTransportError);
+    await expect(client.call("session/modelCatalog", {})).rejects.toBeInstanceOf(DshTransportError);
   });
 
   it("403 返回围栏提示", async () => {
@@ -52,21 +53,40 @@ describe("api-client", () => {
       baseUrl: "http://x",
       fetch: async () => ({ ok: false, status: 403, json: async () => ({}) })
     });
-    await expect(client.call("host.describe", {})).rejects.toThrow(/信任围栏/);
+    await expect(client.call("session/modelCatalog", {})).rejects.toThrow(/信任围栏/);
   });
 
-  it("respond 发送 ClientResponse 信封", async () => {
+  it("settleRemoteEvent 通过 $events/result 回传 waterfall 结果", async () => {
     let body;
     const client = createApiClient({
       baseUrl: "http://x",
       fetch: async (_url, init) => {
         body = JSON.parse(init.body);
-        return okResponse({ accepted: true });
+        return okResponse({ type: "server-response", rpcId: body.rpcId, result: { ok: true, value: null } });
       }
     });
-    const receipt = await client.respond("rpc-1", { ok: true, value: {} });
-    expect(receipt).toEqual({ accepted: true });
-    expect(body).toEqual({ type: "client-response", rpcId: "rpc-1", result: { ok: true, value: {} } });
+    const accepted = await client.settleRemoteEvent("client-1", "event-1", { kind: "result", value: "yes" });
+    expect(accepted).toBe(true);
+    expect(body.method).toBe("$events/result");
+    expect(body.payload.args).toEqual({ clientId: "client-1", eventId: "event-1", outcome: { kind: "result", value: "yes" } });
+  });
+
+  it("401 后重签并只重试一次", async () => {
+    let requests = 0;
+    const onUnauthorized = vi.fn().mockResolvedValue(true);
+    const client = createApiClient({
+      baseUrl: "http://127.0.0.1:3080",
+      onUnauthorized,
+      makeRpcId: () => "fixed",
+      fetch: async () => {
+        requests += 1;
+        if (requests === 1) return { ok: false, status: 401, json: async () => ({}) };
+        return okResponse({ type: "server-response", rpcId: "fixed", result: { ok: true, value: 1 } });
+      }
+    });
+    await expect(client.call("session/modelCatalog", {})).resolves.toBe(1);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(requests).toBe(2);
   });
 });
 

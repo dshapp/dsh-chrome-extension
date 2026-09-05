@@ -10,30 +10,30 @@ function refOf(goal) {
 export function createGoalService(connection) {
   return {
     async create(sessionId, objective, maxGoalRounds) {
-      const payload = { sessionId, objective, ...(maxGoalRounds ? { maxGoalRounds } : {}) };
-      return connection.call(RPC.goalCreate, payload);
+      const request = { objective, ...(maxGoalRounds ? { maxGoalRounds } : {}) };
+      return connection.call(RPC.goalCreate, { agentId: sessionId, request });
     },
     async edit(sessionId, goal, objective, maxGoalRounds) {
       const ref = refOf(goal);
       if (!ref) return null;
       return connection.call(RPC.goalEdit, {
-        sessionId, ref, objective, ...(maxGoalRounds ? { maxGoalRounds } : {})
+        agentId: sessionId, ref, request: { objective, ...(maxGoalRounds ? { maxGoalRounds } : {}) }
       });
     },
     async pause(sessionId, goal) {
       const ref = refOf(goal);
       if (!ref) return null;
-      return connection.call(RPC.goalPause, { sessionId, ref });
+      return connection.call(RPC.goalPause, { agentId: sessionId, ref });
     },
     async resume(sessionId, goal) {
       const ref = refOf(goal);
       if (!ref) return null;
-      return connection.call(RPC.goalResume, { sessionId, ref });
+      return connection.call(RPC.goalResume, { agentId: sessionId, ref });
     },
     async clear(sessionId, goal) {
       const ref = refOf(goal);
       if (!ref) return null;
-      return connection.call(RPC.goalClear, { sessionId, ref });
+      return connection.call(RPC.goalClear, { agentId: sessionId, ref });
     }
   };
 }
