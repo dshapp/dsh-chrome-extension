@@ -218,21 +218,23 @@ export function createComposerDock({ elements, deps, state, showToast, format })
         onSelect: async (id) => {
           const entry = all.find((m) => m.id === id);
           if (!entry || !state.sessionId) return;
+          const targetSessionId = state.sessionId;
           elements.modelMenu.hidePopover();
           try {
             if (entry.effort) {
               const current = state.currentModel;
               if (!current) return;
               await deps.connection.call(RPC.sessionSelectModel, { request: {
-                sessionId: state.sessionId,
+                sessionId: targetSessionId,
                 provider: current.provider,
                 model: current.model,
                 reasoningEffort: entry.effort
               } });
             } else {
               await deps.connection.call(RPC.sessionSelectModel, { request: {
-                sessionId: state.sessionId, provider: entry.provider, model: entry.model
+                sessionId: targetSessionId, provider: entry.provider, model: entry.model
               } });
+              if (state.sessionId !== targetSessionId) return;
               // 同步当前模型:推理档选择依赖 state.currentModel 来定位要修的模型,
               // 不更新的话,切模型后立即选推理档会作用到上一份快照里的旧模型。
               state.currentModel = { provider: entry.provider, model: entry.model };
@@ -288,8 +290,10 @@ export function createComposerDock({ elements, deps, state, showToast, format })
         onSelect: async (id) => {
           elements.presetMenu.hidePopover();
           if (!state.sessionId || id === currentId) return;
+          const targetSessionId = state.sessionId;
           try {
-            const applied = await deps.sessions.selectAgentPreset(state.sessionId, id);
+            const applied = await deps.sessions.selectAgentPreset(targetSessionId, id);
+            if (state.sessionId !== targetSessionId) return;
             const chosen = presets.find((p) => p.id === applied);
             elements.presetLabel.textContent = presetDisplayName(chosen) || applied;
             currentId = applied;

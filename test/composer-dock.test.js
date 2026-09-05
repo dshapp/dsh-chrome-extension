@@ -100,6 +100,26 @@ describe("composer-dock 模型与推理档", () => {
     await oldRequest;
     expect(elements.modelLabel.textContent).toBe("Model 2");
   });
+
+  it("切走会话后旧模型选择回包不覆盖新会话标签", async () => {
+    const { dock, call, elements, state } = setup(FIXTURE);
+    let resolveSelection;
+    call.mockImplementation((method) => method === "session/selectModel"
+      ? new Promise((resolve) => { resolveSelection = resolve; })
+      : Promise.resolve({}));
+    await dock.refreshModelMenu();
+
+    elements.modelMenu.querySelector('[data-item-id="p1::m2"]')
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    state.sessionId = "s2";
+    elements.modelLabel.textContent = "Session 2 Model";
+    resolveSelection({});
+    await flush();
+
+    expect(elements.modelLabel.textContent).toBe("Session 2 Model");
+    expect(state.currentModel).toEqual({ provider: "p1", model: "m1" });
+  });
 });
 
 describe("composer-dock 预设菜单", () => {
@@ -162,5 +182,33 @@ describe("composer-dock 预设菜单", () => {
     await oldRequest;
     expect(elements.presetLabel.textContent).toBe("New");
     expect(elements.presetMenu.querySelector('[data-item-id="old"]')).toBeNull();
+  });
+
+  it("切走会话后旧预设选择回包不覆盖新会话标签", async () => {
+    let resolveSelection;
+    const presets = [{ id: "a", name: "Preset A" }, { id: "b", name: "Preset B" }];
+    const elements = baseElements();
+    const state = { sessionId: "s1", currentModel: null };
+    const deps = {
+      connection: { call: vi.fn(async () => ({})) },
+      commands: { execute: vi.fn() },
+      sessions: {
+        listAgentPresets: vi.fn(async () => ({ presets })),
+        selectAgentPreset: vi.fn(() => new Promise((resolve) => { resolveSelection = resolve; })),
+        listStore: { get: () => [{ sessionId: state.sessionId, agentPreset: "a" }] },
+        getRuntimeSnapshot: () => ({ agentPreset: "a" })
+      }
+    };
+    const dock = createComposerDock({ elements, deps, state, showToast: vi.fn(), format: String });
+    await dock.refreshPresetMenu();
+    elements.presetMenu.querySelector('[data-item-id="b"]')
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    state.sessionId = "s2";
+    elements.presetLabel.textContent = "Session 2 Preset";
+    resolveSelection("b");
+    await flush();
+
+    expect(elements.presetLabel.textContent).toBe("Session 2 Preset");
   });
 });
