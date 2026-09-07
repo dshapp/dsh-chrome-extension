@@ -367,6 +367,20 @@ describe("应用接线冒烟", () => {
     expect(send.disabled).toBe(false);
   });
 
+  it("打开会话失败时回滚到原会话而不是卡在错误目标", async () => {
+    mountDom();
+    const { deps, snapshot } = stubDeps();
+    deps.sessions.open.mockRejectedValueOnce(new Error("network offline"));
+    const app = createSidepanelApp(document, deps);
+    app.state.sessionId = "s1";
+
+    await expect(app.openSession("broken-session")).resolves.toBeNull();
+
+    expect(app.state.sessionId).toBe("s1");
+    expect(document.querySelector("#toast").textContent).toContain("network offline");
+    expect(document.querySelector("#hdr-title").textContent).toBe(snapshot.title);
+  });
+
   it("已选元素条显示数量并可清空", () => {
     mountDom();
     const { deps } = stubDeps();

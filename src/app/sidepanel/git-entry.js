@@ -40,6 +40,10 @@ export function mountGitEntry(trigger, menu, deps) {
   let pendingBranch = null;
   let syncing = null;
   let open = false;
+  // 会话/工作目录切换时,上一次 refresh 的 await 可能还在飞。generation 让
+  // 迟到的旧回包无法把上一个目录的 summary/occupancy 写进当前入口
+  // (对齐 Mac 的 GitSummaryRequestTracker:token 与 cwd 同时校验)。
+  let refreshGeneration = 0;
 
   const cwd = () => deps.getCwd?.() || null;
 
@@ -243,29 +247,44 @@ export function mountGitEntry(trigger, menu, deps) {
 
   /// 重读摘要与 worktree 占用。由 app 层在会话/工作目录变化时调用。
   async function refresh({ fetch = false } = {}) {
+    const generation = ++refreshGeneration;
     const dir = cwd();
+    // 每次 await 之后都要重新确认:generation 没被后来的 refresh 顶掉,且
+    // 当前工作目录仍是发起这次读取时的那个。任一不成立就整个丢弃 ——
+    // 旧目录的 git 状态画到新会话上,比暂时没有状态更糟。
+    const current = () => generation === refreshGeneration && cwd() === dir;
     if (!dir) {
       summary = null;
       paintTrigger();
       return;
     }
+    let next = null;
     try {
-      summary = await deps.summaryReader.summary(dir);
-      if (summary.hasRepository && fetch) {
+      next = await deps.summaryReader.summary(dir);
+      if (!current()) return;
+      if (next.hasRepository && fetch) {
         const up = await deps.summaryReader.upstreamState(dir, { fetch: true });
-        if (up) summary = { ...summary, upstream: up };
+        if (!current()) return;
+        if (up) next = { ...next, upstream: up };
       }
     } catch {
       // 宿主代理不可用 → 与「非仓库」同样静默隐藏,不打扰用户。
-      summary = null;
+      if (!current()) return;
+      next = null;
     }
-    if (summary?.hasRepository) {
+    let nextOccupancy = occupancy;
+    if (next?.hasRepository) {
       try {
-        occupancy = occupancyMap(await deps.gitService.worktrees(dir), dir);
+        const worktrees = await deps.gitService.worktrees(dir);
+        if (!current()) return;
+        nextOccupancy = occupancyMap(worktrees, dir);
       } catch {
-        occupancy = new Map();
+        if (!current()) return;
+        nextOccupancy = new Map();
       }
     }
+    summary = next;
+    occupancy = nextOccupancy;
     paintTrigger();
     if (open) render();
   }

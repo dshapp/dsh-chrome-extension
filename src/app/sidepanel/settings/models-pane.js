@@ -186,7 +186,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     const derived = deriveKeyRef(entry.entry.provider);
     const managesCredential = entry.apiKeyEnv === derived
       && entry.credential?.configured === true && entry.credential?.writable === true;
-    sheet.open({
+    const token = sheet.open({
       title: t("prov.remove"),
       body: `<p class="set-sheet-text">${escapeHtml(managesCredential
         ? t("prov.deleteWithCredential", { name })
@@ -195,7 +195,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
       actions: button({ id: "prov-del-cancel", label: t("set.cancel") })
         + button({ id: "prov-del-confirm", label: t("prov.deleteNamed", { name }), kind: "danger" }),
       bind(root) {
-        root.querySelector("#prov-del-cancel").addEventListener("click", () => sheet.close());
+        root.querySelector("#prov-del-cancel").addEventListener("click", () => sheet.close(token));
         const confirm = root.querySelector("#prov-del-confirm");
         confirm.addEventListener("click", async () => {
           confirm.disabled = true;
@@ -206,10 +206,12 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
               ...(fresh ?? entry),
               expectedRevision: state?.namespaces.get(entry.entry.settingsNs)?.revision
             });
-            sheet.close();
+            // 只关自己:期间用户可能已关掉确认框并开了别的 sheet。
+            sheet.close(token);
             await refresh();
             onModelsChanged?.();
           } catch (error) {
+            if (!sheet.owns(token)) return;
             root.querySelector("#prov-del-error").textContent = deps.formatErrorDetails(error);
             confirm.disabled = false;
             confirm.textContent = t("prov.deleteNamed", { name });

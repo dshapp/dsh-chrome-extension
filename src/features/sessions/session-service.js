@@ -227,6 +227,9 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       const payload = { ...input, ...locationOf(input) };
       if (payload.workspaceId) delete payload.cwd;
       const value = await connection.call(RPC.sessionCreate, { request: payload });
+      // 在途请求无法真正取消,墓碑负责挡住它的回包:等待期间这个 id 若已被
+      // host/session-removed 删除,这里再 upsert 就会复活一行幽灵会话。
+      if (removedSessionIds.has(value.sessionId)) return value.sessionId;
       listStore.upsertAndNotify({
         sessionId: value.sessionId, updatedAt: Date.now(), running: false, blank: true,
         ...(input.cwd ? { cwd: input.cwd } : {})
@@ -301,6 +304,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     async fork(sessionId, atSeq) {
       const value = await connection.call(RPC.sessionFork, { request:
         atSeq === undefined ? { sessionId } : { sessionId, atSeq } });
+      // 同 create:等待期间被删除的 id 不能由迟到的回包复活。
+      if (removedSessionIds.has(value.sessionId)) return value.sessionId;
       listStore.upsertAndNotify({
         sessionId: value.sessionId, updatedAt: Date.now(), running: false,
         blank: false, parentSessionId: sessionId
@@ -354,6 +359,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       // archive 是只增操作；并发请求的回包可能各自只含自己观察到的快照。
       // 用并集结算，避免迟到的旧回包抹掉另一条已完成的归档。真正的取消归档
       // 由 workspace/follow 的 archived 全量事件走 setArchivedSessionIds 覆盖。
+      //
+      // 并集必须以**回包时**的 archivedSessionIds 为基准。等待期间那个全量事件
+      // 可能刚把某个 id 取消归档;若沿用请求发出前读到的旧集合,这里会把它
+      // 原样并回去,等于用陈旧快照覆盖更新的权威状态。读取延后到此处即可。
       service.setArchivedSessionIds([...new Set([
         ...archivedSessionIds, ...archived, sessionId
       ])]);

@@ -120,8 +120,14 @@ export function openProviderEditor({
     + (message ? notice(message) : "");
   }
 
+  // sheet 是全局共用的一块 <dialog>。保存在途时用户可能 Esc / 点遮罩关掉它,
+  // 再打开别的提供方编辑器;此时这里的失败重画必须整体放弃,否则会把本表单
+  // 和本次报错覆盖到用户正在编辑的另一个 sheet 上,连同他刚输入的内容一起丢掉。
+  let sheetToken = 0;
+
   function repaint() {
-    sheet.setBody(body());
+    if (!sheet.owns(sheetToken)) return;
+    sheet.setBody(body(), sheetToken);
     sheet.setActions(
       button({ id: "prov-cancel", label: t("set.cancel") })
       + button({
@@ -129,7 +135,8 @@ export function openProviderEditor({
         label: saving ? t("set.saving") : t("set.save"),
         kind: "primary",
         disabled: saving || !dirty() || Boolean(catalogFailure())
-      })
+      }),
+      sheetToken
     );
     bindEditor();
   }
@@ -173,7 +180,7 @@ export function openProviderEditor({
       draft.rows = []; repaint();
     });
     root.querySelector("#cat-fetch")?.addEventListener("click", () => discoverModels());
-    root.querySelector("#prov-cancel")?.addEventListener("click", () => sheet.close());
+    root.querySelector("#prov-cancel")?.addEventListener("click", () => sheet.close(sheetToken));
     root.querySelector("#prov-save")?.addEventListener("click", () => commit());
   }
 
@@ -246,7 +253,7 @@ export function openProviderEditor({
         ops,
         draft.apiKey
       );
-      sheet.close();
+      sheet.close(sheetToken);
       await onSaved?.(entry.displayName || entry.provider);
     } catch (error) {
       message = translateSaveError(error);
@@ -255,10 +262,10 @@ export function openProviderEditor({
     }
   }
 
-  sheet.open({
+  sheetToken = sheet.open({
     title: entry.displayName || entry.provider,
     body: body(),
     actions: "",
-    bind: () => repaint()
+    bind: (_root, generation) => { sheetToken = generation; repaint(); }
   });
 }

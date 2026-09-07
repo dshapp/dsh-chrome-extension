@@ -26,7 +26,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   workspacePath = () => null,
   workspaceSessionIds = () => null,
   workspaceId = () => null,
-  orderStore = null
+  orderStore = null,
+  // deps 是纯组装层,没有 toast —— 与设置页同样由 app 就地补进来。
+  showToast = null
 } = {}) {
   // 挂起请求/草稿的权威来源 —— session.list 的摘要里没有这两样。
   const listStore = deps.sessions?.listStore ?? null;
@@ -40,6 +42,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   const search = popover.querySelector("#history-search");
   const title = document.querySelector("#hdr-title");
   let activeSessionId = null;
+  // 正在跑 fork/rename/archive 的会话 id:同一行的操作按钮在往返期间禁用。
+  const rowBusy = new Set();
   let allItems = [];
   let renderedItems = [];
   // 键盘导航的高亮行下标(-1 = 无选中)。与 activeSessionId(当前打开的会话)是两回事:
@@ -350,6 +354,12 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       openSession(sessionId);
       return;
     }
+    // fork / archive 都会改变会话集合,且宿主往返期间 popover 保持打开、
+    // 按钮仍可点。没有在途标记的话,连点两下会 fork 出两个子会话,或在归档
+    // 当前会话时多建一个空白会话。整行按钮一起禁用并给出进行中样式。
+    if (rowBusy.has(sessionId)) return;
+    rowBusy.add(sessionId);
+    setRowBusy(row, true);
     try {
       if (actionButton.dataset.action === "fork") {
         const forkedId = await deps.sessions.fork(sessionId);
@@ -371,9 +381,21 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         }
       }
     } catch (error) {
-      alert(deps.formatErrorDetails(error));
+      // 与全局一致用 toast:alert 会阻塞 UI 线程,且和应用其余部分的报错风格不符。
+      showToast?.(deps.formatErrorDetails(error));
+    } finally {
+      rowBusy.delete(sessionId);
+      // 行可能已被 refresh() 重建或随归档消失,重新查一次当前 DOM 里的它。
+      setRowBusy(list.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`), false);
     }
   });
+
+  /// 整行的操作按钮统一进入/退出在途态。
+  function setRowBusy(row, busy) {
+    if (!row) return;
+    row.classList.toggle("is-busy", busy);
+    for (const button of row.querySelectorAll("button[data-action]")) button.disabled = busy;
+  }
 
   function hide() {
     popover.classList.remove("open");

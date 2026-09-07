@@ -63,8 +63,14 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
       const commit = () => {
         const value = input.value.trim();
         if (!value || pending) return;
-        pending = true; render();
-        Promise.resolve(onEdit(value)).finally(() => { pending = false; editing = false; render(); });
+        pending = true; error = null; render();
+        // 失败必须落到 error 行(与 run() 一致):否则保存失败后编辑态被关掉、
+        // 显示回旧目标且一句提示都没有,用户会以为已经改成功了。
+        // 失败时保留编辑态,好让用户直接改完重试,不用重新点开编辑。
+        Promise.resolve(onEdit(value))
+          .then(() => { editing = false; })
+          .catch((e) => { error = e?.message || String(e); })
+          .finally(() => { pending = false; render(); });
       };
       // Enter 提交、Escape 取消(对齐 Mac 的编辑器按键)。
       input.addEventListener("keydown", (e) => {

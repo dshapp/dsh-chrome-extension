@@ -146,7 +146,12 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
     // 正式 workspace service 会同步发布乐观顺序，并在异步回包时做窄合并/回滚；
     // 菜单只消费它的状态，避免自己保存一份会覆盖 follow 增量的旧快照。
     if (followsWorkspaceState) {
-      await deps.workspaces.moveWorkspace?.(movedId, beforeId);
+      // service 自己做乐观发布与窄回滚,这里只需吞掉 rejection:
+      // 调用方是 void reorderWorkspace(...),不接住就成了 unhandled rejection。
+      // 按上面的约定,位置没记上不弹错打断用户。
+      try {
+        await deps.workspaces.moveWorkspace?.(movedId, beforeId);
+      } catch { /* service 已回滚本地顺序 */ }
       return;
     }
     // 简化的嵌入方没有 subscribe 时保留本地退化行为。

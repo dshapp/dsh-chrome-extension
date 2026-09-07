@@ -15,6 +15,11 @@ import { foldMessageText, chunkText } from "./long-message.js";
 // lucide: chevron-down (https://github.com/lucide-icons/lucide,ISC),原始路径,stroke-width 调至 1.7。
 const CHEVRON = '<svg class="tool-chevron dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 
+/// assistant 正文的折叠阈值。比用户消息的 1000 宽松得多:模型回答本来就长,
+/// 过早折叠会破坏正常阅读。这里要挡的是"打印整个文件"那一类,所以取一个
+/// 正常回答几乎碰不到、但能让每帧 markdown 解析量封顶的值。
+const AGENT_FOLD_LIMIT = 20000;
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -67,6 +72,24 @@ function appendChunked(target, chunks) {
     if (chunks.length > 1) handle = schedule(step);
   }
   return () => { if (handle != null) cancel(handle); };
+}
+
+/// 在弹窗里分片渲染一段可能很长的纯文本,并把 cancel 绑到弹窗关闭。
+/// reasoning 全文、context 注入块都可能有几百 KB,单个 Text 节点会同步布局卡顿。
+function openChunkedTextDetail({ title, text, className }) {
+  let cancel = null;
+  const dialog = openCardDetail({
+    title,
+    // 惰性:不打开就不拼,打开也只在点复制时才求值。
+    copyText: () => text,
+    build: () => {
+      const host = el("pre", className);
+      cancel = appendChunked(host, chunkText(text));
+      return host;
+    }
+  });
+  dialog?.addEventListener("close", () => { cancel?.(); cancel = null; }, { once: true });
+  return dialog;
 }
 
 /// 用户消息正文。超长时只渲染前 FOLD_LIMIT 字符,并给一个"查看全部"入口 ——
@@ -144,10 +167,8 @@ export function createContextNode(node) {
   trigger.append(el("span", "context-label", label));
   trigger.append(el("span", "context-preview", text.slice(0, 80)));
   trigger.insertAdjacentHTML("beforeend", CHEVRON);
-  trigger.addEventListener("click", () => openCardDetail({
-    title: label,
-    copyText: text,
-    build: () => el("pre", "context-body", text)
+  trigger.addEventListener("click", () => openChunkedTextDetail({
+    title: label, text, className: "context-body"
   }));
   wrap.append(trigger);
   return wrap;
@@ -162,6 +183,51 @@ export function createAssistantNode(node) {
   return turn;
 }
 
+/// assistant 正文。超长时只把前 AGENT_FOLD_LIMIT 字符交给 markdown 渲染,
+/// 余下的走"查看全部"弹窗 —— 与用户消息同样的策略。
+///
+/// 这里不只是省 DOM:流式期间每帧都会 replaceChildren + 重新 mdToHtml 整段正文,
+/// 不设上限的话一条几百 KB 的回答会被反复解析重建(总工作量随长度平方增长),
+/// 侧栏在模型打印大文件时直接卡死。折叠让每帧的解析量有上界。
+function createAgentText(text) {
+  const fold = foldMessageText(text, AGENT_FOLD_LIMIT);
+  const body = el("div", "msg-agent");
+  if (!fold.folded) {
+    renderMarkdownInto(body, text);
+    return body;
+  }
+  // 截断处可能落在未闭合的代码围栏里,原样渲染会把后面的正文吞进代码块。
+  // 补一行收尾围栏,让这一段仍是合法 markdown。
+  renderMarkdownInto(body, closeOpenFence(fold.preview));
+  const more = el("button", "msg-user-more");
+  more.type = "button";
+  more.textContent = t("message.viewAll");
+  more.title = t("message.foldedChars", { n: String(fold.hidden) });
+  more.addEventListener("click", () => {
+    let cancel = null;
+    const dialog = openCardDetail({
+      title: t("message.fullText"),
+      // 全文按分片建节点,且只在点开时构建。
+      build: () => {
+        const pre = el("pre", "msg-full-text");
+        cancel = appendChunked(pre, chunkText(text));
+        return pre;
+      },
+      copyText: () => text
+    });
+    dialog?.addEventListener("close", () => { cancel?.(); cancel = null; }, { once: true });
+  });
+  body.append(more);
+  return body;
+}
+
+/// 折叠切点若落在未闭合的 ``` 围栏内,补一行围栏收尾。
+function closeOpenFence(preview) {
+  let fences = 0;
+  for (const line of preview.split("\n")) if (/^\s*```/.test(line)) fences += 1;
+  return fences % 2 === 1 ? `${preview}\n\`\`\`` : preview;
+}
+
 export function updateAssistantNode(turn, node) {
   turn.replaceChildren();
   turn.classList.toggle("interrupted", node.status === AssistantStatus.interrupted);
@@ -171,9 +237,7 @@ export function updateAssistantNode(turn, node) {
     if (block.type === "reasoning" && block.text) {
       turn.append(createReasoningBlock(block.text));
     } else if (block.type === "text" && block.text) {
-      const body = el("div", "msg-agent");
-      renderMarkdownInto(body, block.text);
-      turn.append(body);
+      turn.append(createAgentText(block.text));
     } else if (block.type === "image" && block.attachment) {
       const img = document.createElement("img");
       img.className = "msg-agent-img";
@@ -205,10 +269,8 @@ function createReasoningBlock(text) {
   header.append(el("span", "thinking-icon", "✨"), el("span", "thinking-title", t("thinking")));
   header.insertAdjacentHTML("beforeend",
     '<svg class="thinking-chevron dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>');
-  header.addEventListener("click", () => openCardDetail({
-    title: t("thinking"),
-    copyText: text,
-    build: () => el("div", "thinking-body", text)
+  header.addEventListener("click", () => openChunkedTextDetail({
+    title: t("thinking"), text, className: "thinking-body"
   }));
   wrap.append(header);
   return wrap;
@@ -260,11 +322,17 @@ export function updateToolNode(row, node, context = {}) {
   header.setAttribute("aria-haspopup", "dialog");
   header.addEventListener("click", () => {
     if (!hasDetail) return;
-    openCardDetail({
+    // 参数与输出都可能是几 MB(写文件的 args、构建日志的 stdout)。正文里的这两块
+    // 走分片渲染,弹窗关闭时要停掉未跑完的排程,否则关掉后还在后台建节点。
+    const cancels = [];
+    const dialog = openCardDetail({
       title: (model.errorSummary ?? model.summary ?? t("tool.call")).split("\n")[0],
       copyText: () => toolCopyText(node, model),
-      build: () => buildToolBody(node, model, context)
+      build: () => buildToolBody(node, model, { ...context, onChunked: (fn) => cancels.push(fn) })
     });
+    dialog?.addEventListener("close", () => {
+      for (const fn of cancels.splice(0)) fn?.();
+    }, { once: true });
   });
 
   // 子调用(run_code 的 code-dispatch 嵌套)不进记录流:一次 fan-out 可能派发
@@ -338,7 +406,11 @@ function buildToolBody(node, model, context = {}) {
   if (node.argsRaw && model.variant !== ToolVariant.bash) {
     const args = el("details", "tool-args");
     args.append(el("summary", null, "IN"));
-    args.append(el("pre", null, prettyJson(node.argsRaw)));
+    const pre = el("pre", null);
+    // prettyJson 会把原文重新缩进(通常膨胀 3-5 倍),对写文件这类巨型参数来说
+    // 分片是必须的:一次性塞进单个 Text 节点会同步布局到卡死。
+    context.onChunked?.(appendChunked(pre, chunkText(prettyJson(node.argsRaw))));
+    args.append(pre);
     wrap.append(args);
   }
 
@@ -349,7 +421,10 @@ function buildToolBody(node, model, context = {}) {
       const out = el("details", "tool-output");
       out.open = true;
       out.append(el("summary", null, "OUT"));
-      out.append(el("pre", null, text));
+      const pre = el("pre", null);
+      // 一条 `cat big.json` / 十万行构建日志展开时就是这里:分片渲染。
+      context.onChunked?.(appendChunked(pre, chunkText(text)));
+      out.append(pre);
       wrap.append(out);
     }
     // 结果里的图片块直接显示。

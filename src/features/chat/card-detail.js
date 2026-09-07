@@ -72,14 +72,20 @@ export function openCardDetail({ title, build, copyText }) {
   if (built) body.append(built);
 
   const copy = dialog.querySelector(".card-detail-copy");
-  const text = typeof copyText === "function" ? copyText() : copyText;
-  copy.hidden = !text;
-  if (text) {
+  // copyText 是函数时**不在这里求值**:工具输出/参数可能有几 MB,打开弹窗只为
+  // 决定复制键是否出现而先拼一份全文,等于把省下的开销又付一遍。函数形态一律
+  // 认为"有文本可复制",真正的字符串留到点复制时再构建。
+  const lazyCopy = typeof copyText === "function" ? copyText : null;
+  const text = lazyCopy ? null : copyText;
+  copy.hidden = !(lazyCopy || text);
+  if (lazyCopy || text) {
     copy.textContent = "⧉";
     copy.title = t("copy");
     copy.setAttribute("aria-label", t("copy"));
     copy.onclick = () => {
-      navigator.clipboard?.writeText(text).catch(() => {});
+      const value = lazyCopy ? lazyCopy() : text;
+      if (!value) return;
+      navigator.clipboard?.writeText(value).catch(() => {});
       copy.textContent = "✓";
       setTimeout(() => { copy.textContent = "⧉"; }, 1200);
     };

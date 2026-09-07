@@ -101,19 +101,21 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
   /// 只读查看预设的 agent.cordis.yml。
   async function viewPreset(preset) {
     const name = presetDisplayName(preset) || preset.id;
-    sheet.open({
+    // 捕获所有权令牌:读取期间用户可能关掉这个查看器再打开另一个预设,
+    // 迟到的内容不能画进那个标题写着别的预设名的 sheet 里。
+    const token = sheet.open({
       title: t("pset.viewerTitle", { name }),
       body: spinner(),
       actions: button({ id: "pset-close", label: t("set.done"), kind: "primary" }),
       bind(root) {
-        root.querySelector("#pset-close").addEventListener("click", () => sheet.close());
+        root.querySelector("#pset-close").addEventListener("click", () => sheet.close(token));
       }
     });
     try {
       const value = await settingsService.presetRead(preset.id);
-      sheet.setBody(`<pre class="set-code">${escapeHtml(value?.content ?? "")}</pre>`);
+      sheet.setBody(`<pre class="set-code">${escapeHtml(value?.content ?? "")}</pre>`, token);
     } catch (error) {
-      sheet.setBody(notice(deps.formatErrorDetails(error)));
+      sheet.setBody(notice(deps.formatErrorDetails(error)), token);
     }
   }
 

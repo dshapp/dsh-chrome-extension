@@ -403,6 +403,10 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
 .history-item:hover { background: var(--border-soft); }
 /* 键盘高亮行:与 :hover 同样的底色,保证鼠标和方向键指向同一处时观感一致。 */
 .history-item.selected { background: var(--border-soft); }
+/* fork/rename/archive 往返期间:整行变淡且操作按钮不再接受点击。
+   只压低按钮的交互而不是整行 pointer-events: none —— 行本身仍要能悬停/选中。 */
+.history-item.is-busy { opacity: 0.55; }
+.history-item.is-busy button[data-action] { pointer-events: none; }
 .history-item.active { background: var(--user-bubble); }
 .history-item .h-title {
   flex: 1;

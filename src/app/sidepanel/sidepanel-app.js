@@ -755,10 +755,22 @@ export function createSidepanelApp(root, deps) {
     } catch (error) {
       if (!_retried && isSessionUnopenable(error)) {
         showToast(format(error));
-        await newSession({ _retried: true });
-        return;
+        return newSession({ _retried: true });
       }
       showToast(format(error));
+      // service.open 失败时它仍停在之前的会话；UI 若继续保留目标 id，后续旧
+      // 会话的实时帧会全部被 onRuntimeChange 丢弃，页面永久卡在空白加载态。
+      if (token === openSessionToken) {
+        state.sessionId = previousSessionId;
+        const previousSnapshot = deps.sessions.getRuntimeSnapshot();
+        if (previousSessionId && previousSnapshot?.sessionId === previousSessionId) {
+          applySnapshot(previousSnapshot);
+        } else {
+          chatRenderer.setTyping(false);
+          updateSendState();
+        }
+      }
+      return null;
     }
 
     // 等待期间用户又切走了:迟到结果不得渲染到新会话上。
@@ -793,6 +805,7 @@ export function createSidepanelApp(root, deps) {
       statsBar.set({ ...deps.sessions.getRuntimeSnapshot(), presetName: dock.currentPresetName() });
     });
     refreshSlashSources();
+    return sessionId;
   }
 
   /// 打开一个子代理会话(只读)。对齐 Mac selectSubagent:走 subagent.history 读转录
@@ -902,7 +915,8 @@ export function createSidepanelApp(root, deps) {
       workspacePath: () => workspaceMenu?.activePath() ?? null,
       workspaceSessionIds: () => workspaceMenu?.activeSessionIds() ?? null,
       workspaceId: () => workspaceMenu?.activeWorkspaceId() ?? null,
-      orderStore: deps.sessions?.orderStore ?? null
+      orderStore: deps.sessions?.orderStore ?? null,
+      showToast
     });
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
     mountSettings(

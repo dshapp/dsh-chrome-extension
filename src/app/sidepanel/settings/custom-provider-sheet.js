@@ -128,17 +128,24 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
       + (message ? notice(message) : "");
   }
 
+  // 全局共用的 <dialog> 所有权令牌:创建在途时用户可能关掉本 sheet 再开别的,
+  // 迟到的失败重画不能覆盖用户正在编辑的那个,更不能连它一起关掉。
+  let sheetToken = 0;
+
   function repaint() {
-    sheet.setBody(body());
+    if (!sheet.owns(sheetToken)) return;
+    sheet.setBody(body(), sheetToken);
     sheet.setActions(
       button({ id: "cst-cancel", label: t("set.cancel") })
-      + button({ id: "cst-save", label: saving ? t("set.saving") : t("custom.create"), kind: "primary", disabled: !canSave() })
+      + button({ id: "cst-save", label: saving ? t("set.saving") : t("custom.create"), kind: "primary", disabled: !canSave() }),
+      sheetToken
     );
     bindSheet();
   }
 
   /// 只更新按钮可用态,不重画输入框 —— 重画会让正在输入的字段失焦。
   function repaintSoft() {
+    if (!sheet.owns(sheetToken)) return;
     const root = sheet.root;
     const save = root.querySelector("#cst-save");
     if (save) save.disabled = !canSave();
@@ -204,12 +211,17 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
         api: draft.api || undefined,
         apiKey: draft.apiKey || undefined
       });
+      // 等待期间用户可能已经改了 baseURL/apiKey。这份目录属于**发起时**的那组
+      // endpoint,若已不匹配就整份丢弃 —— 否则会把 A 网关的 modelId 写进
+      // 现在指向 B 的表单,用户可能就这样把错误的模型保存下去。
+      if (fetchedFrom !== autoFetchEndpointKey(draft.baseURL, draft.apiKey)) return;
       const ids = (value?.models ?? []).map((model) => model?.id).filter(Boolean);
       discoveredModels = ids;
       // 下拉框的选中值必须始终有效,否则会渲染出一个空白选择框。
       if (ids.length && !ids.includes(draft.modelId)) draft.modelId = ids[0];
       discovery = ids.length ? t("cat.discoveryAdded", { found: ids.length, added: ids.length }) : t("cat.discoveryNone");
     } catch (error) {
+      if (fetchedFrom !== autoFetchEndpointKey(draft.baseURL, draft.apiKey)) return;
       discoveredModels = [];
       discovery = deps.formatErrorDetails(error);
     } finally {
@@ -256,8 +268,11 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
   function close() {
     if (autoFetchTimer != null) clearTimeout(autoFetchTimer);
     autoFetchTimer = null;
-    sheet.close();
+    sheet.close(sheetToken);
   }
 
-  sheet.open({ title: t("custom.title"), body: body(), actions: "", bind: () => repaint() });
+  sheetToken = sheet.open({
+    title: t("custom.title"), body: body(), actions: "",
+    bind: (_root, generation) => { sheetToken = generation; repaint(); }
+  });
 }

@@ -22,6 +22,11 @@ const TAB_STORAGE_KEY = "dsh_settings_tab";
 function createSheet(dialog) {
   const bodyHost = dialog.querySelector("#settings-sheet-body");
   let currentActions = "";
+  // 每次 open 递增。异步回调(保存失败重画、异步载入正文、成功后 close)可能在
+  // 用户已经 Esc / 点遮罩关掉、或换开了另一个 sheet 之后才落地;此时这块
+  // <dialog> 已经不属于它了。带上 open 时拿到的 token 就能判定所有权,
+  // 避免把 A 的表单和报错画进用户正看着的 B,或关掉 B。
+  let openGeneration = 0;
 
   function paint(title, body, actions) {
     bodyHost.innerHTML = `<div class="set-sheet-head">${escapeHtml(title)}</div>`
@@ -31,24 +36,38 @@ function createSheet(dialog) {
 
   return {
     get root() { return bodyHost; },
+    /// 当前 sheet 的所有权令牌。异步回调应在 open 时捕获它,
+    /// 之后每次写 DOM 前用 owns(token) 校验。
+    get generation() { return openGeneration; },
+    owns(token) { return token === openGeneration && dialog.open; },
     open({ title, body, actions, bind }) {
+      const generation = ++openGeneration;
       currentActions = actions ?? "";
       paint(title, body, currentActions);
       this._title = title;
       if (!dialog.open) dialog.showModal();
-      bind?.(bodyHost);
+      // bind 在 open 返回前就跑,调用方还没拿到 token,所以直接传给它 ——
+      // 否则首次 repaint 会用旧 token 自我拒绝。
+      bind?.(bodyHost, generation);
+      return generation;
     },
     /// 只换正文,标题与动作条不动(异步载入内容时用)。
-    setBody(body) {
+    /// 传 token 则仅在仍持有 sheet 时生效。
+    setBody(body, token) {
+      if (token !== undefined && !this.owns(token)) return;
       const target = bodyHost.querySelector(".set-sheet-body");
       if (target) target.innerHTML = body;
     },
-    setActions(actions) {
+    setActions(actions, token) {
+      if (token !== undefined && !this.owns(token)) return;
       currentActions = actions;
       const target = bodyHost.querySelector(".set-sheet-actions");
       if (target) target.innerHTML = actions;
     },
-    close() {
+    close(token) {
+      if (token !== undefined && !this.owns(token)) return;
+      // 关闭即让出所有权:在途回调此后一律失配。
+      openGeneration += 1;
       if (dialog.open) dialog.close();
       bodyHost.innerHTML = "";
     }
@@ -204,7 +223,8 @@ export function mountSettings(deps, { onModelsChanged } = {}) {
   openButton.addEventListener("click", open);
   backButton.addEventListener("click", close);
   // sheet 的 Esc 由 <dialog> 原生处理,但要把内容清掉,否则下次打开会闪一帧旧内容。
-  dialog.addEventListener("close", () => { sheet.root.innerHTML = ""; });
+  // Esc 关闭也要让出所有权,否则在途回调仍会认为自己持有这块 dialog。
+  dialog.addEventListener("close", () => { sheet.close(); });
   // 点 sheet 外的遮罩关闭。
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) sheet.close();

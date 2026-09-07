@@ -318,7 +318,15 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
       form.settle(settled);
       if (form.dirty) failed.add(card.namespace);
       // 重新 describe:命名空间 revision 变了,别的卡片也要跟上。
-      describe = await settingsService.describe();
+      //
+      // 这次读取与 refresh() 抢同一个 describe/forms,所以必须共用同一个
+      // generation:期间若用户切走再切回(activate 会强制 refresh)或另一张卡
+      // 也保存完毕,较新的快照已经落地,这里的旧回包不能再覆盖它 ——
+      // 否则 formFor 会拿陈旧 revision 当 expectedRevision,下次保存必冲突。
+      const generation = ++cardsLoadGeneration;
+      const nextDescribe = await settingsService.describe();
+      if (generation !== cardsLoadGeneration) return;
+      describe = nextDescribe;
       for (const [ns, staged] of forms) {
         if (staged.dirty) continue;
         forms.delete(ns);

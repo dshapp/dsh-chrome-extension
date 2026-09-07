@@ -149,6 +149,10 @@
 .thinking-chevron { color: var(--text-faint); margin-left: auto; }
 /* 正文只在弹窗里出现,不再自带滚动条(弹窗有统一的那一条) */
 .thinking-body {
+  /* 分片渲染要求它是 <pre>(见 openChunkedTextDetail);<pre> 默认等宽字体并带
+     外边距,这里显式改回正文字体,保持与原先 <div> 的观感一致。 */
+  margin: 0;
+  font-family: inherit;
   font-size: 0.8125rem;
   color: var(--text-dim);
   font-style: italic;
