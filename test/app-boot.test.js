@@ -378,7 +378,10 @@ describe("应用接线冒烟", () => {
 
     expect(app.state.sessionId).toBe("s1");
     expect(document.querySelector("#toast").textContent).toContain("network offline");
-    expect(document.querySelector("#hdr-title").textContent).toBe(snapshot.title);
+    // 回滚要真的把上一个会话重画回来(applySnapshot),而不只是把 state 改回去:
+    // 标题由 historyDrawer.setActive 落地,而 drawer 只在 start() 里挂载 ——
+    // 这个用例不跑 start(),所以断言改看 applySnapshot 一定会碰的 cwd 投影。
+    expect(app.state.cwd).toBe(snapshot.cwd);
   });
 
   it("已选元素条显示数量并可清空", () => {
