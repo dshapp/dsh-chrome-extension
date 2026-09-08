@@ -289,40 +289,34 @@ async function cdp(tabId, method, params = {}) {
 }
 
 /**
- * Bring a tab to the foreground.
+ * Aim a tab's *renderer* at the element the next trusted input should reach.
  *
- * Chrome delivers synthesized *trusted* input only to the focused tab of a
- * focused window: dispatching `Input.*` at a background tab is accepted by the
- * protocol and then silently dropped. Tools that rely on trusted input must
- * therefore activate their tab first, unlike the DOM-level tools which work
- * perfectly well on a hidden tab.
+ * Notably it does **not** touch the browser's foreground — neither the tab's
+ * selection within its window nor the window's OS focus. Both were measured to
+ * be unnecessary: `chrome.debugger`'s per-tab command routing delivers
+ * `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.insertText`
+ * into an **unselected** tab of a window that is not even the frontmost OS
+ * application, and the page receives them with `isTrusted: true`. A full
+ * pointer stroke lands, and editing keys like Backspace act on the focused
+ * field. The older belief that unselected tabs drop `Input.*` did not survive
+ * a direct test.
+ *
+ * That makes every trusted tool safe to run on a hidden tab, so the agent no
+ * longer competes with the user — or with another agent — for the foreground.
+ * The only real requirement is a *renderer-side* focused element, which is what
+ * this restores. Attaching the debugger also keeps a background tab unthrottled
+ * and `visibilityState: "visible"`, so layout and hit testing stay correct.
  */
-async function focusTab(tabId, { restoreFocus = true } = {}) {
-  const tab = await chrome.tabs.get(tabId)
-  if (!tab.active) {
-    await chrome.tabs.update(tabId, { active: true })
-    if (tab.windowId != null) {
-      try {
-        await chrome.windows.update(tab.windowId, { focused: true })
-      } catch {
-        // A window that cannot be focused (minimized by the user) still gets the
-        // tab activation, which is the part that matters most.
-      }
-    }
-  }
-
-  // Keyboard callers only: a trusted CLICK establishes its own focus, and
-  // pre-focusing its target actually breaks widgets that suppress the click
-  // right after a programmatic focus (the standard focus+click double-toggle
-  // guard comboboxes use).
-  if (!restoreFocus) return
-
-  // Activating a tab moves DOM focus back to the document body. A caller who
-  // just filled or clicked a field expects the next keystroke to land there, so
-  // restore the element the page had focused. This runs even when the tab was
-  // already active: activation is only one way focus drifts to the body — the
-  // page itself may have blurred the element since focus() ran, and skipping
-  // the restore on an active tab silently sent every keystroke to <body>.
+async function aimRendererFocus(tabId) {
+  // Keyboard input goes wherever the renderer's focus currently points, so a
+  // caller who just filled or clicked a field expects the next keystroke to
+  // land there. The page may have blurred that element since focus() ran, which
+  // would silently send every keystroke to <body>, so re-aim before typing.
+  //
+  // Mouse callers deliberately do not come here: a trusted press establishes
+  // its own focus, and pre-focusing its target breaks widgets that suppress a
+  // click arriving right after a programmatic focus (the focus+click
+  // double-toggle guard comboboxes use).
   try {
     await evaluateInPage(
       tabId,
@@ -631,7 +625,8 @@ function mouseButtonBit(button) {
 }
 
 async function trustedClick(tabId, x, y, { button = 'left', clickCount = 1, selector } = {}) {
-  await focusTab(tabId, { restoreFocus: false })
+  // No focus work at all: a trusted press establishes its own focus, and the
+  // tab needs neither selection nor window focus to receive the stroke.
   let point = { x, y }
   if (selector) point = await safeClickPoint(tabId, selector)
   else if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('x and y must be finite numbers')
@@ -646,9 +641,142 @@ async function trustedClick(tabId, x, y, { button = 'left', clickCount = 1, sele
   await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none', buttons: 0 })
   if (selector) point = await safeClickPoint(tabId, selector, { scroll: false })
   const common = { x: point.x, y: point.y, button, clickCount, buttons }
+  // Watch for the stroke actually reaching the document. Trusted input is
+  // delivered by the browser process, so a dropped event produces no error —
+  // only silence — which is exactly how a foregrounding bug used to hide. One
+  // capturing listener, armed for the duration of the press, turns that
+  // silence into a reportable `received` flag.
+  await installClickWitness(tabId)
   await cdp(tabId, 'Input.dispatchMouseEvent', { ...common, type: 'mousePressed' })
   await cdp(tabId, 'Input.dispatchMouseEvent', { ...common, type: 'mouseReleased', buttons: 0 })
+  point.observed = await readClickWitness(tabId)
   return point
+}
+
+/**
+ * Arm a capturing listener that records the next trusted pointer press.
+ *
+ * Capturing, and on `document`, so it sees the event before any page handler
+ * can stop propagation: the question is whether the browser delivered the
+ * input at all, not whether the page chose to act on it.
+ */
+async function installClickWitness(tabId) {
+  try {
+    await evaluateInPage(tabId, `(() => {
+      globalThis.__dshChromeClickSeen = null;
+      const on = (event) => {
+        if (!event.isTrusted) return;
+        globalThis.__dshChromeClickSeen = { type: event.type };
+      };
+      globalThis.__dshChromeClickWitness = on;
+      document.addEventListener('pointerdown', on, true);
+      document.addEventListener('mousedown', on, true);
+      return true;
+    })()`)
+  } catch {
+    // Witnessing is diagnostic; a page that refuses it still gets the click.
+  }
+}
+
+/**
+ * Snapshot the editing state a keystroke is expected to change, and start
+ * recording the events that prove it landed.
+ *
+ * A chord like Meta+A changes no text, so the pre-existing `changed` flag
+ * reports false for a *successful* select-all and false again for one that did
+ * nothing at all — the ambiguity that hid this whole class of failure. Selection
+ * offsets, clipboard events and submit counts distinguish the two.
+ */
+async function installEditingWitness(tabId) {
+  try {
+    return await evaluateInPage(tabId, `(() => {
+      const el = document.activeElement;
+      const sel = globalThis.getSelection && globalThis.getSelection();
+      const seen = [];
+      const on = (event) => { if (event.isTrusted) seen.push(event.type); };
+      globalThis.__dshChromeEditWitness = on;
+      for (const type of ['copy', 'cut', 'paste', 'beforeinput', 'submit']) {
+        document.addEventListener(type, on, true);
+      }
+      globalThis.__dshChromeEditSeen = seen;
+      return {
+        armed: true,
+        start: el && el.selectionStart != null ? el.selectionStart : null,
+        end: el && el.selectionEnd != null ? el.selectionEnd : null,
+        collapsed: sel ? sel.isCollapsed : null,
+        selected: sel ? String(sel).length : null,
+      };
+    })()`)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read back what the keystroke actually did.
+ *
+ * Reports `selectionChanged` and the clipboard/submit `events` observed. Absent
+ * fields mean the probe could not run, which is deliberately distinct from a
+ * measured false.
+ */
+async function readEditingWitness(tabId, before) {
+  if (!before || !before.armed) return {}
+  try {
+    const after = await evaluateInPage(tabId, `(() => {
+      const on = globalThis.__dshChromeEditWitness;
+      if (on) {
+        for (const type of ['copy', 'cut', 'paste', 'beforeinput', 'submit']) {
+          document.removeEventListener(type, on, true);
+        }
+        delete globalThis.__dshChromeEditWitness;
+      }
+      const el = document.activeElement;
+      const sel = globalThis.getSelection && globalThis.getSelection();
+      const seen = globalThis.__dshChromeEditSeen || [];
+      delete globalThis.__dshChromeEditSeen;
+      return {
+        start: el && el.selectionStart != null ? el.selectionStart : null,
+        end: el && el.selectionEnd != null ? el.selectionEnd : null,
+        collapsed: sel ? sel.isCollapsed : null,
+        selected: sel ? String(sel).length : null,
+        events: Array.from(new Set(seen)),
+      };
+    })()`)
+    if (!after) return {}
+    const moved =
+      after.start !== before.start ||
+      after.end !== before.end ||
+      after.collapsed !== before.collapsed ||
+      after.selected !== before.selected
+    const out = { selectionChanged: moved }
+    if (after.events.length) out.events = after.events
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/** Retire the witness and report whether the press was delivered. */
+async function readClickWitness(tabId) {
+  try {
+    const seen = await evaluateInPage(tabId, `(() => {
+      const on = globalThis.__dshChromeClickWitness;
+      if (on) {
+        document.removeEventListener('pointerdown', on, true);
+        document.removeEventListener('mousedown', on, true);
+        delete globalThis.__dshChromeClickWitness;
+      }
+      const seen = globalThis.__dshChromeClickSeen;
+      delete globalThis.__dshChromeClickSeen;
+      return seen === undefined ? 'absent' : (seen || 'none');
+    })()`)
+    // 'none' means the listener was armed and nothing arrived: a real drop.
+    // 'absent' means the probe never ran, so nothing is claimed either way.
+    if (seen === 'absent' || seen == null) return {}
+    return seen === 'none' ? { received: false } : { received: true }
+  } catch {
+    return {}
+  }
 }
 
 async function safeClickPoint(tabId, selector, { scroll = true } = {}) {
@@ -919,9 +1047,11 @@ const tools = {
     const tabId = currentTab(session)
     if (trusted) {
       // Real CDP input for pages that check isTrusted or listen outside the
-      // DOM event path. Costs a tab activation, so it is opt-in.
+      // DOM event path. Opt-in because a synthetic stroke is cheaper and
+      // sufficient for most widgets — not because it costs the foreground,
+      // which it no longer does.
       const point = await trustedClick(tabId, undefined, undefined, { selector })
-      return { success: true, x: point.x, y: point.y, trusted: true }
+      return { success: true, x: point.x, y: point.y, trusted: true, ...point.observed }
     }
     const result = await runOnElement(
       tabId,
@@ -1412,13 +1542,13 @@ async focus({ session, selector }) {
       button: button || 'left',
       clickCount: Math.min(Math.max(clickCount || 1, 1), 3),
     })
-    return { success: true, x: point.x, y: point.y, trusted: true }
+    return { success: true, x: point.x, y: point.y, trusted: true, ...point.observed }
   },
 
   async key_type({ session, text }) {
     const tabId = currentTab(session)
     const value = String(text ?? '')
-    await focusTab(tabId)
+    await aimRendererFocus(tabId)
     const before = await readFocusedText(tabId)
     await cdp(tabId, 'Input.insertText', { text: value })
     const after = await readFocusedText(tabId)
@@ -1431,12 +1561,24 @@ async focus({ session, selector }) {
     return { success: true, length: value.length, trusted: true, ...verification }
   },
 
-  async send_keys({ session, keys, count }) {
+  async send_keys({ session, keys, count, commands }) {
     const tabId = currentTab(session)
-    await focusTab(tabId)
+    await aimRendererFocus(tabId)
     const parts = String(keys || '').split('+')
     const keyName = parts.pop()
     const modifiers = parts.reduce((mask, name) => mask | modifierBit(name), 0)
+    // Refuse a browser-level chord rather than dispatching it into the renderer
+    // and reporting success for a keystroke Chrome consumed before the page
+    // could ever see it.
+    const chord = chordSignature(parts, keyName)
+    if (BROWSER_SHORTCUTS.has(chord)) {
+      throw new Error(
+        `${keys} is a browser shortcut, handled by Chrome before the page sees it — ` +
+        'CDP input enters at the renderer, so it cannot be delivered. Use the ' +
+        'matching tool instead (navigate to open or change a page, close_tab to ' +
+        'close one), or send the page-level key the site itself listens for.',
+      )
+    }
     const descriptor = keyDescriptor(keyName)
     if (!descriptor) throw new Error(`unsupported key: ${keys}`)
     // A printable character arrives as 'keyDown' carrying 'text' so the page
@@ -1450,11 +1592,28 @@ async focus({ session, selector }) {
     // one per character. Capped because a repeat count is a convenience for
     // editing, not a way to hold a key down indefinitely.
     const repeat = Math.min(Math.max(Math.trunc(Number(count) || 1), 1), SEND_KEYS_MAX_COUNT)
+    // Attach the macOS editing command this chord stands for, so select-all,
+    // copy/cut/paste, undo and Enter-to-submit actually happen instead of
+    // arriving as an inert keystroke. An explicit `commands` wins, for a
+    // binding this table does not know.
+    //
+    // macOS only, and that restriction is load-bearing: there, a non-empty
+    // `commands` makes the renderer perform *only* those commands and ignore
+    // the key (measured — key "z" with `selectAll` selected the field and
+    // inserted no "z"). On other platforms the renderer derives these actions
+    // from the keystroke itself, so sending commands would be at best redundant
+    // and at worst would suppress the very key the caller asked for.
+    const os = await detectPlatform()
+    const explicit = Array.isArray(commands) && commands.length ? commands : null
+    const derived = os === 'mac' ? EDITING_COMMANDS.get(chord) : undefined
+    const cmds = explicit || derived
     const before = await readFocusedText(tabId)
+    const witness = await installEditingWitness(tabId)
     for (let i = 0; i < repeat; i += 1) {
-      await cdp(tabId, 'Input.dispatchKeyEvent', { type, modifiers, ...event })
+      await cdp(tabId, 'Input.dispatchKeyEvent', { type, modifiers, ...event, ...(cmds ? { commands: cmds } : {}) })
       await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers, ...event })
     }
+    const effect = await readEditingWitness(tabId, witness)
     const after = await readFocusedText(tabId)
     // Report whether the keys changed the focused text at all. An editing key
     // that leaves the page byte-identical is the signature of a keystroke the
@@ -1462,7 +1621,23 @@ async focus({ session, selector }) {
     // caller repeat an inert key indefinitely. Navigation and submit keys
     // legitimately change nothing here, so this is reported, never thrown.
     const changed = before == null || after == null ? null : after !== before
-    return { success: true, keys, count: repeat, trusted: true, changed }
+    const result = { success: true, keys, count: repeat, trusted: true, changed, ...effect }
+    if (cmds) result.commands = cmds
+    // A chord that this build knows carries an editing command, yet produced no
+    // text change, no selection change and no clipboard/submit event, did
+    // nothing whatsoever. Say so: that combination used to be indistinguishable
+    // from a successful select-all, and a caller who cannot tell them apart
+    // repeats a doomed keystroke instead of changing approach.
+    const inert =
+      changed === false &&
+      effect.selectionChanged === false &&
+      !effect.events
+    if (inert && EDITING_COMMANDS.has(chord)) {
+      result.hint = os === 'mac'
+        ? `${keys} reached the page but changed nothing — the target may not be an editable element, or may have no selection to act on. Check that the intended field has focus (click or focus it first).`
+        : `${keys} reached the page but changed nothing. On ${os || 'this platform'} the page itself must implement this shortcut; for a native input use fill to set text, or arrow keys with Shift to select.`
+    }
+    return result
   },
 
   async hover({ session, selector, x, y }) {
@@ -1475,9 +1650,11 @@ async focus({ session, selector }) {
     if (typeof point.x !== 'number' || typeof point.y !== 'number') {
       throw new Error('pass selector, or both x and y')
     }
-    // Hover is trusted input, so like mouse_click it only lands on a focused
-    // tab; a background tab would accept the command and drop the event.
-    await focusTab(tabId, { restoreFocus: false })
+    // No tab selection here, unlike mouse_click. A pointer move carries no
+    // focus semantics: measured on an unselected tab, `mouseMoved` still
+    // arrives with `isTrusted: true` and fires mouseover/mouseenter, so the
+    // hover menus and tooltips this tool exists for open normally. Selecting
+    // the tab would only pull the user's viewport onto the agent's page.
     await cdp(tabId, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
       x: point.x,
@@ -2364,6 +2541,86 @@ function modifierBit(name) {
     case 'shift': return 8
     default: return 0
   }
+}
+
+/**
+ * Chords Chrome itself consumes, which `Input.dispatchKeyEvent` can never
+ * deliver.
+ *
+ * A browser shortcut is handled by the browser process before the renderer sees
+ * it, and CDP input enters at the renderer — so Cmd+T opens no tab, Cmd+W
+ * closes none, and the call would report a cheerful `success: true` for a
+ * keystroke that did precisely nothing. Naming them is strictly better than
+ * that silence. This is not a security boundary — a page cannot be made to
+ * receive these either way — it is an honesty boundary.
+ *
+ * Keys are matched as "<modifier set>+<key>" with modifiers sorted, so the
+ * caller's spelling (cmd/meta/command, any order) does not matter.
+ */
+const BROWSER_SHORTCUTS = new Set([
+  // Tab and window lifecycle.
+  'meta+t', 'ctrl+t', 'meta+w', 'ctrl+w', 'meta+n', 'ctrl+n',
+  'meta+shift+t', 'ctrl+shift+t', 'meta+shift+n', 'ctrl+shift+n',
+  'meta+q',
+  // Tab navigation.
+  'ctrl+tab', 'ctrl+shift+tab',
+  // Browser UI surfaces the renderer never receives.
+  'meta+l', 'ctrl+l', 'meta+shift+delete', 'ctrl+shift+delete',
+  'meta+shift+b', 'ctrl+shift+b', 'meta+d', 'ctrl+d',
+  // Zoom and reload are browser-level even though pages observe the result.
+  'meta+r', 'ctrl+r', 'meta+shift+r', 'ctrl+shift+r',
+])
+
+/**
+ * The macOS editing command each chord must carry to actually do anything.
+ *
+ * On macOS a key's *editing* behaviour is not derived by the renderer from the
+ * keycode. AppKit's NSResponder key bindings translate the keystroke into a
+ * named command (`selectAll`, `copy`, `insertNewline`) and the renderer executes
+ * that. `Input.dispatchKeyEvent` delivers only the keystroke, so without the
+ * translation the renderer receives a key with no command attached and performs
+ * no default action at all: measured, Meta+A left the selection empty, Meta+C
+ * fired no `copy` event, and Enter did not submit a form — while every call
+ * still reported `success: true`. Supplying `commands` restores all of them.
+ *
+ * Keys whose behaviour the renderer *can* derive on its own — printable
+ * characters, Backspace, Tab, and the arrow keys including Shift-selection —
+ * work without any of this and are deliberately absent from the table.
+ *
+ * Both modifier spellings map to the same command on purpose. A caller who
+ * sends Control+A on a Mac means select-all, and `commands` overrides the key
+ * anyway (see dispatch site), so honouring the intent beats punishing the
+ * spelling.
+ */
+const EDITING_COMMANDS = new Map([
+  ['meta+a', ['selectAll']],
+  ['ctrl+a', ['selectAll']],
+  ['meta+c', ['copy']],
+  ['ctrl+c', ['copy']],
+  ['meta+x', ['cut']],
+  ['ctrl+x', ['cut']],
+  ['meta+v', ['paste']],
+  ['ctrl+v', ['paste']],
+  ['meta+z', ['undo']],
+  ['ctrl+z', ['undo']],
+  ['meta+shift+z', ['redo']],
+  ['ctrl+shift+z', ['redo']],
+  ['enter', ['insertNewline']],
+  ['delete', ['deleteForward']],
+])
+
+/** Canonical "modifiers+key" spelling used to look up BROWSER_SHORTCUTS. */
+function chordSignature(modifierNames, keyName) {
+  const canonical = modifierNames
+    .map((name) => {
+      const lower = String(name).toLowerCase()
+      if (lower === 'command' || lower === 'cmd' || lower === 'meta') return 'meta'
+      if (lower === 'control' || lower === 'ctrl') return 'ctrl'
+      return lower
+    })
+    .filter((name) => name === 'meta' || name === 'ctrl' || name === 'alt' || name === 'shift')
+    .sort()
+  return [...new Set(canonical), String(keyName || '').toLowerCase()].join('+')
 }
 
 function keyDescriptor(name) {

@@ -126,6 +126,7 @@ function visibilityProbe() {
 function makeChromeMock() {
   const cdpCalls = []
   const activations = []
+  const windowFocuses = []
   const groupCalls = []
   const store = {}
   const debuggerEvents = []
@@ -138,6 +139,12 @@ function makeChromeMock() {
   return {
     cdpCalls,
     activations,
+    /**
+     * One record per chrome.windows.update call. Must stay empty: trusted input
+     * needs only tab selection, so focusing the *window* would drag the user out
+     * of another application for nothing.
+     */
+    windowFocuses,
     groupCalls,
     /** One record per chrome.debugger.attach attempt: { failed }. */
     attachCalls,
@@ -156,6 +163,10 @@ function makeChromeMock() {
     api: {
       runtime: {
         getManifest: () => ({ version: '0.1.0' }),
+        // The editing-command path is macOS-specific, so the suite reports mac
+        // to exercise it. detectPlatform caches the first success, which is why
+        // this is a fixed answer rather than a per-test knob.
+        getPlatformInfo: async () => ({ os: 'mac' }),
         // Keep the listener so a test can drive get_state the way the side
         // panel does, instead of reaching into the worker's internals.
         onMessage: { addListener(listener) { messageListeners.push(listener) } },
@@ -207,7 +218,9 @@ function makeChromeMock() {
         onUpdated: { addListener() {}, removeListener() {} },
       },
       tabGroups: { async get() { return { id: 7, title: 'Task' } }, async update() {} },
-      windows: { async update() {} },
+      windows: {
+        async update(id, props) { windowFocuses.push({ id, props }); return { id, ...props } },
+      },
       debugger: {
         async attach() {
           attachCalls.push({ failed: attachFails })
@@ -808,12 +821,89 @@ test('evaluate accepts a multi-statement body, not just an expression', async ()
   assert.equal(frame.payload.error, undefined, `body form must compile: ${frame.payload.error}`)
 })
 
-test('trusted input activates its tab first', async () => {
-  // Chrome silently drops synthesized input aimed at a background tab.
-  const before = mock.activations.length
+test('trusted input never selects its tab', async () => {
+  // Measured against real Chrome: chrome.debugger's per-tab routing delivers
+  // Input.* into an UNSELECTED tab of a window that is not even the frontmost
+  // OS application, and the page sees isTrusted:true. Selecting the tab was
+  // therefore never a requirement, only a way to fight the user (and other
+  // agents) for the foreground.
+  const before = mock.activations.filter((entry) => entry.props?.active === true).length
   await callTool('r4', 'send_keys', { session: 's', keys: 'Enter' })
-  const activated = mock.activations.slice(before).filter((entry) => entry.props?.active === true)
-  assert.ok(activated.length >= 1, 'send_keys must activate the tab before dispatching')
+  await callTool('r4b', 'key_type', { session: 's', text: 'x' })
+  await callTool('r4c', 'mouse_click', { session: 's', x: 3, y: 4 })
+  await callTool('r4d', 'hover', { session: 's', x: 5, y: 6 })
+  const after = mock.activations.filter((entry) => entry.props?.active === true).length
+  assert.equal(after, before, 'no trusted tool may select its tab')
+})
+
+test('an editing chord carries the command that makes it act', async () => {
+  // On macOS a key's editing behaviour comes from an AppKit command, not from
+  // the keycode: Input.dispatchKeyEvent alone left Meta+A with an empty
+  // selection, Meta+C firing no copy event, and Enter not submitting — each
+  // still reporting success. The command is what makes them real.
+  const cases = [
+    ['Meta+a', 'selectAll'], ['Control+a', 'selectAll'],
+    ['Meta+c', 'copy'], ['Meta+x', 'cut'], ['Meta+v', 'paste'],
+    ['Meta+z', 'undo'], ['Enter', 'insertNewline'], ['Delete', 'deleteForward'],
+  ]
+  for (const [keys, command] of cases) {
+    const before = mock.cdpCalls.length
+    const frame = await callTool(`ec-${keys}`, 'send_keys', { session: 's', keys })
+    assert.equal(frame.payload.error, undefined, `${keys}: ${frame.payload.error}`)
+    assert.deepEqual(frame.payload.data.commands, [command], `${keys} must carry ${command}`)
+    const down = mock.cdpCalls
+      .slice(before)
+      .find((call) => call.method === 'Input.dispatchKeyEvent' && call.params.type !== 'keyUp')
+    assert.deepEqual(down.params.commands, [command], `${keys} must dispatch ${command}`)
+  }
+})
+
+test('keys the renderer handles by itself carry no command', async () => {
+  // Backspace, Tab, the arrows and printable characters were measured to work
+  // without any command. Attaching one would be worse than redundant: on macOS
+  // a non-empty commands list makes the renderer ignore the key entirely.
+  for (const keys of ['Backspace', 'Tab', 'ArrowLeft', 'Shift+ArrowLeft', 'q']) {
+    const before = mock.cdpCalls.length
+    const frame = await callTool(`nc-${keys}`, 'send_keys', { session: 's', keys })
+    assert.equal(frame.payload.data.commands, undefined, `${keys} must carry no command`)
+    const down = mock.cdpCalls
+      .slice(before)
+      .find((call) => call.method === 'Input.dispatchKeyEvent' && call.params.type !== 'keyUp')
+    assert.equal(down.params.commands, undefined, `${keys} must dispatch no command`)
+  }
+})
+
+test('an explicit commands array overrides the derived one', async () => {
+  const before = mock.cdpCalls.length
+  const frame = await callTool('ec-x', 'send_keys', {
+    session: 's', keys: 'Delete', commands: ['deleteBackward'],
+  })
+  assert.deepEqual(frame.payload.data.commands, ['deleteBackward'])
+  const down = mock.cdpCalls
+    .slice(before)
+    .find((call) => call.method === 'Input.dispatchKeyEvent' && call.params.type !== 'keyUp')
+  assert.deepEqual(down.params.commands, ['deleteBackward'], 'the caller wins over the table')
+})
+
+test('send_keys refuses a browser-level chord instead of faking success', async () => {
+  // Chrome consumes Cmd/Ctrl+T before the renderer sees it, and CDP input
+  // enters at the renderer, so dispatching it would report success for a
+  // keystroke that did nothing at all.
+  for (const keys of ['Meta+t', 'Control+W', 'cmd+shift+T', 'Control+Tab', 'Meta+R']) {
+    const frame = await callTool(`bs-${keys}`, 'send_keys', { session: 's', keys })
+    assert.match(frame.payload.error, /browser shortcut/, `${keys} must be refused`)
+  }
+  // A page-level chord with the same modifier must still go through.
+  const ok = await callTool('bs-ok', 'send_keys', { session: 's', keys: 'Control+A' })
+  assert.equal(ok.payload.error, undefined, 'Control+A is a page keybinding, not a browser one')
+})
+
+test('a trusted click reports whether the page actually received it', async () => {
+  // Trusted input is delivered by the browser process, so a dropped press
+  // raises no error — only silence. The witness turns that into a flag.
+  await callTool('cw1', 'navigate', { session: 's-witness', url: 'https://example.com' })
+  const frame = await callTool('cw2', 'mouse_click', { session: 's-witness', x: 5, y: 6 })
+  assert.equal(frame.payload.data.received, true)
 })
 
 test('Enter is dispatched as a raw key event so the page submits', async () => {
@@ -1011,17 +1101,36 @@ test('get_text honours maxChars and flags truncation', async () => {
   assert.equal(frame.payload.data.truncated, true)
 })
 
-test('hover activates the tab and dispatches a trusted mouseMoved', async () => {
+test('hover dispatches a trusted mouseMoved without selecting the tab', async () => {
+  // A pointer move carries no focus semantics: measured against real Chrome, an
+  // unselected tab still receives `mouseMoved` with isTrusted:true and fires
+  // mouseover/mouseenter. Selecting the tab would only yank the user's viewport
+  // onto the agent's page, so hover must leave tab selection alone.
   await callTool('87', 'navigate', { session: 's-hover', url: 'https://example.com' })
-  const before = mock.activations.length
+  const before = mock.activations.filter((entry) => entry.props?.active === true).length
   const frame = await callTool('88', 'hover', { session: 's-hover', selector: '@e1' })
   assert.equal(frame.payload.data.trusted, true)
   // Centre of the mocked 1,2 3x4 box.
   assert.equal(frame.payload.data.x, 2.5)
-  assert.ok(mock.activations.length > before, 'hover must activate its tab')
+  const after = mock.activations.filter((entry) => entry.props?.active === true).length
+  assert.equal(after, before, 'hover must not select its tab')
   const moved = mock.cdpCalls.filter((call) => call.method === 'Input.dispatchMouseEvent').pop()
   assert.equal(moved.params.type, 'mouseMoved')
   assert.equal(moved.params.buttons, 0)
+})
+
+test('no tool ever focuses the browser window', async () => {
+  // Trusted input reaches the selected tab of a window that is not even the
+  // frontmost OS application — measured. An OS-level windows.update({focused})
+  // therefore buys nothing and steals the user's foreground, so nothing may
+  // call it. This guards every trusted path at once.
+  await callTool('88a', 'navigate', { session: 's-nowin', url: 'https://example.com' })
+  mock.windowFocuses.length = 0
+  await callTool('88b', 'mouse_click', { session: 's-nowin', x: 5, y: 6 })
+  await callTool('88c', 'hover', { session: 's-nowin', x: 7, y: 8 })
+  await callTool('88d', 'key_type', { session: 's-nowin', text: 'hi' })
+  await callTool('88e', 'send_keys', { session: 's-nowin', keys: 'Enter' })
+  assert.deepEqual(mock.windowFocuses, [], 'no tool may focus the browser window')
 })
 
 test('hover at explicit coordinates needs no selector', async () => {
