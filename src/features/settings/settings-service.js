@@ -247,8 +247,16 @@ export function createSettingsService(connection) {
     async providers() {
       return providers();
     },
+    /// 发现某个 provider 可用的模型。
+    ///
+    /// 宿主契约是**裸数组**(dsh-llm 的 typert.remote-client.d.ts:
+    /// 'llm/discoverModels' => Promise<RemoteResult<LlmDiscoveredModel[]>>),
+    /// 但调用方按 { models: [...] } 读更自然。在出口归一化一次:两个 UI 调用点
+    /// 因此不必各自判形状,也不会因为读错字段而静默降级成"未发现任何模型" ——
+    /// 那种失败不抛错、不提示,是最难排查的一类(Mac 侧至少会抛解码错误)。
+    /// 同时兼容对象形状,以防某些部署或将来版本改为包一层。
     async discoverModels({ settingsNs, provider, baseURL, api, apiKey }) {
-      return connection.call(RPC.llmDiscoverModels, {
+      const value = await connection.call(RPC.llmDiscoverModels, {
         settingsNs,
         request: {
           ...(provider ? { provider } : {}),
@@ -257,6 +265,10 @@ export function createSettingsService(connection) {
           ...(apiKey ? { apiKey } : {})
         }
       });
+      const models = Array.isArray(value) ? value
+        : Array.isArray(value?.models) ? value.models
+        : [];
+      return { models };
     },
     /// 只读插件清单。远端端点固定收一个 args 对象。
     async pluginInventory() {

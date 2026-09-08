@@ -71,7 +71,9 @@ function stubDeps(overrides = {}) {
           { entryId: "include:llm", moduleName: "@deepseek-ai/dsh-llm", enabled: true, fiberPhase: "active" },
           { entryId: "include:hmr", moduleName: "@deepseek-ai/cordis-plugin-hmr", enabled: false, fiberPhase: null }
         ] };
-      case "llm/discoverModels": return { models: overrides.discovered ?? [] };
+      // 宿主真实契约是裸数组(dsh-llm 的 typert.remote-client.d.ts),不是 { models }。
+      // 此前替身返回对象形状,反而掩盖了两个调用点读错字段的缺陷。
+      case "llm/discoverModels": return overrides.discovered ?? [];
       default: return {};
     }
   });
