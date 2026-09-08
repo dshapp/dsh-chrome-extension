@@ -92,10 +92,12 @@ describe("节点渲染", () => {
     expect(c.querySelector(".msg-interrupted")).toBeTruthy();
   });
 
-  it("steering 行带插队标记", () => {
+  it("steering 行与普通用户消息同一种样式", () => {
     const c = mount();
     createChatRenderer(c).render([steeringNode({ seq: 1, time: 1, messageId: "s1", content: [text("插一句")] })]);
-    expect(c.querySelector(".msg-user-turn.steering .steering-badge")).toBeTruthy();
+    expect(c.querySelector(".msg-user-turn.steering")).toBeNull();
+    expect(c.querySelector(".steering-badge")).toBeNull();
+    expect(c.querySelector(".msg-user-turn .msg-user").textContent).toContain("插一句");
   });
 
   // 对齐 Mac 的 ChatNodeRow:.assistant 只渲染正文,复制/分叉/时钟统一由每轮

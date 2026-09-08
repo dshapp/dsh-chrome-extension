@@ -292,19 +292,7 @@
 }
 
 
-/* ══ 新增:节点行(steering / context / chip / turnTail / workflow / unknown) ══ */
-
-/* steering:插队消息,比普通用户气泡更轻 */
-.msg-user-turn.steering { margin-block: 0.25rem; }
-.msg-user.steering {
-  display: flex; align-items: center; gap: 0.375rem;
-  background: transparent;
-  border: 1px dashed var(--border);
-  padding: 0.375rem 0.625rem;
-  font-size: 0.8125rem;
-  color: var(--text-dim);
-}
-.steering-badge { color: var(--warn); }
+/* ══ 新增:节点行(context / chip / turnTail / workflow / unknown) ══ */
 
 /* context:插件注入的上下文,记录里只留入口行 */
 .context-node {

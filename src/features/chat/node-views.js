@@ -147,14 +147,9 @@ export function createUserNode(node) {
   return turn;
 }
 
-/// steering:插队消息。视觉上比普通用户消息更轻,并标注它是中途插入的。
+/// steering:插队消息。与普通用户消息使用同一种样式,不再做视觉区分。
 export function createSteeringNode(node) {
-  const wrap = el("div", "msg-user-turn steering");
-  const bubble = el("div", "msg-user steering");
-  bubble.append(el("span", "steering-badge", "⚡"));
-  bubble.append(el("span", null, blocksToText(node.content)));
-  wrap.append(bubble);
-  return wrap;
+  return createUserNode(node);
 }
 
 /// context:插件/工具注入的上下文。记录里只留一行入口,全文进弹窗。
