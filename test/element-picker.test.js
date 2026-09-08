@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { createElementPicker, isInternalPage, isSameElement, MAX_PICKED } from "../src/features/element-picker/element-picker.js";
 import { formatPickedElementsContext } from "../src/features/element-picker/element-picker-context.js";
 import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../src/features/element-picker/element-picker-shortcut.js";
 import { elementPickerSummaryScript } from "../src/features/element-picker/picker-element-summary.js";
+import { elementPickerPageScript } from "../src/features/element-picker/picker-overlay-script.js";
 import { elementPickerDrainScript, elementPickerStopScript } from "../src/features/element-picker/picker-lifecycle-scripts.js";
 import { setLang } from "../src/shared/i18n.js";
 
@@ -265,6 +266,40 @@ describe("XML 上下文序列化", () => {
     expect(el.getAttribute("ref")).toBe("r");
   });
 
+  it("批注作为 <note> 子节点输出(原话可能多行,塞属性行既难读又易超宽)", () => {
+    const doc = parse(formatPickedElementsContext([{ ...element, note: "点了没反应" }]));
+    expect(doc.querySelector("parsererror")).toBeNull();
+    expect(doc.querySelector("note").textContent).toBe("点了没反应");
+  });
+
+  it("没有批注时不产出空的 <note>", () => {
+    expect(formatPickedElementsContext([element])).not.toContain("<note>");
+  });
+
+  it("批注里的特殊字符被转义,不破坏 XML 结构", () => {
+    const doc = parse(formatPickedElementsContext([{ ...element, note: '把 <b> 换成 "粗体" & 加粗' }]));
+    expect(doc.querySelector("parsererror")).toBeNull();
+    expect(doc.querySelector("note").textContent).toBe('把 <b> 换成 "粗体" & 加粗');
+  });
+
+  it("批注与 text 并存时两个子节点都在,且仍是合法 XML", () => {
+    const doc = parse(formatPickedElementsContext([{ ...element, text: "提交订单(含运费)", note: "改文案" }]));
+    expect(doc.querySelector("parsererror")).toBeNull();
+    expect(doc.querySelector("text").textContent).toBe("提交订单(含运费)");
+    expect(doc.querySelector("note").textContent).toBe("改文案");
+  });
+
+  it("批注上限比正文宽:160 字的批注不该被截(截了等于丢需求)", () => {
+    const note = "改".repeat(200);
+    const doc = parse(formatPickedElementsContext([{ ...element, note }]));
+    expect(doc.querySelector("note").textContent).toBe(note);
+  });
+
+  it("超长批注仍有上限,不至于把整条消息撑爆", () => {
+    const doc = parse(formatPickedElementsContext([{ ...element, note: "改".repeat(900) }]));
+    expect(doc.querySelector("note").textContent.length).toBeLessThan(600);
+  });
+
   it("体积回归:两个元素的上下文远小于旧嵌套格式(旧版 ~1142 字符)", () => {
     const xml = formatPickedElementsContext([element, { ...element, ref: "ref_2", name: "取消" }]);
     expect(xml.length).toBeLessThan(500);
@@ -357,5 +392,321 @@ describe("目标页被关掉", () => {
     const detach = picker.attach();
     detach();
     expect(api.tabs.onRemoved.removeListener).toHaveBeenCalled();
+  });
+});
+
+describe("批注弹窗(注入体在 jsdom 里当作页面脚本直接跑)", () => {
+  const labels = {
+    submit: "提交", next: "下一个", close: "退出圈选",
+    placeholder: "说点什么", annotated: "已批注 {n} 个"
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div><button id="go">走</button><a id="link" href="/x">链接</a></div>';
+    window.__cmPickerQueue = [];
+    window.__cmPickerSubmit = false;
+    window.__cmPickerCancel = false;
+    // commit() 会走 chrome.runtime.sendMessage 这条快通道;页面上没有扩展上下文时
+    // 它本就该静默失败,这里给个假的免得测试噪音。
+    globalThis.chrome = { runtime: { sendMessage: vi.fn() } };
+    elementPickerSummaryScript({ maxTextLength: 120 });
+    elementPickerPageScript({ maxTextLength: 120, labels });
+  });
+
+  afterEach(() => {
+    window.__cmElementPicker?.stop?.();
+  });
+
+  const panel = () => document.getElementById("__cm-element-picker-annotate");
+  const buttonByText = (text) =>
+    [...panel().querySelectorAll("button")].find((b) => b.textContent === text);
+
+  /// 注入体靠 elementFromPoint 命中目标,jsdom 里它恒返回 null,
+  /// 所以直接桩掉,让 targetAt 落到我们指定的元素上。
+  const clickOn = (el) => {
+    document.elementFromPoint = () => el;
+    const event = new window.MouseEvent("click", { bubbles: true, cancelable: true });
+    el.dispatchEvent(event);
+    return event;
+  };
+
+  it("点中元素后在页面上弹出批注框并聚焦输入", () => {
+    expect(panel()).toBeNull();
+    clickOn(document.getElementById("go"));
+    expect(panel()).not.toBeNull();
+    const textarea = panel().querySelector("textarea");
+    expect(textarea.placeholder).toBe("说点什么");
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it("弹窗开着时页面点击仍被吞掉,且不顶掉正在批注的目标", () => {
+    clickOn(document.getElementById("go"));
+    const event = clickOn(document.getElementById("link"));
+    expect(event.defaultPrevented).toBe(true);
+    // 批注写到一半被顶掉最恼人:标题仍指向最初选中的元素。
+    expect(panel().querySelector("span").textContent).toContain("go");
+  });
+
+  it("弹窗内部的点击不被吞掉,否则输入框根本点不进", () => {
+    clickOn(document.getElementById("go"));
+    const textarea = panel().querySelector("textarea");
+    for (const type of ["mousedown", "mouseup", "click"]) {
+      const event = new window.MouseEvent(type, { bubbles: true, cancelable: true });
+      textarea.dispatchEvent(event);
+      expect(event.defaultPrevented, type).toBe(false);
+    }
+  });
+
+  it("「下一个」收下这一条带批注的元素,弹窗消失并回到圈选态", () => {
+    clickOn(document.getElementById("go"));
+    panel().querySelector("textarea").value = "  这个按钮点了没反应  ";
+    buttonByText("下一个").click();
+    expect(panel()).toBeNull();
+    expect(window.__cmPickerQueue).toHaveLength(1);
+    expect(window.__cmPickerQueue[0].note).toBe("这个按钮点了没反应");
+    expect(window.__cmPickerQueue[0].ref).toMatch(/^ref_\d+$/);
+    // 没有置提交/取消标志:用户只是要接着选下一个。
+    expect(window.__cmPickerSubmit).toBe(false);
+    expect(window.__cmPickerCancel).toBe(false);
+    clickOn(document.getElementById("link"));
+    expect(panel()).not.toBeNull();
+  });
+
+  it("批注为空也能收下(元素本身就是指代),但不产出 note 字段", () => {
+    clickOn(document.getElementById("go"));
+    buttonByText("下一个").click();
+    expect(window.__cmPickerQueue).toHaveLength(1);
+    expect(window.__cmPickerQueue[0].note).toBeUndefined();
+  });
+
+  it("「提交」先把这一条入队再置标志位,并自我收尾", () => {
+    clickOn(document.getElementById("go"));
+    panel().querySelector("textarea").value = "改成蓝色";
+    buttonByText("提交").click();
+    // 顺序要紧:标志位为真时元素必须已经在队列里,否则侧栏会发出一条缺元素的消息。
+    expect(window.__cmPickerQueue).toHaveLength(1);
+    expect(window.__cmPickerQueue[0].note).toBe("改成蓝色");
+    expect(window.__cmPickerSubmit).toBe(true);
+    // 自我收尾:覆盖层与弹窗都拆掉,页面立刻恢复可用,不必等侧栏那次异步往返。
+    expect(panel()).toBeNull();
+    expect(document.getElementById("__cm-element-picker-overlay")).toBeNull();
+    expect(window.__cmElementPicker).toBeNull();
+  });
+
+  it("右上角关闭丢弃这一条批注并退出圈选,已收下的不受影响", () => {
+    clickOn(document.getElementById("go"));
+    buttonByText("下一个").click();
+    clickOn(document.getElementById("link"));
+    panel().querySelector("textarea").value = "这条不要";
+    panel().querySelector("button[aria-label='退出圈选']").click();
+    expect(window.__cmPickerCancel).toBe(true);
+    expect(window.__cmPickerSubmit).toBe(false);
+    // 关闭丢的是当前这一条,不是整轮:先前点过「下一个」的仍在队列里。
+    expect(window.__cmPickerQueue).toHaveLength(1);
+    expect(window.__cmPickerQueue[0].note).toBeUndefined();
+    expect(window.__cmElementPicker).toBeNull();
+  });
+
+  it("Escape 等于关闭,⌘/Ctrl+Enter 等于提交", () => {
+    clickOn(document.getElementById("go"));
+    panel().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(window.__cmPickerCancel).toBe(true);
+
+    window.__cmPickerCancel = false;
+    elementPickerPageScript({ maxTextLength: 120, labels });
+    clickOn(document.getElementById("go"));
+    panel().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
+    expect(window.__cmPickerSubmit).toBe(true);
+  });
+
+  it("stop() 把弹窗一起拆掉,不留残影", () => {
+    clickOn(document.getElementById("go"));
+    window.__cmElementPicker.stop();
+    expect(panel()).toBeNull();
+  });
+});
+
+describe("drain 的提交/取消标志位", () => {
+  it("读走后即清空,不会被下一轮重复消费", () => {
+    window.__cmPickerQueue = [{ ref: "a" }];
+    window.__cmPickerSubmit = true;
+    window.__cmPickerCancel = true;
+    expect(elementPickerDrainScript()).toEqual({ elements: [{ ref: "a" }], submit: true, cancel: true });
+    expect(elementPickerDrainScript()).toEqual({ elements: [], submit: false, cancel: false });
+  });
+});
+
+describe("页面出口驱动侧栏", () => {
+  /// 让 drain 返回指定的标志位,其余注入体照常成功。
+  const withDrain = (result) => {
+    const { api } = fakeChrome();
+    api.scripting.executeScript = vi.fn().mockImplementation(({ func }) => {
+      if (func.name === "elementPickerDrainScript") return Promise.resolve([{ result }]);
+      return Promise.resolve([{ result: { ok: true } }]);
+    });
+    return api;
+  };
+
+  it("drain 读到 submit:先并入元素再回调,且不清空已选(发送失败要能重试)", async () => {
+    const onSubmit = vi.fn();
+    const api = withDrain({ elements: [{ ref: "d1", note: "改文案" }], submit: true, cancel: false });
+    const picker = createElementPicker({ chromeApi: api, showToast: vi.fn(), onSubmit, t: (k) => k });
+    await picker.setActive(true);
+    await picker.drain();
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // 回调时元素必须已经在集合里,否则发出去的是一条缺了元素的消息。
+    expect(picker.picked.map((e) => e.ref)).toEqual(["d1"]);
+    expect(picker.active).toBe(false);
+  });
+
+  it("drain 读到 cancel:退出圈选但不发送,已选元素保留在药丸里", async () => {
+    const onSubmit = vi.fn();
+    const api = withDrain({ elements: [{ ref: "keep" }], submit: false, cancel: true });
+    const picker = createElementPicker({ chromeApi: api, showToast: vi.fn(), onSubmit, t: (k) => k });
+    await picker.setActive(true);
+    await picker.drain();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(picker.active).toBe(false);
+    expect(picker.picked.map((e) => e.ref)).toEqual(["keep"]);
+  });
+
+  it("注入 overlay 时把已本地化文案一并传过去(注入体引用不到 t())", async () => {
+    const { picker, api } = make();
+    await picker.setActive(true);
+    const call = api.scripting.executeScript.mock.calls
+      .find(([arg]) => arg.func.name === "elementPickerPageScript");
+    expect(call[0].args[0].labels).toMatchObject({
+      submit: expect.any(String), next: expect.any(String),
+      close: expect.any(String), placeholder: expect.any(String), annotated: expect.any(String)
+    });
+  });
+});
+
+describe("同一元素补批注", () => {
+  it("重选同一元素并写批注时更新那一条,而不是静默丢弃", () => {
+    const { picker, onChange } = make();
+    picker.add({ ref: "r1", name: "按钮" });
+    picker.add({ ref: "r1", name: "按钮", note: "改成蓝色" });
+    expect(picker.picked).toHaveLength(1);
+    expect(picker.picked[0].note).toBe("改成蓝色");
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("重复的同一元素且没有新批注:仍然去重,不惊动订阅者", () => {
+    const { picker, onChange } = make();
+    picker.add({ ref: "r1", note: "保留" });
+    onChange.mockClear();
+    picker.add({ ref: "r1" });
+    expect(picker.picked[0].note).toBe("保留");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+describe("批注弹窗的落位:锚在点击点,并做边缘避让", () => {
+  const labels = {
+    submit: "提交", next: "下一个", close: "退出圈选",
+    placeholder: "说点什么", annotated: "已批注 {n} 个"
+  };
+  const W = 280, H = 150, GAP = 8;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div><button id="go">走</button></div>';
+    window.__cmPickerQueue = [];
+    window.__cmPickerSubmit = false;
+    window.__cmPickerCancel = false;
+    globalThis.chrome = { runtime: { sendMessage: vi.fn() } };
+    // jsdom 不做布局:offsetWidth/Height 恒为 0,几何断言就无从谈起。
+    // 给弹窗钉上真实尺寸,让 placePanel 的避让逻辑可测。
+    Object.defineProperty(window.HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() { return this.id === "__cm-element-picker-annotate" ? W : 0; }
+    });
+    Object.defineProperty(window.HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get() { return this.id === "__cm-element-picker-annotate" ? H : 0; }
+    });
+    window.innerWidth = 1000;
+    window.innerHeight = 800;
+    window.scrollX = 0;
+    window.scrollY = 0;
+    elementPickerSummaryScript({ maxTextLength: 120 });
+    elementPickerPageScript({ maxTextLength: 120, labels });
+  });
+
+  afterEach(() => {
+    window.__cmElementPicker?.stop?.();
+    delete window.HTMLElement.prototype.offsetWidth;
+    delete window.HTMLElement.prototype.offsetHeight;
+  });
+
+  const panel = () => document.getElementById("__cm-element-picker-annotate");
+  /// 在视口 (x, y) 处点击目标元素。
+  const clickAt = (x, y) => {
+    const el = document.getElementById("go");
+    document.elementFromPoint = () => el;
+    el.dispatchEvent(new window.MouseEvent("click", {
+      bubbles: true, cancelable: true, clientX: x, clientY: y
+    }));
+  };
+  const box = () => ({
+    left: parseFloat(panel().style.left),
+    top: parseFloat(panel().style.top)
+  });
+
+  it("默认左上角与点击点对齐", () => {
+    clickAt(300, 200);
+    expect(box()).toEqual({ left: 300, top: 200 });
+  });
+
+  it("靠右边缘:往左翻,让右缘贴住点击点,不越出视口", () => {
+    clickAt(950, 200);
+    const { left } = box();
+    expect(left).toBe(950 - W);
+    expect(left + W).toBeLessThanOrEqual(window.innerWidth);
+  });
+
+  it("靠下边缘:往上翻,让下缘贴住点击点,不越出视口", () => {
+    clickAt(300, 780);
+    const { top } = box();
+    expect(top).toBe(780 - H);
+    expect(top + H).toBeLessThanOrEqual(window.innerHeight);
+  });
+
+  it("右下角:两个方向同时翻", () => {
+    clickAt(950, 780);
+    expect(box()).toEqual({ left: 950 - W, top: 780 - H });
+  });
+
+  it("左上角原点:不产生负坐标(否则弹窗有一半在屏外)", () => {
+    clickAt(0, 0);
+    const { left, top } = box();
+    expect(left).toBeGreaterThanOrEqual(GAP);
+    expect(top).toBeGreaterThanOrEqual(GAP);
+  });
+
+  it("视口比弹窗还小时夹进视口,宁可盖住点击点也要让用户看得见", () => {
+    window.innerWidth = 200;
+    window.innerHeight = 120;
+    clickAt(150, 100);
+    const { left, top } = box();
+    expect(left).toBeGreaterThanOrEqual(GAP);
+    expect(top).toBeGreaterThanOrEqual(GAP);
+  });
+
+  it("页面滚动后弹窗跟着元素走(锚点存的是页面坐标,不是视口坐标)", () => {
+    window.scrollY = 100;
+    clickAt(300, 200);          // 页面坐标 y = 300
+    expect(box().top).toBe(200);
+    // 再往下滚 50:同一个页面位置在视口里上移 50。
+    window.scrollY = 150;
+    window.dispatchEvent(new window.Event("scroll"));
+    expect(box().top).toBe(150);
+  });
+
+  it("合成事件没带坐标时退回元素左上角,而不是甩到视口原点", () => {
+    const el = document.getElementById("go");
+    el.getBoundingClientRect = () => ({ left: 42, top: 84, width: 10, height: 10, right: 52, bottom: 94 });
+    document.elementFromPoint = () => el;
+    el.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(box()).toEqual({ left: 42, top: 84 });
   });
 });

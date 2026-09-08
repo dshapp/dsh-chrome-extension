@@ -39,8 +39,9 @@ export function isSameElement(a, b) {
  * @param {(msg: string) => void} options.showToast
  * @param {(key: string, params?: object) => string} options.t
  * @param {() => void} [options.onChange] 选取集合变化时通知调用方(刷新按钮/发送态)
+ * @param {() => void} [options.onSubmit] 用户在页面批注弹窗里点了「提交」:整轮元素该发出去了
  */
-export function createElementPicker({ chromeApi, showToast, t, onChange = () => {} } = {}) {
+export function createElementPicker({ chromeApi, showToast, t, onChange = () => {}, onSubmit = () => {} } = {}) {
   const api = chromeApi ?? (typeof chrome !== "undefined" ? chrome : null);
   let picked = [];
   let active = false;
@@ -106,13 +107,25 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
 
   // ---- 注入 / 收尾 ----
 
+  /// 批注弹窗的文案。注入体在页面 JS 引擎里跑,引用不到模块作用域的 t(),
+  /// 只能在注入时把已本地化的字符串一并序列化过去。
+  function overlayLabels() {
+    return {
+      submit: t("picker.annotate.submit"),
+      next: t("picker.annotate.next"),
+      close: t("picker.annotate.close"),
+      placeholder: t("picker.annotate.placeholder"),
+      annotated: t("picker.annotate.count", { n: "{n}" })
+    };
+  }
+
   async function inject(id) {
     // 顺序有意义:overlay 的点击处理依赖页面上已存在的摘要构建器。
     await api.scripting.executeScript({
       target: { tabId: id }, args: [{ maxTextLength: 120 }], func: elementPickerSummaryScript
     });
     await api.scripting.executeScript({
-      target: { tabId: id }, args: [{ maxTextLength: 120 }], func: elementPickerPageScript
+      target: { tabId: id }, args: [{ maxTextLength: 120, labels: overlayLabels() }], func: elementPickerPageScript
     });
   }
 
@@ -129,13 +142,24 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
   async function drain() {
     if (!Number.isInteger(tabId)) return;
     let elements = [];
+    let submit = false;
+    let cancel = false;
     try {
       const [{ result } = {}] = await api.scripting.executeScript({
         target: { tabId }, func: elementPickerDrainScript
       });
       elements = result?.elements ?? [];
+      submit = Boolean(result?.submit);
+      cancel = Boolean(result?.cancel);
     } catch (error) { log("DRAIN_ERR", error); return; }
+    // 顺序有意义:先并入元素再看标志位,否则 onSubmit 会发出一条还差最后一个元素的消息。
     for (const element of elements) add(element);
+    if (!submit && !cancel) return;
+    // 页面侧已经自我 stop() 过了,这里只收本地状态,不再往那个页面注入停止脚本 ——
+    // 重复 stop 无害但多一次跨进程往返,更要紧的是别把 picked 清掉:
+    // 药丸里的元素是用户已确认的输入,退出圈选模式不等于放弃它们。
+    deactivateLocally();
+    if (submit) onSubmit();
   }
 
   function startDrain() {
@@ -149,6 +173,18 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
   }
 
   // ---- 开关 ----
+
+  /// 只收侧栏这一侧的状态,不碰页面(页面要么已自我收尾,要么由调用方另行 stop)。
+  /// 抽出来是为了让「页面自己退出」与「侧栏主动关闭」共用同一段收尾,不产生逻辑分叉。
+  function deactivateLocally() {
+    if (!active) return;
+    stopDrain();
+    active = false;
+    tabId = null;
+    // 先告诉 SW 已经关了,免得它在 port 断开时对一个已收尾的页面重复注入。
+    syncPresence();
+    notify();
+  }
 
   async function setActive(next) {
     if (active === Boolean(next)) return active;
@@ -167,13 +203,12 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
       const previous = tabId;
       stopDrain();
       // 关闭前收尾一次,避免最后一次点击还在队列里就被丢掉。
+      // drain 里若读到 submit/cancel 会先一步 deactivateLocally(),下面那次是幂等的。
       await drain();
-      active = false;
-      tabId = null;
-      // 先告诉 SW 已经关了,免得它在 port 断开时对一个已收尾的页面重复注入。
-      syncPresence();
+      deactivateLocally();
       await highlight(null);
       await stopOnTab(previous);
+      return active;
     }
     notify();
     return active;
@@ -200,7 +235,15 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
 
   function add(element) {
     if (!element) return;
-    if (picked.some((item) => isSameElement(item, element))) return;
+    const at = picked.findIndex((item) => isSameElement(item, element));
+    if (at !== -1) {
+      // 同一个元素被重新批注:更新那一条的批注,而不是静默丢弃这次输入。
+      // 直接 return 会让用户"重选同一元素补一句话"完全没反应,药丸上也看不出变化。
+      if (!element.note || picked[at].note === element.note) return;
+      picked = picked.map((item, i) => (i === at ? { ...item, note: element.note } : item));
+      notify();
+      return;
+    }
     if (picked.length >= MAX_PICKED) {
       showToast(t("picker.limitReached", { n: String(MAX_PICKED) }));
       return;

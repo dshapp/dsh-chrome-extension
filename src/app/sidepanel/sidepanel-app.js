@@ -325,6 +325,8 @@ export function createSidepanelApp(root, deps) {
     // 但 ⌥⌘↩ 的语义是插队发送,不是中断。
     // 这一条必须排在"没有内容就返回"之前:停止态恰恰是输入框为空时才出现的
     // (有内容时按钮是 state-queue),先判空会让停止按钮永远点不动。
+    // 注:picker 提交不会撞上这条 —— 停止态的前提是 picked 为空(见 updateSendState),
+    // 而提交路径必然带着至少一个元素,按钮那时是 state-queue。
     if (elements.send.className === "state-stop" && gesture !== "modifier") return stopRun();
     if (!text && !attachments.length && !pickedElements.length) return;
     // 子代理会话的队列不归本端管,没有可插的当前轮。
@@ -351,8 +353,12 @@ export function createSidepanelApp(root, deps) {
       // 已由上面的 projectDraft 展开进 text,是正文的一部分。
       const pickedContext = pickedElements.length ? picker.context(pickedElements) : "";
       const prefix = pickedContext;
+      // 批注已经把"要它做什么"写在 XML 的 <note> 里了,此时再补一句 picker.instruction
+      // 纯属噪音。只有元素一条批注都没有、输入框又是空的,才需要那句兜底指向上文。
+      const annotated = pickedElements.some((element) => String(element?.note ?? "").trim());
+      const instruction = text || (annotated ? "" : t("picker.instruction"));
       const promptText = prefix
-        ? `${prefix}\n\n[指令] ${text || t("picker.instruction")}`
+        ? (instruction ? `${prefix}\n\n[指令] ${instruction}` : prefix)
         : text;
       if (promptText) content.push({ type: "text", text: promptText });
       for (const attachment of attachments) content.push(attachment.part);
@@ -459,7 +465,9 @@ export function createSidepanelApp(root, deps) {
   const isMac = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
   const picker = createElementPicker({
     showToast, t,
-    onChange: () => { renderPickerButton(); renderPickedChip(); updateSendState(); }
+    onChange: () => { renderPickerButton(); renderPickedChip(); updateSendState(); },
+    // 页面批注弹窗里的「提交」:整轮元素连同批注立刻发出去,不必再回侧栏按一次发送。
+    onSubmit: () => { void sendMessage({ gesture: "picker" }); }
   });
 
   function renderPickerButton() {
@@ -485,9 +493,22 @@ export function createSidepanelApp(root, deps) {
     list.forEach((element, index) => {
       const row = document.createElement("div");
       row.className = "picked-element-row";
+      // 元素名 + 批注摘要:药丸是这一轮的回看入口,只显示元素名的话用户无从核对
+      // "我给这个元素写了什么",发现写错也只能整轮作废。
       const text = document.createElement("span");
       text.className = "picked-element-text";
-      text.textContent = element.name || element.selector || element.tag || "element";
+      const nameLine = document.createElement("span");
+      nameLine.className = "picked-element-name";
+      nameLine.textContent = element.name || element.selector || element.tag || "element";
+      text.append(nameLine);
+      const note = String(element.note ?? "").trim();
+      if (note) {
+        const noteLine = document.createElement("span");
+        noteLine.className = "picked-element-note";
+        noteLine.textContent = note;
+        noteLine.title = note;
+        text.append(noteLine);
+      }
       text.title = element.xpath || element.selector || "";
       const remove = document.createElement("button");
       remove.type = "button";
