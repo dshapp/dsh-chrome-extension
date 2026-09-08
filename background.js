@@ -337,7 +337,118 @@ async function focusTab(tabId, { restoreFocus = true } = {}) {
   }
 }
 
-/** Evaluate an expression in the page and return its unwrapped value. */
+/**
+ * Compare a readback against the text a tool tried to insert.
+ *
+ * Returns `verified` plus, when it failed, the `value` the page actually holds
+ * so the caller can see *how* it was rewritten instead of merely that it was.
+ * A null readback (unreadable target, e.g. a canvas editor or a cross-origin
+ * frame) yields verified:null — "unknown", deliberately distinct from false, so
+ * an unverifiable target is never reported as a failure.
+ *
+ * `verified` is a signal to act on, not a verdict: for an editor that paints
+ * its own text the readback can pick up interface chrome painted in the same
+ * subtree (a line-number gutter), so a false here means "look at `value`",
+ * which is still strictly better than the silent success it replaced.
+ */
+function verifyInsertion(before, after, inserted) {
+  if (after == null) return { verified: null }
+  if (!inserted) return { verified: true }
+  // Whitespace is exactly what an editor rewrites, and re-indented YAML is
+  // still a real failure, so the text must appear as sent to count as verified.
+  if (after.includes(inserted)) return { verified: true }
+  // Grew by the right amount but not byte-identical: the editor accepted the
+  // insert and reformatted it. Surface the result, still unverified.
+  const grew = before != null && after.length > before.length
+  return {
+    verified: false,
+    reformatted: grew,
+    value: after.length > 2000 ? after.slice(0, 2000) : after,
+  }
+}
+
+/**
+ * Page-side helper source, shared by every tool that needs a text readback.
+ *
+ * Defines `dshReadEditable(el)`: the text a page currently holds at an editable
+ * target. Two rules, both structural rather than named after any library:
+ *
+ *  - A text control (value) or a contenteditable host answers for itself.
+ *  - Otherwise the target may be a *proxy*: editors that paint their own text
+ *    keep a tiny offscreen textarea for focus and IME, and its `value` holds a
+ *    fragment or nothing at all. The text lives in the painted layer, so the
+ *    nearest ancestor that actually contains rendered text answers instead.
+ *
+ * Presentation is normalised because a painted layer encodes layout rather than
+ * characters: leading indentation is commonly non-breaking spaces, and optional
+ * whitespace rendering substitutes visible glyphs. Comparing those literally
+ * would report a mismatch for text the page holds correctly.
+ */
+const PAGE_READ_EDITABLE = `
+  const dshNormalize = (s) => (s || '')
+    .replace(/[\\u00a0\\u2007\\u202f]/g, ' ')
+    .replace(/[\\u00b7\\u2022\\u2192\\u21b5\\u00ac]/g, ' ')
+    .replace(/[ \\t]+$/gm, '');
+  const dshIsProxy = (node) => {
+    // A focus proxy is deliberately near-invisible: editors size it to a point
+    // or clip it away. Either shape means its own value cannot be the document.
+    if (!node || !node.getBoundingClientRect) return false;
+    const r = node.getBoundingClientRect();
+    return r.width <= 2 || r.height <= 2;
+  };
+  const dshRenderedText = (root) => {
+    // innerText follows CSS layout, so it reproduces the visual line breaks of
+    // a painted editor without needing to know how it names its line elements.
+    // Chrome painted in the same subtree (line-number gutters, minimaps) is
+    // text too and inflates this, which is why the readback is reported as
+    // evidence for a human or model to judge rather than as a strict equality.
+    return root && typeof root.innerText === 'string' ? root.innerText : '';
+  };
+  const dshReadEditable = (el) => {
+    if (!el) return null;
+    if (el.isContentEditable) return dshNormalize(el.textContent ?? '');
+    const own = typeof el.value === 'string' ? el.value : null;
+    if (own != null && !dshIsProxy(el)) return own;
+    // Walk out to the nearest ancestor holding rendered text. Bounded so a
+    // stray proxy cannot make this climb to <body> and return the whole page.
+    let node = el.parentElement;
+    for (let hops = 0; node && hops < 6; hops += 1, node = node.parentElement) {
+      const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+      if (!rect || rect.width <= 2 || rect.height <= 2) continue;
+      const text = dshRenderedText(node);
+      if (text && text.trim()) return dshNormalize(text);
+    }
+    return own != null ? own : dshNormalize(el.textContent ?? '');
+  };
+`
+
+/**
+ * Read the text the page currently holds in its focused editable target.
+ *
+ * Every input tool needs this for the same reason `fill` reads its value back:
+ * a rich editor rewrites what was inserted — auto-indent, auto-closing
+ * brackets, format-on-type — and a tool that only echoes its own argument
+ * reports success while the page holds something else entirely. That silent
+ * no-op is what lets a caller repeat a doomed keystroke hundreds of times, so
+ * the readback is what makes the failure visible on the first call.
+ *
+ * Best effort by construction: a readback that itself fails must never fail the
+ * input it was verifying.
+ */
+async function readFocusedText(tabId) {
+  try {
+    return await evaluateInPage(
+      tabId,
+      `(() => {
+        ${PAGE_READ_EDITABLE}
+        return dshReadEditable(document.activeElement);
+      })()`,
+    )
+  } catch {
+    return null
+  }
+}
+
 async function evaluateInPage(tabId, expression, { awaitPromise = true } = {}) {
   const response = await cdp(tabId, 'Runtime.evaluate', {
     expression,
@@ -353,6 +464,41 @@ async function evaluateInPage(tabId, expression, { awaitPromise = true } = {}) {
     throw new Error(text)
   }
   return response?.result?.value
+}
+
+// ---------------------------------------------------------------- environment
+
+/**
+ * The operating system Chrome is running on, or null when it is not known.
+ *
+ * Cached after the first successful lookup: the OS cannot change while the
+ * worker lives, so this is asked once and reused.
+ */
+let platformOs = null
+
+/**
+ * Report the host OS so a caller can pick platform-correct keys.
+ *
+ * Keyboard shortcuts are not portable — select-all is Meta+A on macOS and
+ * Control+A elsewhere — and a chord aimed at the wrong modifier is delivered
+ * without doing anything, which looks exactly like a working call. Reporting
+ * the platform lets the caller choose correctly instead of guessing.
+ *
+ * Read from `chrome.runtime.getPlatformInfo` rather than a `navigator` value:
+ * keys are dispatched from this worker over CDP, so the OS that matters is the
+ * browser's own, not one a page is free to spoof. Returns null on failure
+ * without caching it, so an early call cannot poison later ones — a caller that
+ * sees null knows the platform is unknown rather than being told the wrong one.
+ */
+async function detectPlatform() {
+  if (platformOs) return platformOs
+  try {
+    const info = await chrome.runtime.getPlatformInfo()
+    platformOs = info?.os ?? null
+    return platformOs
+  } catch {
+    return null
+  }
 }
 
 // ---------------------------------------------------------------- tab helpers
@@ -422,6 +568,15 @@ function elementExpression(selector) {
  * absorbs that race; anything longer belongs to wait_for_selector.
  */
 const RESOLVE_RETRY_MS = 150
+
+/**
+ * Ceiling on send_keys repeats in one call.
+ *
+ * High enough to clear a realistic editor buffer in a single call (the point of
+ * the parameter), low enough that a runaway count cannot occupy the tab for
+ * long: each repeat is two CDP round trips.
+ */
+const SEND_KEYS_MAX_COUNT = 200
 
 /** The error a selector that resolves to nothing produces, with what to do next. */
 async function missingElementMessage(tabId, selector) {
@@ -749,6 +904,11 @@ const tools = {
       url: tab.url,
       title: tab.title,
       mode: chosen,
+      // Reported here because every task reads a page before acting on it, so
+      // this is the earliest point a caller learns which modifier its keyboard
+      // shortcuts need. Kept out of the rendered tree: that text is the diff
+      // baseline, and environment facts in it would show up as page changes.
+      platform: await detectPlatform(),
       nodeCount: rendered.kept,
       truncated: rendered.truncated,
       tree: text,
@@ -840,6 +1000,7 @@ const tools = {
     }
     return { success: true, ...result }
   },
+
   async upload({ session, selector, paths }) {
     const tabId = currentTab(session)
     if (!Array.isArray(paths) || paths.length === 0) throw new Error('upload requires at least one file path')
@@ -1256,12 +1417,21 @@ async focus({ session, selector }) {
 
   async key_type({ session, text }) {
     const tabId = currentTab(session)
+    const value = String(text ?? '')
     await focusTab(tabId)
-    await cdp(tabId, 'Input.insertText', { text: String(text ?? '') })
-    return { success: true, length: String(text ?? '').length, trusted: true }
+    const before = await readFocusedText(tabId)
+    await cdp(tabId, 'Input.insertText', { text: value })
+    const after = await readFocusedText(tabId)
+    // Verify against the page rather than trusting the insert. A rich editor
+    // reformats what it receives (auto-indent, bracket completion), so the only
+    // honest success signal is finding the text in what the page now holds.
+    // Reported as verified:false — not an error — because a reformat is often
+    // still progress; the caller decides whether to accept or change approach.
+    const verification = verifyInsertion(before, after, value)
+    return { success: true, length: value.length, trusted: true, ...verification }
   },
 
-  async send_keys({ session, keys }) {
+  async send_keys({ session, keys, count }) {
     const tabId = currentTab(session)
     await focusTab(tabId)
     const parts = String(keys || '').split('+')
@@ -1276,9 +1446,23 @@ async focus({ session, selector }) {
     // would insert a newline instead of submitting.
     const { printable, ...event } = descriptor
     const type = printable && !modifiers ? 'keyDown' : 'rawKeyDown'
-    await cdp(tabId, 'Input.dispatchKeyEvent', { type, modifiers, ...event })
-    await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers, ...event })
-    return { success: true, keys, trusted: true }
+    // Repeat in one call so clearing a field is a single tool call rather than
+    // one per character. Capped because a repeat count is a convenience for
+    // editing, not a way to hold a key down indefinitely.
+    const repeat = Math.min(Math.max(Math.trunc(Number(count) || 1), 1), SEND_KEYS_MAX_COUNT)
+    const before = await readFocusedText(tabId)
+    for (let i = 0; i < repeat; i += 1) {
+      await cdp(tabId, 'Input.dispatchKeyEvent', { type, modifiers, ...event })
+      await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers, ...event })
+    }
+    const after = await readFocusedText(tabId)
+    // Report whether the keys changed the focused text at all. An editing key
+    // that leaves the page byte-identical is the signature of a keystroke the
+    // page never applied — the case a bare success:true used to hide, letting a
+    // caller repeat an inert key indefinitely. Navigation and submit keys
+    // legitimately change nothing here, so this is reported, never thrown.
+    const changed = before == null || after == null ? null : after !== before
+    return { success: true, keys, count: repeat, trusted: true, changed }
   },
 
   async hover({ session, selector, x, y }) {
