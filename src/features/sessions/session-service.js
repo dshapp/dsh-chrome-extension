@@ -5,6 +5,7 @@ import { createSessionListStore } from "./session-list-store.js";
 import { createSessionOrderStore } from "./session-order-store.js";
 import { SessionAwaitingKind } from "./session-row-trailing.js";
 import { RPC, STREAM, HOST } from "../../platform/dsh/rpc-methods.js";
+import { t } from "../../shared/i18n.js";
 
 /// session.create 的归属参数:workspaceId 与 cwd **互斥**,同时给会被宿主判
 /// bad-request 整体拒绝(真实后端验证过)。workspaceId 优先——它是宿主认的归属标识,
@@ -444,6 +445,21 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     handleMuxFrame(frame) {
       if (frame.type === "error") {
         console.warn("[dsh] logical stream error", frame.streamId, frame.error);
+        // follow 流的错误是终态,必须落进 store。宿主 resume 失败(典型:会话记
+        // 录的 agent preset 已被删除,host 严格解析该 id 且不回退默认值)只会以
+        // 这一帧的形式到达 —— 仅打日志会让 UI 永远停在"正在加载对话…":无历史、
+        // 无报错,若此前已有 turn/start 还会一直转圈。对齐 Mac 的 failEventStream。
+        //
+        // 这里不能加 historyLoaded 之类的守卫:空白会话的历史页合法返回 0 条事
+        // 件,带守卫会把恰恰最需要报出来的这种错吞掉。
+        if (frame.streamId?.startsWith("follow:")) {
+          const sessionId = frame.streamId.slice("follow:".length);
+          if (isCurrent(sessionId)) {
+            store.setHistoryError(frame.error?.message || t("sessions.streamFailed"));
+            notifyRuntime();
+          }
+          listStore.setStatus(sessionId, false);
+        }
         return;
       }
       if (frame.type !== "item") return;

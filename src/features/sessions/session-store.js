@@ -49,6 +49,9 @@ export function createSessionStore() {
       cwd: null,
       blank: true,
       running: false,
+      // follow 流的终态错误(如宿主 resume 失败)。非空即表示这一代会话的历史
+      // 不可用,由视图层取代"正在加载对话…"。见 setHistoryError。
+      historyError: null,
       currentTurn: 0,
       lastSeq: -1,
       // 按 seq 升序去重的原始事件窗口。乱序到达的事件插回它应有的位置并重折,
@@ -1196,6 +1199,7 @@ export function createSessionStore() {
       cwd: state.cwd,
       blank: state.blank,
       running: state.running,
+      historyError: state.historyError,
       currentTurn: state.currentTurn,
       lastSeq: state.lastSeq,
       nodes: state.nodes,
@@ -1232,6 +1236,12 @@ export function createSessionStore() {
     setApproval(approval) { state.pendingApproval = approval ?? null; },
     setQuestion(question) { state.pendingQuestion = question ?? null; },
     setRunning(running) { state.running = Boolean(running); },
+    /// follow 流失败的落地点:对齐 Mac StreamCoordinator 的 failEventStream。
+    /// 同时清掉 running —— 流已经死了,再没有 turn/end 会来把转圈停下。
+    setHistoryError(message) {
+      state.historyError = message ? String(message) : null;
+      if (state.historyError) state.running = false;
+    },
     setCwd(cwd) { state.cwd = cwd ?? null; },
     // RPC 写回没有 projection seq，只更新派生标题，不能伪造一个无限大的
     // projection 版本；否则宿主后续真实 title 投影会被永久判成旧帧。

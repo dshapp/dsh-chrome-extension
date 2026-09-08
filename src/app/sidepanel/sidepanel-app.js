@@ -100,8 +100,21 @@ export function createSidepanelApp(root, deps) {
     });
   });
 
+  // 已就地报告过的 follow 失败,按会话记一次,避免每个快照都弹同一条 toast。
+  let reportedHistoryError = null;
+
   function applySnapshot(snapshot) {
     if (snapshot.running) awaitingTurnStart = false;
+    // follow 流失败是终态:host 不会再补任何帧。必须自己把"准备中"的等待态落下,
+    // 否则 awaitingTurnStart 会让 statusPreparing 一直转圈(见 agentStatusLabel)。
+    if (snapshot.historyError) {
+      awaitingTurnStart = false;
+      const key = `${snapshot.sessionId}:${snapshot.historyError}`;
+      if (reportedHistoryError !== key) {
+        reportedHistoryError = key;
+        showToast(snapshot.historyError);
+      }
+    }
     state.hostHome = deps.sessions.hostHome ?? state.hostHome;
     const previousCwd = state.cwd;
     state.cwd = snapshot.cwd ?? state.cwd;
@@ -112,6 +125,7 @@ export function createSidepanelApp(root, deps) {
 
     chatRenderer.render(snapshot.nodes);
     const statusLabel = agentStatusLabel(snapshot, { awaitingTurnStart });
+    // 空会话 + 加载失败:空态提示比一片空白更能说明"这不是在加载"。
     chatRenderer.setTyping(statusLabel != null, statusLabel);
     chatRenderer.setThinking(isThinking(snapshot));
     elements.emptyHint.hidden = snapshot.nodes.length > 0;
