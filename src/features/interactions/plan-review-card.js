@@ -9,6 +9,9 @@ import { mdToHtml } from "../../shared/md-to-html.js";
 import { routePlanReview, submitAnswer, reviseAnswer, cancelledResult } from "./interaction-flow.js";
 import { decorateCodeBlocks } from "../chat/chat-view.js";
 
+// 修订意见输入框的最大可见行数,超出后内部滚动(对齐 Mac 的 lineLimit(1...5))。
+const FEEDBACK_MAX_ROWS = 5;
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -58,12 +61,15 @@ export function createPlanReviewCard(question, review, { onRespond }) {
   errorLine.hidden = true;
 
   const row = el("div", "plan-actions");
-  const feedback = document.createElement("input");
-  feedback.type = "text";
+  // textarea 而非单行 input:修订意见常常是多句话,单行只露出最后一屏字符。
+  // 从一行起步,随输入逐行增高,到 FEEDBACK_MAX_ROWS 行封顶后内部滚动
+  // (对齐 Mac 的 TextField(axis:.vertical) + lineLimit(1...5))。
+  const feedback = document.createElement("textarea");
   feedback.className = "plan-feedback";
+  feedback.rows = 1;
   feedback.placeholder = t("plan.feedbackPlaceholder");
-  // 不自动聚焦:Enter 属于默认的「确认执行」按钮,把焦点放进单行输入框会
-  // 让这个按键被输入框吃掉。
+  // 不自动聚焦:Enter 属于默认的「确认执行」按钮,把焦点放进输入框不改变这一点
+  // (下面的 keydown 显式保留 Return 提交),但仍不抢走用户的起始焦点。
   const revise = el("button", "btn", t("plan.decline"));
   revise.type = "button";
   revise.title = review.decline?.description ?? "";
@@ -77,13 +83,25 @@ export function createPlanReviewCard(question, review, { onRespond }) {
     return feedback.value.trim() !== "";
   }
 
+  /// 按内容重算高度。封顶后切成内部滚动,避免卡片被一条长意见顶穿。
+  /// 先把 height 归零再读 scrollHeight —— 否则上一次设定的高度会成为地板,
+  /// 删字时框子只增不减。
+  function autoGrow() {
+    const lineHeight = parseFloat(getComputedStyle(feedback).lineHeight) || 20;
+    feedback.style.height = "auto";
+    const max = lineHeight * FEEDBACK_MAX_ROWS;
+    const next = Math.min(feedback.scrollHeight, max);
+    feedback.style.height = `${next}px`;
+    feedback.style.overflowY = feedback.scrollHeight > max ? "auto" : "hidden";
+  }
+
   // 主按钮标题随输入框内容切换,这样按钮永远不会承诺一个它不会启动的执行。
   function syncPrimary() {
     const notes = hasFeedback();
     approve.textContent = notes ? t("plan.approveWithNotes") : t("plan.approve");
     approve.title = notes ? t("plan.approveWithNotesHelp") : (review.approve.description ?? "");
   }
-  feedback.addEventListener("input", syncPrimary);
+  feedback.addEventListener("input", () => { syncPrimary(); autoGrow(); });
   syncPrimary();
 
   function setBusy(next) {
@@ -130,12 +148,16 @@ export function createPlanReviewCard(question, review, { onRespond }) {
       discuss.click();
       return;
     }
-    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      // 输入框里的 Enter 也提交(此时主按钮已是「提交修改」)。
+    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+      // textarea 现在会把 Return 当换行。换行留给 Shift/Alt-Return,裸 Return
+      // 继续提交(此时主按钮已是「提交修改」)—— 否则改成多行就等于废掉了
+      // Return 批准这条路径。
+      if (event.shiftKey || event.altKey) return;
       event.preventDefault();
       approve.click();
       return;
     }
+    if (event.altKey) return;
     if (event.key.toLowerCase() === "d" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       revise.click();

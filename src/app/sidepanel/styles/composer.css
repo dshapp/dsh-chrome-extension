@@ -535,12 +535,21 @@
   max-block-size: min(60vh, 32rem); overflow: auto;
 }
 .plan-footer { padding: 0 0.875rem 0.875rem; display: flex; flex-direction: column; gap: 0.5rem; }
-.plan-actions { display: flex; gap: 0.5rem; align-items: center; }
+/* 备注框会逐行增高,按钮跟随它的最后一行 —— 故底对齐而非居中
+   (对齐 Mac b841912 把动作行改为 .bottom 对齐)。 */
+.plan-actions { display: flex; gap: 0.5rem; align-items: flex-end; }
 .plan-feedback {
   flex: 1 1 auto; min-inline-size: 0;
   padding: 0.45rem 0.625rem;
   border: 1px solid var(--border); border-radius: 0.5rem;
   background: var(--bg); color: var(--text); font: inherit; font-size: 0.8125rem;
+  /* 高度由 autoGrow() 按 scrollHeight 写入 inline style。这里给出它依赖的
+     确定行高,并关掉用户拖拽把手 —— 尺寸归内容所有。 */
+  line-height: 1.45;
+  resize: none;
+  overflow-y: hidden;
+  /* textarea 默认 inline-block,基线对齐会让它比同排按钮矮一截。 */
+  display: block;
 }
 .plan-feedback:focus { outline: none; border-color: color-mix(in oklab, var(--text) 40%, var(--border)); }
 
