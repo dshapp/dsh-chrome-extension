@@ -6,6 +6,7 @@ import { createSessionOrderStore } from "./session-order-store.js";
 import { SessionAwaitingKind } from "./session-row-trailing.js";
 import { RPC, STREAM, HOST } from "../../platform/dsh/rpc-methods.js";
 import { t } from "../../shared/i18n.js";
+import { expandHistoryEntry } from "./chunk-rows.js";
 
 /// session.create 的归属参数:workspaceId 与 cwd **互斥**,同时给会被宿主判
 /// bad-request 整体拒绝(真实后端验证过)。workspaceId 优先——它是宿主认的归属标识,
@@ -80,8 +81,13 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
 
   function applyHistoryValue(sessionId, value, buffered = []) {
     store.reset(sessionId);
+    // 历史(session/page 与 follow snapshot 两条路径)可能带 chunkrow 打包记录:
+    // 一条记录代表连续多条 assistant/chunk,必须先展开再入 store,否则整段流式
+    // 内容丢失,且 lastSeq 只到 seq0 会让后续每条实时帧都被误判成缺口。
     for (const entry of value?.records ?? value?.events ?? []) {
-      store.applyEvent(entry.event, entry.view);
+      for (const expanded of expandHistoryEntry(entry)) {
+        store.applyEvent(expanded.event, expanded.view);
+      }
     }
     for (const [key, projectionValue] of Object.entries(value?.projections?.values ?? {})) {
       store.applyProjection(key, projectionValue,
@@ -315,6 +321,13 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     },
 
     async rename(sessionId, title) {
+      // 标题两端的空白不属于内容。归一化放在 service 入口而不是某个 UI 调用点:
+      // 这里是所有重命名入口的收敛处,将来新增入口也自动受保护。
+      // 裁完为空等于没给标题 —— 不向宿主发一个视觉上为空的标题(对齐 Mac
+      // RenameSheet 的 trimmedTitle 门槛)。
+      const trimmed = String(title ?? "").trim();
+      if (!trimmed) return null;
+      title = trimmed;
       const generation = (renameGenerations.get(sessionId) ?? 0) + 1;
       renameGenerations.set(sessionId, generation);
       const value = await connection.call(RPC.sessionRename, { request: { sessionId, title } });
