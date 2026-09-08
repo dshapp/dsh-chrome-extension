@@ -373,7 +373,8 @@ export function elementPickerPageScript(options) {
     foot.appendChild(next);
     foot.appendChild(submit);
 
-    // Escape 退出、⌘/Ctrl+Enter 提交。Enter 留给 textarea 换行 —— 批注可能是多行。
+    // Escape 退出;Enter 提交,Shift+Enter 换行(对齐侧栏输入框的手势)。
+    // ⌘/Ctrl+Enter 也留着提交:两种习惯的用户都不会按空。
     // stopPropagation:别让这些键落到页面自身的快捷键上。
     panel.addEventListener("keydown", event => {
       event.stopPropagation();
@@ -382,10 +383,15 @@ export function elementPickerPageScript(options) {
         cancelClose();
         return;
       }
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        commitSubmit();
-      }
+      if (event.key !== "Enter") return;
+      // 输入法组字时的 Enter 是"选定候选词",不是提交 —— 中文用户每打一个词
+      // 都会按到它,不挡住的话批注刚打一半就被发出去了。
+      // isComposing 之外再看 keyCode 229:部分输入法只给得出后者。
+      if (event.isComposing || event.keyCode === 229) return;
+      // Shift+Enter 换行:交给 textarea 自己处理,不 preventDefault。
+      if (event.shiftKey) return;
+      event.preventDefault();
+      commitSubmit();
     });
 
     panel.appendChild(head);

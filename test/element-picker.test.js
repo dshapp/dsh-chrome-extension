@@ -507,16 +507,63 @@ describe("批注弹窗(注入体在 jsdom 里当作页面脚本直接跑)", () =
     expect(window.__cmElementPicker).toBeNull();
   });
 
-  it("Escape 等于关闭,⌘/Ctrl+Enter 等于提交", () => {
-    clickOn(document.getElementById("go"));
-    panel().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(window.__cmPickerCancel).toBe(true);
-
+  /// 重开一次弹窗,好让每个按键用例从干净状态起步。
+  const reopen = () => {
+    window.__cmPickerSubmit = false;
     window.__cmPickerCancel = false;
+    window.__cmElementPicker?.stop?.();
     elementPickerPageScript({ maxTextLength: 120, labels });
     clickOn(document.getElementById("go"));
-    panel().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
+  };
+  const press = (init) =>
+    panel().dispatchEvent(new window.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+
+  it("Escape 等于关闭", () => {
+    clickOn(document.getElementById("go"));
+    press({ key: "Escape" });
+    expect(window.__cmPickerCancel).toBe(true);
+  });
+
+  it("Enter 直接提交", () => {
+    reopen();
+    panel().querySelector("textarea").value = "改成蓝色";
+    press({ key: "Enter" });
     expect(window.__cmPickerSubmit).toBe(true);
+    expect(window.__cmPickerQueue.at(-1).note).toBe("改成蓝色");
+  });
+
+  it("Shift+Enter 换行,不提交(要留给 textarea 自己插入换行)", () => {
+    reopen();
+    const event = new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+    panel().dispatchEvent(event);
+    expect(window.__cmPickerSubmit).toBe(false);
+    expect(panel()).not.toBeNull();
+    // 不能拦下默认行为,否则 textarea 根本换不了行。
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("⌘/Ctrl+Enter 同样提交(两种习惯都不落空)", () => {
+    reopen();
+    press({ key: "Enter", metaKey: true });
+    expect(window.__cmPickerSubmit).toBe(true);
+
+    reopen();
+    press({ key: "Enter", ctrlKey: true });
+    expect(window.__cmPickerSubmit).toBe(true);
+  });
+
+  // 中文用户每选一个候选词都会按 Enter;不挡住的话批注刚打一半就被发出去了。
+  it("输入法组字中的 Enter 是选词,不提交", () => {
+    reopen();
+    press({ key: "Enter", isComposing: true });
+    expect(window.__cmPickerSubmit).toBe(false);
+    expect(panel()).not.toBeNull();
+
+    // 部分输入法不给 isComposing,只给得出 keyCode 229。
+    reopen();
+    press({ key: "Enter", keyCode: 229 });
+    expect(window.__cmPickerSubmit).toBe(false);
+    expect(panel()).not.toBeNull();
   });
 
   it("stop() 把弹窗一起拆掉,不留残影", () => {
