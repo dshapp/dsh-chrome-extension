@@ -168,6 +168,55 @@ describe("工具调用", () => {
     expect(roots[0].subCalls[0].result.content[0].text).toBe("ok");
   });
 
+  it("system/message 不产生行(属于 request/trajectory,不进主记录)", () => {
+    const s = fresh();
+    s.applyEvent(ev("system/message", { turn: 1, step: 1, message: { role: "system", content: [{ type: "text", text: "sys" }] } }, { surfaceOp: { op: "append" } }));
+    expect(s.getSnapshot().nodes).toHaveLength(0);
+  });
+
+  it("system/* 与 request/* 的其它变体也不产生行(对齐 Web 投影)", () => {
+    const s = fresh();
+    s.applyEvent(ev("system/notice", { text: "hi" }, { surfaceOp: "append" }));
+    s.applyEvent(ev("request/header", { headers: {} }, { surfaceOp: "append" }));
+    s.applyEvent(ev("request/trajectory", { items: [] }, { surfaceOp: "append" }));
+    expect(s.getSnapshot().nodes).toHaveLength(0);
+  });
+
+  it("其它未知 append 事件仍保留兜底行", () => {
+    const s = fresh();
+    s.applyEvent(ev("host/custom-thing", { a: 1 }, { surfaceOp: "append" }));
+    const nodes = s.getSnapshot().nodes;
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].kind).toBe(NodeKind.unknownSurface);
+    expect(nodes[0].type).toBe("host/custom-thing");
+  });
+
+  it("ptc-dispatch(v3 新名)与 code-dispatch 走同一条嵌套路径", () => {
+    const s = fresh();
+    s.applyEvent(ev("tool/call", { callId: "root", name: "run_code", arguments: "{}", turn: 1, step: 0 }));
+    s.applyEvent(ev("tool/ptc-dispatch-start", { subCallId: "sub1", rootCallId: "root", parentCallId: "root", name: "read", arguments: { file_path: "/a" } }));
+    s.applyEvent(ev("tool/ptc-dispatch", { subCallId: "sub1", rootCallId: "root", parentCallId: "root", name: "read", content: [{ type: "text", text: "ok" }] }));
+    const roots = byKind(s, NodeKind.toolCall);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].subCalls).toHaveLength(1);
+    expect(roots[0].subCalls[0].result.content[0].text).toBe("ok");
+  });
+
+  it("嵌套子调用的 write/edit 计入本轮产出", () => {
+    const s = fresh();
+    s.applyEvent(ev("turn/start", { turn: 1 }));
+    s.applyEvent(ev("tool/call", { callId: "root", name: "run_code", arguments: "{}", turn: 1, step: 0 }));
+    const dispatch = (id, name, args, content) => {
+      s.applyEvent(ev("tool/ptc-dispatch-start", { subCallId: id, rootCallId: "root", parentCallId: "root", name, arguments: args }));
+      s.applyEvent(ev("tool/ptc-dispatch", { subCallId: id, rootCallId: "root", parentCallId: "root", name, arguments: args, content: content ?? [{ type: "text", text: "ok" }], isError: false }));
+    };
+    dispatch("w1", "write", { file_path: "/out/a.txt", content: "x" });
+    dispatch("e1", "edit", { file_path: "/out/b.txt", old_string: "x", new_string: "y" });
+    dispatch("r1", "read", { file_path: "/out/a.txt" });
+    dispatch("w2", "write", { file_path: "/out/a.txt", content: "z" });
+    expect(s.getSnapshot().producedPathsByTurn.get(1)).toEqual(["/out/a.txt", "/out/b.txt"]);
+  });
+
   it("未结算的调用在其 turn 关闭后冻结为 interrupted", () => {
     const s = fresh();
     s.applyEvent(ev("turn/start", { turn: 1 }));
@@ -187,6 +236,56 @@ describe("turn 生命周期", () => {
     const [e] = byKind(s, NodeKind.turnError);
     expect(e.message).toBe("boom");
     expect(e.code).toBe("E");
+  });
+
+  it("AUTH 失败信息脱敏,不回显凭据", () => {
+    const s = fresh();
+    s.applyEvent(ev("turn/start", { turn: 1 }));
+    s.applyEvent(ev("turn/end", { turn: 1, reason: { kind: "error", error: { message: "bad key sk-secret", code: "AUTH" } } }));
+    const [e] = byKind(s, NodeKind.turnError);
+    expect(e.code).toBe("AUTH");
+    expect(e.message).not.toContain("sk-secret");
+    expect(e.message.length).toBeGreaterThan(0);
+  });
+
+  it("recall 上下文把引用标签回贴到前一用户消息", () => {
+    const s = fresh();
+    s.applyEvent(ev("user/message", { message: { id: "u1", content: [{ type: "text", text: "问" }], source: { kind: "user" } } }));
+    s.applyEvent(ev("user/message", {
+      message: {
+        id: "c1", content: [{ type: "text", text: "recall" }],
+        source: { kind: "session-reference", references: [{ label: "研究笔记" }] }
+      }
+    }));
+    const [user] = byKind(s, NodeKind.user);
+    expect(user.referenceLabels).toEqual(["研究笔记"]);
+  });
+
+  it("出现最终回答后插入 turnProcess 折叠头并导出规格", () => {
+    const s = fresh();
+    s.applyEvent(ev("turn/start", { turn: 1 }));
+    s.applyEvent(ev("tool/call", { callId: "c1", name: "read", arguments: "{}", turn: 1, step: 0 }));
+    s.applyEvent(ev("tool/result", { callId: "c1", content: [{ type: "text", text: "ok" }] }));
+    s.applyEvent(ev("assistant/message", { turn: 1, step: 1, message: { id: "m1", content: [{ type: "text", text: "done" }] } }));
+    const snap = s.getSnapshot();
+    const head = snap.nodes.find((n) => n.kind === NodeKind.turnProcess);
+    expect(head).toBeTruthy();
+    expect(head.toolCallCount).toBe(1);
+    expect(head.answerStep).toBe(1);
+    expect(head.processStartSeq).toBe(0);
+    expect(snap.turnProcessByTurn.get(1).answerAnchorSeq).toBe(head.answerAnchorSeq);
+  });
+
+  it("每轮最后一个已结算 assistant 标记 closing,前面/运行中的不标记", () => {
+    const s = fresh();
+    s.applyEvent(ev("turn/start", { turn: 1 }));
+    s.applyEvent(ev("assistant/message", { turn: 1, step: 0, message: { id: "m0", content: [{ type: "text", text: "a" }] } }));
+    s.applyEvent(ev("assistant/message", { turn: 1, step: 1, message: { id: "m1", content: [{ type: "text", text: "b" }] } }));
+    s.applyEvent(ev("turn/start", { turn: 2 }));
+    s.applyEvent(ev("assistant/chunk", { turn: 2, step: 0, chunk: { type: "block-start", index: 0, blockType: "text" } }));
+    s.applyEvent(ev("assistant/chunk", { turn: 2, step: 0, chunk: { type: "text-delta", index: 0, text: "streaming" } }));
+    const closing = byKind(s, NodeKind.assistant).map((n) => [n.messageId, n.closing]);
+    expect(closing).toEqual([["m0", false], ["m1", true], [null, false]]);
   });
 
   it("completed 不产生 turnError", () => {
@@ -250,6 +349,15 @@ describe("重试 / compaction / 命令 / workflow", () => {
     const [r] = byKind(s, NodeKind.modelRetry);
     expect(r.retry).toBe(2);
     expect(r.failureCode).toBe("rate");
+  });
+
+  it("llm/retry 的 AUTH 失败同样脱敏", () => {
+    const s = fresh();
+    s.applyEvent(ev("turn/start", { turn: 1 }));
+    s.applyEvent(ev("llm/retry", { retryId: "r1", turn: 1, step: 0, retry: 1, maxRetries: 3, failure: { message: "bad key sk-secret", code: "AUTH" } }));
+    const [r] = byKind(s, NodeKind.modelRetry);
+    expect(r.failureCode).toBe("AUTH");
+    expect(r.failureMessage).not.toContain("sk-secret");
   });
 
   it("重试隐藏该轮的 turn-error", () => {

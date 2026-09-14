@@ -7,6 +7,7 @@ import { SessionAwaitingKind } from "./session-row-trailing.js";
 import { RPC, STREAM, HOST } from "../../platform/dsh/rpc-methods.js";
 import { t } from "../../shared/i18n.js";
 import { expandHistoryEntry } from "./chunk-rows.js";
+import { pendingInteractionStatus } from "../interactions/interaction-flow.js";
 
 /// session.create 的归属参数:workspaceId 与 cwd **互斥**,同时给会被宿主判
 /// bad-request 整体拒绝(真实后端验证过)。workspaceId 优先——它是宿主认的归属标识,
@@ -39,6 +40,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   const pendingEventSessions = new Map();
   const pendingInteractions = new Map();
   const historyCursors = new Map();
+  // 每会话已加载窗口的左边界与是否还有更早历史(session/page 的 beforeSeq/hasMore)。
+  const historyBounds = new Map();
   const controlQueues = new Map();
   const controlJobs = new Map();
   const controlProjections = new Map();
@@ -54,6 +57,14 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   let followedStreamId = null;
   // 当前 follow 的完整 durable address。子代理分页不能退化成普通 session 地址。
   let currentFollowAddress = null;
+  // live 旁路(assistant-stream)的连续性期望:正在流式的 attempt 与下一条帧必须携带的
+  // 稠密位置(web ClientAssistantStream.nextIndex)。丢帧/失序时重开一次 follow,新快照的
+  // baseline 用它恢复被丢掉的正文 —— 否则 start 丢失会让整段 token 静默空白到 settlement。
+  let assistantExpectation = null; // null | { attemptId, nextIndex }
+  /// 已采纳的 live 旁路代际(web ClientAssistantStream.revision)。帧携带 revision 时必须
+  /// 严格 +1;start 的 revision===1 表示宿主重置了代际,先清空再采纳。缺字段的旧宿主
+  /// 退化为只做 index 稠密校验。
+  let assistantRevision = 0;
   // gap repair 等待 HTTP page 时继续缓存实时帧；切会话/新快照会使旧修复失效。
   let gapRepairGeneration = 0;
   let repairingGap = false;
@@ -67,6 +78,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     if (currentSessionId !== sessionId) {
       invalidateGapRepair();
       currentSessionId = sessionId;
+      assistantExpectation = null;
+      assistantRevision = 0;
       store.reset(sessionId);
       applyCachedControl(sessionId);
       applyCachedInteractions(sessionId);
@@ -79,8 +92,20 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     gapRepairBuffer = [];
   }
 
+  /// 记录窗口左边界:更早分页的游标与"是否还有更早"。
+  function recordHistoryBounds(sessionId, value) {
+    if (!sessionId) return;
+    const entries = value?.records ?? value?.events ?? [];
+    const first = entries.find((entry) => Number.isInteger(entry?.event?.seq));
+    historyBounds.set(sessionId, {
+      earliestSeq: first ? first.event.seq : -1,
+      hasMore: value?.hasMore === true
+    });
+  }
+
   function applyHistoryValue(sessionId, value, buffered = []) {
     store.reset(sessionId);
+    recordHistoryBounds(sessionId, value);
     // 历史(session/page 与 follow snapshot 两条路径)可能带 chunkrow 打包记录:
     // 一条记录代表连续多条 assistant/chunk,必须先展开再入 store,否则整段流式
     // 内容丢失,且 lastSeq 只到 seq0 会让后续每条实时帧都被误判成缺口。
@@ -157,21 +182,87 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   }
 
   function syncAwaitingUser(sessionId) {
-    let hasQuestion = false;
+    let approval = null;
+    let question = null;
     for (const pending of pendingInteractions.values()) {
       if (pending.sessionId !== sessionId) continue;
-      if (pending.kind === "approval") {
-        listStore.setAwaitingUser(sessionId, SessionAwaitingKind.approval);
-        return;
-      }
-      if (pending.kind === "question") hasQuestion = true;
+      if (pending.kind === "approval") approval = pending.value;
+      if (pending.kind === "question") question = pending.value;
     }
-    listStore.setAwaitingUser(sessionId, hasQuestion ? SessionAwaitingKind.question : null);
+    // 与会话卡实际渲染同一分类器(web visiblePendingKind):plan-review 单独计徽标。
+    const status = pendingInteractionStatus({ approval, question });
+    listStore.setAwaitingUser(sessionId, status ? SessionAwaitingKind[status] : null);
   }
 
   /// 只有当前会话的帧才进 store;其他会话只更新列表里的运行状态。
   function isCurrent(sessionId) {
     return sessionId === currentSessionId;
+  }
+  /// live 旁路连续性闸门(web ClientAssistantStream.acceptFrame / mac foldAssistantStreamFrame)。
+  /// chunk/end 的 index 是 attempt 内的稠密位置,必须与期望的 nextIndex 连续;start 不得叠加在
+  /// 未结束的 attempt 上。任一失序丢帧并重开一次 follow —— 新快照的 baseline 重新武装 attempt,
+  /// 恢复被丢的正文(否则 start 丢失会让整段 token 静默空白到 settlement)。返回是否可交给 store。
+  function foldAssistantStreamFrame(frame) {
+    if (!frame || typeof frame.type !== "string" || typeof frame.attemptId !== "string") return false;
+    // revision 存在时必须与已采纳代际 +1(web transport.ts / assistant-stream.ts)。
+    // 不嵌在这里对 chunk/end 各自判断:start 允许 revision===1 重置代际。
+    const revision = Number.isInteger(frame.revision) ? frame.revision : null;
+    if (revision != null && frame.type === "start") {
+      if (revision === 1 && assistantRevision !== 0) {
+        assistantRevision = 0;
+        assistantExpectation = null;
+      } else if (revision !== assistantRevision + 1) {
+        reopenFollow(`start revision ${revision}, expected ${assistantRevision + 1}`);
+        return false;
+      }
+      assistantRevision = revision;
+    } else if (revision != null && frame.type !== "start") {
+      // 每一帧(含 chunk/end)都推进一代,期望严格 +1。
+      if (revision !== assistantRevision + 1) {
+        reopenFollow(`${frame.type} revision ${revision}, expected ${assistantRevision + 1}`);
+        return false;
+      }
+      assistantRevision = revision;
+    }
+    switch (frame.type) {
+      case "start":
+        if (assistantExpectation != null) {
+          reopenFollow("start over an open attempt");
+          return false;
+        }
+        assistantExpectation = { attemptId: frame.attemptId, nextIndex: 0 };
+        return true;
+      case "chunk":
+        if (assistantExpectation == null || assistantExpectation.attemptId !== frame.attemptId) return false;
+        if (!Number.isInteger(frame.index) || frame.index !== assistantExpectation.nextIndex) {
+          reopenFollow(`chunk index ${frame.index}, expected ${assistantExpectation.nextIndex}`);
+          return false;
+        }
+        assistantExpectation.nextIndex += 1;
+        return true;
+      case "end":
+        if (assistantExpectation == null || assistantExpectation.attemptId !== frame.attemptId) return false;
+        if (!Number.isInteger(frame.index) || frame.index !== assistantExpectation.nextIndex) {
+          reopenFollow(`end index ${frame.index}, expected ${assistantExpectation.nextIndex}`);
+          return false;
+        }
+        assistantExpectation = null;
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  /// 重开当前 follow(同 address):新快照的 baseline 重新武装被丢的 attempt。
+  function reopenFollow(reason) {
+    assistantExpectation = null;
+    assistantRevision = 0;
+    // 丢帧后的旧代际帧(中段挂载、陈旧尾巴)在被清空的期望下不会再触发重开,静默等 settle 兜底。
+    if (!followedStreamId || !currentFollowAddress) return;
+    connection.unsubscribe?.(followedStreamId);
+    connection.subscribe?.(followedStreamId, STREAM.follow, {
+      request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
+    });
   }
 
   const service = {
@@ -276,7 +367,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       if (followedStreamId) connection.unsubscribe?.(followedStreamId);
       followedStreamId = `follow:${id}`;
       connection.subscribe?.(followedStreamId, STREAM.follow, {
-        request: { address: currentFollowAddress, maxMessages: 50 }
+        request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
       });
       return id;
     },
@@ -293,6 +384,62 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       ensureStore(sessionId);
       invalidateGapRepair();
       applyHistoryValue(sessionId, value);
+      notifyRuntime();
+      return value;
+    },
+
+    /// 是否还有比当前窗口更早的历史(轨迹台账的「加载更早」入口据此显隐)。
+    hasMoreHistory(sessionId) {
+      const bounds = historyBounds.get(sessionId);
+      return bounds?.hasMore === true && Number.isInteger(bounds.earliestSeq) && bounds.earliestSeq >= 0;
+    },
+
+    /// 轨迹台账往前翻页:取当前窗口左边界之前的一页,归并进 store 后只重折一次。
+    /// 与 loadHistory 同一条 session/page 路,只是多带 beforeSeq;迟到回包按 loadToken 丢弃。
+    async loadEarlier(sessionId) {
+      const bounds = historyBounds.get(sessionId);
+      const cursor = historyCursors.get(sessionId);
+      if (!bounds || bounds.hasMore !== true || !Number.isInteger(bounds.earliestSeq)
+        || bounds.earliestSeq < 0 || !Number.isInteger(cursor)) {
+        return null;
+      }
+      const token = ++loadToken;
+      const value = await connection.call(RPC.sessionPage, {
+        request: {
+          address: { kind: "session", sessionId },
+          throughSeq: cursor,
+          beforeSeq: bounds.earliestSeq,
+          maxMessages: 50
+        }
+      });
+      if (token !== loadToken || sessionId !== currentSessionId) return value;
+      const entries = [];
+      for (const entry of value?.records ?? value?.events ?? []) {
+        for (const expanded of expandHistoryEntry(entry)) entries.push(expanded);
+      }
+      const prepended = store.prependEntries(entries);
+      historyBounds.set(sessionId, {
+        earliestSeq: entries.length ? entries[0].event.seq : bounds.earliestSeq,
+        hasMore: value?.hasMore === true
+      });
+      if (prepended) notifyRuntime();
+      return value;
+    },
+
+    /// turn rail 的跳页:把窗口分到指定 seq 之前(即 shrink 到 turn/start seq 那一页),
+    /// 让投影命名、但尚未加载的轮次进入窗口。与 loadHistory 同一条 session/page 路。
+    async loadThrough(sessionId, seq) {
+      if (!Number.isInteger(seq) || seq < 0) return null;
+      const token = ++loadToken;
+      const value = await connection.call(RPC.sessionPage, {
+        request: { address: { kind: "session", sessionId }, throughSeq: seq, maxMessages: 50 }
+      });
+      if (token !== loadToken) return value;
+      ensureStore(sessionId);
+      invalidateGapRepair();
+      applyHistoryValue(sessionId, value);
+      // 跳页把窗口挪走后,旧的左边界不再代表当前窗口。
+      historyBounds.delete(sessionId);
       notifyRuntime();
       return value;
     },
@@ -402,7 +549,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       if (followedStreamId) connection.unsubscribe?.(followedStreamId);
       followedStreamId = `follow:${childId}`;
       connection.subscribe?.(followedStreamId, STREAM.follow, {
-        request: { address: currentFollowAddress, maxMessages: 50 }
+        request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
       });
       return null;
     },
@@ -437,9 +584,12 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       }
     },
 
-    /// 上传附件,换回宿主侧的 attachmentId(大图不走 base64 内联)。
-    async uploadAttachment(sessionId, attachmentId) {
-      return connection.call(RPC.sessionAttachment, { request: { sessionId, attachmentId } });
+    /// 按 attachmentId 读回历史图片的字节(web SessionFace.readAttachment)。
+    /// 返回 { attachment, data },data 是 base64;失败返回 null 让渲染层落 failed 占位。
+    async readAttachment(sessionId, attachmentId) {
+      const id = sessionId ?? currentSessionId;
+      if (!id || !attachmentId) return null;
+      return connection.call(RPC.sessionAttachment, { request: { sessionId: id, attachmentId } });
     },
 
     async models(sessionId) {
@@ -573,6 +723,26 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           loadToken += 1;
           invalidateGapRepair();
           applyHistoryValue(sessionId, payload);
+          // DSH 1.5 live 旁路:重连后从 baseline 恢复 stream 到一半的 attempt,
+          // 用户看到一半的回答不至于一直空白到 settlement。
+          store.applyAssistantStreamBaseline(payload.assistantStream ?? null);
+          // baseline 是 live 旁路继续的权威:采纳(或清空)它携带的 attempt 期望。
+          const activeAttempt = payload.assistantStream?.activeAttempt;
+          assistantExpectation = activeAttempt
+            ? { attemptId: activeAttempt.attemptId, nextIndex: Number.isInteger(activeAttempt.nextIndex) ? activeAttempt.nextIndex : 0 }
+            : null;
+          assistantRevision = Number.isInteger(payload.assistantStream?.revision)
+            ? payload.assistantStream.revision
+            : 0;
+          notifyRuntime();
+          return;
+        }
+        if (payload.type === "assistant-stream") {
+          // presentation-only 帧,不推进 durable cursor;非当前会话直接丢弃。
+          if (!isCurrent(sessionId)) return;
+          // 连续性闸门:失序丢帧,并在需要时重开一次 follow。
+          if (!foldAssistantStreamFrame(payload.frame)) return;
+          store.applyAssistantStreamFrame(payload.frame);
           notifyRuntime();
           return;
         }

@@ -1,9 +1,15 @@
-// 图片附件:粘贴/选择文件 → prompt content 内联 base64(DSH 原生支持)。
+// 附件:图片内联 base64(DSH 原生支持);非图片(工作区外文件,浏览器读不到
+// 真实路径)走 session/uploadFileBinary 真上传,换回 receiptId 由 session/prompt 的
+// file content part 消费(DSH 1.5)。
 //
-// 限制以宿主的 imageLimits 投影为准(mediaTypes / maxImageBytes /
-// maxImagesPerMessage / maxMessageImageBytes)。此前这里写死 10MB 与一份本地类型表,
-// 与宿主实际的 20MB、20 张上限不一致:偏小会把宿主本可接受的图片拦下,
-// 偏大则等到发送时才被宿主拒绝,而那时用户已经以为图片加好了。
+// 图片限制以宿主 imageLimits 投影为准(mediaTypes / maxImageBytes /
+// maxImagesPerMessage / maxMessageImageBytes)。非图片文件没有图片的类型/张数/
+// 总字节三类约束,只受"会话未就绪时不能上传"影响(注入的 uploadFile 拿不到
+// 会话 id 时抛 attach.noSession)。
+
+import { escapeHtml } from "../../shared/md-to-html.js";
+import { t } from "../../shared/i18n.js";
+import { lucideIconSvg } from "../chat/file-icons.js";
 
 /// 宿主未下发投影前的保守兜底(与 DSH attachment 包的默认值一致)。
 const FALLBACK_LIMITS = Object.freeze({
@@ -19,7 +25,7 @@ export function formatBytes(bytes) {
   return `${Math.round(bytes / 1024)}KB`;
 }
 
-/// 校验一个待加入的文件。返回 null 表示通过,否则返回人读的拒绝原因。
+/// 校验一个待加入的图片。返回 null 表示通过,否则返回人读的拒绝原因。
 export function validateImage(file, limits, existing = []) {
   const l = { ...FALLBACK_LIMITS, ...(limits ?? {}) };
   const types = l.mediaTypes ?? FALLBACK_LIMITS.mediaTypes;
@@ -44,7 +50,7 @@ export async function fileToContentPart(file) {
   return { type: "image", mediaType: file.type, data, name: file.name };
 }
 
-/// 把 ArrayBuffer 转成 base64。分块展开,避免 `String.fromCharCode(...bytes)`
+/// 把 ArrayBuffer 转成 base64。分块展开,避免 String.fromCharCode(...bytes)
 /// 一次性展开整个文件 —— 大文件会把参数列表撑爆(栈溢出)且内存峰值翻倍。
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
@@ -70,87 +76,150 @@ async function readAsBase64(file) {
       const comma = dataUrl.indexOf(",");
       resolve(comma === -1 ? dataUrl : dataUrl.slice(comma + 1));
     };
-    reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+    reader.onerror = () => reject(reader.error || new Error(t("attach.readFailed")));
     reader.readAsDataURL(file);
   });
 }
 
-export function createAttachmentTray() {
+export function createAttachmentTray({ uploadFile } = {}) {
   const pending = [];
   const listeners = new Set();
   // 由 app 层在 imageLimits 投影到达时注入;未注入时用保守兜底。
   let limits = null;
+  const emit = () => {
+    const snapshot = pending.slice();
+    for (const listener of listeners) listener(snapshot);
+  };
+  function drop(slot) {
+    const at = pending.indexOf(slot);
+    if (at === -1) return false;
+    const [removed] = pending.splice(at, 1);
+    if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+    return true;
+  }
+  function i18nError(key, params) {
+    const error = new Error(key);
+    error.i18nKey = key;
+    error.i18nParams = params;
+    return error;
+  }
+  function isBusy(item) { return !item.part && item.upload !== "failed"; }
+  // UI 显示:文件(上传中/失败/就绪)都显示;图片只显示已读入的(占位毫秒级,不画)。
+  // remove/retry 的 index 都按这个序列,与 render 的 data-index 一致。
+  function visibleItems() { return pending.filter((item) => item.kind === "file" || item.part); }
+
+  async function addImageRaw(file) {
+    const rejection = validateImage(file, limits, pending.filter((item) => item.kind === "image"));
+    if (rejection) throw i18nError(rejection.key, rejection.params);
+    // 先按 bytes 占位再读文件。校验读 pending 是同步的,而读文件是异步的:
+    // 不占位的话,一次粘贴多张图产生的并发调用会全部在 pending 仍为空时通过
+    // 校验,张数与总字节上限双双被突破。
+    const slot = { part: null, previewUrl: null, bytes: file.size, name: file.name, kind: "image", upload: "ready", file };
+    pending.push(slot);
+    emit();
+    let part;
+    try {
+      part = await fileToContentPart(file);
+    } catch (error) {
+      drop(slot);
+      emit();
+      throw error;
+    }
+    // clear() 可能在读取期间消费了整条草稿。已撤销的占位不能在异步读取
+    // 完成后复活,更不能创建一个没有任何引用可供 revoke 的 Blob URL。
+    if (!pending.includes(slot)) return;
+    slot.part = part;
+    slot.previewUrl = URL.createObjectURL(file);
+    emit();
+  }
+
+  async function uploadRaw(slot) {
+    slot.upload = "uploading";
+    emit();
+    try {
+      const value = await uploadFile(slot.file);
+      if (!pending.includes(slot)) return;   // 上传期间整条被清掉
+      slot.part = { type: "file", receiptId: value.receiptId };
+      slot.upload = "ready";
+      emit();
+    } catch (error) {
+      if (!pending.includes(slot)) return;
+      slot.upload = "failed";
+      emit();
+      throw error;
+    }
+  }
+
+  async function addFileRaw(file) {
+    if (typeof uploadFile !== "function") throw i18nError("attach.noUpload", {});
+    const slot = { part: null, previewUrl: null, bytes: file.size, name: file.name, kind: "file", upload: "uploading", file };
+    pending.push(slot);
+    emit();
+    await uploadRaw(slot);
+  }
+
   return {
-    // 只暴露读完的附件:占位项的 part 还是 null,漏出去会被拼进消息体发给宿主。
-    // 张数/字节校验读的是内部的 pending(含占位),所以上限依然按占位算。
+    // 发送层只吃已就绪的 part。张数/字节校验读内部的 pending(含占位),
+    // 所以上限依然按占位算。
     get pending() { return pending.filter((item) => item.part); },
-    // 读取期间不能发送：否则文字会先发出去，随后 clear() 消费占位，用户选中的
-    // 图片被静默丢弃。单独暴露状态而不是把空 part 泄漏给消息构造层。
-    get reading() { return pending.some((item) => !item.part); },
+    // render 层要看全貌:读图占位、上传中、失败都要展示。
+    get all() { return pending.slice(); },
+    get visible() { return visibleItems(); },
+    // 读图/上传未完成时不能发送;失败不阻断(文字可单独发)。
+    get reading() { return pending.some(isBusy); },
     get limits() { return limits; },
     setLimits(next) { limits = next ?? null; },
     onChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     /// 抛出的错误带 i18nKey/i18nParams,让调用方用当前语言渲染。
     async addFile(file) {
-      const rejection = validateImage(file, limits, pending);
-      if (rejection) {
-        const error = new Error(rejection.key);
-        error.i18nKey = rejection.key;
-        error.i18nParams = rejection.params;
-        throw error;
-      }
-      // 先按 bytes 占位再读文件。校验读 pending 是同步的,而读文件是异步的:
-      // 不占位的话,一次粘贴多张图产生的并发调用会全部在 pending 仍为空时通过
-      // 校验,张数与总字节上限双双被突破,直到发送时才被宿主拒绝。
-      const slot = { part: null, previewUrl: null, bytes: file.size };
-      pending.push(slot);
-      for (const listener of listeners) listener(this.pending);
-      let part;
-      try {
-        part = await fileToContentPart(file);
-      } catch (error) {
-        const at = pending.indexOf(slot);
-        if (at !== -1) pending.splice(at, 1);
-        for (const listener of listeners) listener(this.pending);
-        throw error;
-      }
-      // clear() 可能在读取期间消费了整条草稿。已撤销的占位不能在异步读取
-      // 完成后复活，更不能创建一个没有任何引用可供 revoke 的 Blob URL。
-      if (!pending.includes(slot)) return;
-      slot.part = part;
-      slot.previewUrl = URL.createObjectURL(file);
-      for (const listener of listeners) listener(this.pending);
+      const mediaTypes = limits?.mediaTypes ?? FALLBACK_LIMITS.mediaTypes;
+      return mediaTypes.includes(file.type) ? addImageRaw(file) : addFileRaw(file);
+    },
+    /// 重试一次失败的上传,原始 File 仍被持有。
+    async retry(index) {
+      const target = visibleItems()[index];
+      if (!target || target.kind !== "file" || target.upload !== "failed" || !target.file) return;
+      await uploadRaw(target);
     },
     remove(index) {
-      // 索引来自 DOM 的 data-index,重渲染竞态或被改写时可能是 NaN / 负数 / 越界。
-      // splice 对这些值另有语义(-1 删最后一个、NaN 当 0),删掉的都不是用户点的
-      // 那张,而目标那张的 blob 还留着没回收。对齐 element-picker.remove 的护栏。
-      // UI 只渲染已读完的附件；读取中的占位仍在 pending 内，不能直接拿 UI
-      // 索引去 splice，否则乱序完成时会删除另一张仍在读取的图片。
-      const visible = pending.filter((item) => item.part);
-      if (!Number.isInteger(index) || index < 0 || index >= visible.length) return;
-      const target = visible[index];
-      const at = pending.indexOf(target);
-      if (at === -1) return;
-      const [removed] = pending.splice(at, 1);
-      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-      for (const listener of listeners) listener(this.pending);
+      // 索引来自 DOM 的 data-index(与 render 同按 visible 渲染),重渲染竞态或被改写
+      // 时可能是 NaN / 负数 / 越界。splice 对这些值另有语义(-1 删最后一个、NaN 当 0)。
+      // 以 visible 为基准,失败/上传中的文件项也能移除。对齐 element-picker.remove。
+      const list = visibleItems();
+      if (!Number.isInteger(index) || index < 0 || index >= list.length) return;
+      drop(list[index]);
+      emit();
     },
     clear() {
-      for (const { previewUrl } of pending) URL.revokeObjectURL(previewUrl);
+      for (const { previewUrl } of pending) {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+      }
       pending.length = 0;
-      for (const listener of listeners) listener(this.pending);
+      emit();
     }
   };
 }
 
-export function renderAttachmentTray(container, attachments, { onRemove }) {
-  container.innerHTML = attachments.map((attachment, index) => (
-    `<div class="attachment-chip"><img src="${attachment.previewUrl}" alt="">`
-    + `<button class="icon-btn" data-index="${index}">✕</button></div>`
-  )).join("");
+export function renderAttachmentTray(container, attachments, { onRemove, onRetry } = {}) {
+  container.innerHTML = attachments.map((attachment, index) => {
+    const remove = `<button type="button" class="icon-btn" data-index="${index}" aria-label="${escapeHtml(t("attach.remove"))}">${lucideIconSvg("x", { size: 12 })}</button>`;
+    if (attachment.kind === "image") {
+      const src = attachment.previewUrl ? ` src="${attachment.previewUrl}"` : "";
+      return `<div class="attachment-chip image"><img${src} alt="">${remove}</div>`;
+    }
+    const status = attachment.upload === "failed" ? "failed" : attachment.upload === "uploading" ? "uploading" : "ready";
+    const retry = attachment.upload === "failed" && onRetry
+      ? `<button type="button" class="icon-btn" data-retry="${index}" aria-label="↻">↻</button>`
+      : "";
+    const label = attachment.upload === "uploading" ? "…" : "";
+    return `<div class="attachment-chip file ${status}">`
+      + `<span class="file-name" title="${escapeHtml(attachment.name)}">${escapeHtml(attachment.name)}</span>`
+      + label + retry + remove + `</div>`;
+  }).join("");
   container.onclick = (event) => {
+    const retry = event.target.closest("button[data-retry]");
+    if (retry) { onRetry?.(Number(retry.dataset.retry)); return; }
     const button = event.target.closest("button[data-index]");
-    if (button) onRemove(Number(button.dataset.index));
+    if (button) onRemove?.(Number(button.dataset.index));
   };
 }

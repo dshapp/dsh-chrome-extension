@@ -1,0 +1,2 @@
+#!/bin/bash
+exec "/opt/homebrew/bin/node" "/Users/user/dshapp/dsh-chrome-extension/native-host/dsh-native-host.js"

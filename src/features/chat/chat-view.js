@@ -3,25 +3,9 @@
 import { mdToHtml, escapeHtml } from "../../shared/md-to-html.js";
 import { t } from "../../shared/i18n.js";
 import { highlightCodeBlocks } from "./code-highlight.js";
+import { attachCopyFeedback } from "./copy-feedback.js";
 import { ensureKatex, isKatexReady } from "./katex-loader.js";
-
-// 图标取自 Lucide(https://github.com/lucide-icons/lucide,ISC),保留官方 24×24 网格的原始路径,
-// 仅把 stroke-width 从 2 调到 1.7 以适配 1rem 的实际渲染尺寸。
-const lucide = (body, className) =>
-  `<svg${className ? ` class="${className}"` : ""} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
-
-const ACTION_ICONS = Object.freeze({
-  // lucide: copy
-  copy: lucide('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
-  // lucide: check
-  copied: lucide('<path d="M20 6 9 17l-5-5"/>'),
-  // lucide: git-fork
-  fork: lucide('<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>')
-});
-
-// lucide: chevron-down
-export const CHEVRON_PATH = '<path d="m6 9 6 6 6-6"/>';
-const CHEVRON_SVG = lucide(CHEVRON_PATH, "thinking-chevron dropdown-chevron");
+import { lucideIcon, lucideIconSvg } from "./file-icons.js";
 
 export function fmtTime(ts) {
   const d = new Date(ts);
@@ -38,11 +22,9 @@ function makeCopyButton(getText) {
   copy.className = "act-btn";
   copy.title = t("copy");
   copy.setAttribute("aria-label", t("copy"));
-  copy.innerHTML = ACTION_ICONS.copy;
-  copy.addEventListener("click", () => {
-    navigator.clipboard?.writeText(getText() || "").catch(() => {});
-    copy.innerHTML = ACTION_ICONS.copied;
-    setTimeout(() => { copy.innerHTML = ACTION_ICONS.copy; }, 1200);
+  copy.innerHTML = lucideIconSvg("copy", { size: 14 });
+  attachCopyFeedback(copy, getText, {
+    render: (done) => { copy.innerHTML = lucideIconSvg(done ? "check" : "copy", { size: 14 }); }
   });
   return copy;
 }
@@ -57,6 +39,8 @@ function makeTimestamp(ts) {
 // 代码块包一层 .code-block:工具栏(语言标签 + 复制按钮)+ pre。
 export function decorateCodeBlocks(body) {
   for (const pre of body.querySelectorAll("pre")) {
+    // 已包过工具栏的跳过:增量渲染里冻结前缀会被反复走这一趟。
+    if (pre.parentElement?.classList.contains("code-block")) continue;
     const code = pre.querySelector(":scope > code");
     if (!code) continue;
     const block = document.createElement("div");
@@ -69,17 +53,13 @@ export function decorateCodeBlocks(body) {
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "code-copy-btn";
-    copy.textContent = t("copyCode");
+    copy.innerHTML = lucideIconSvg("copy", { size: 12 });
     copy.title = t("copyCode");
     copy.setAttribute("aria-label", t("copyCode"));
-    copy.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(code.textContent || "");
-        copy.textContent = t("codeCopied");
-        setTimeout(() => { copy.textContent = t("copyCode"); }, 1600);
-      } catch {
-        copy.textContent = t("copyCode");
-      }
+    // 与消息复制按钮同一套反馈语义:成功才切图标、1000ms、窗口内不重复写。
+    attachCopyFeedback(copy, () => code.textContent || "", {
+      render: (done) => { copy.innerHTML = lucideIconSvg(done ? "check" : "copy", { size: 12 }); },
+      labels: { done: t("codeCopied"), idle: t("copyCode") }
     });
     toolbar.append(language, copy);
     pre.before(block);
@@ -90,7 +70,7 @@ export function decorateCodeBlocks(body) {
 /// 正文里是否出现了公式定界符。粗判即可 —— 目的只是决定"要不要去拉 KaTeX",
 /// 真正的判定在 splitMathSegments 里。宁可多拉一次(一次性的),
 /// 也不要因为漏判而让公式永远渲染不出来。
-function mayContainMath(text) {
+export function mayContainMath(text) {
   return typeof text === "string" && text.includes("$");
 }
 
@@ -176,7 +156,7 @@ function buildAssistantActions(turn, body, item, { onFork } = {}) {
     fork.className = "act-btn";
     fork.title = t("fork");
     fork.setAttribute("aria-label", t("fork"));
-    fork.innerHTML = ACTION_ICONS.fork;
+    fork.innerHTML = lucideIconSvg("git-fork", { size: 14 });
     fork.addEventListener("click", () => onFork(item));
     row.appendChild(fork);
   }
@@ -197,9 +177,8 @@ export function createReasoningElement(item) {
   wrap.className = "thinking-bubble";
   wrap.innerHTML = `
     <div class="thinking-header">
-      <span class="thinking-icon">✨</span>
+      <span class="thinking-icon">${lucideIconSvg("sparkles", { size: 13 })}</span>
       <span class="thinking-title">${escapeHtml(t("thinking"))}</span>
-      ${CHEVRON_SVG}
     </div>
     <div class="thinking-body"></div>`;
   wrap.querySelector(".thinking-body").textContent = item.text;
@@ -230,8 +209,10 @@ export function updateTodosElement(element, item) {
   for (const todo of item.todos ?? []) {
     const li = document.createElement("li");
     li.className = `todo-${todo.status}`;
-    const mark = todo.status === "completed" ? "☑" : todo.status === "in_progress" ? "◐" : "☐";
-    li.textContent = `${mark} ${todo.content}`;
+    // lucide: circle-check / circle-dot / circle
+    const icon = todo.status === "completed" ? "circle-check"
+      : todo.status === "in_progress" ? "circle-dot" : "circle";
+    li.append(lucideIcon(icon, { size: 13 }), document.createTextNode(` ${todo.content}`));
     list.appendChild(li);
   }
 }

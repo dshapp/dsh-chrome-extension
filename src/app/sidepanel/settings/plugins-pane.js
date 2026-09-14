@@ -9,6 +9,7 @@
 // Mac D30 规则保留:命名空间不被当前部署组装的卡片完全不渲染,而不是画一个
 // 禁用的空壳 —— 一张点不动的卡片读起来像坏了,而不像"此部署没有它"。
 import { t } from "../../../shared/i18n.js";
+import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import {
   section, row, stackedRow, textInput, button, notice, spinner,
   escapeHtml, tag, formFooter
@@ -147,7 +148,7 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
     const valid = form?.invalid === false;
     const head = `<button class="set-disclosure${open ? " open" : ""}" type="button"`
       + ` id="plug-head-${card.namespace}" aria-expanded="${open}">`
-      + `<span class="set-disclosure-caret" aria-hidden="true">${open ? "▾" : "▸"}</span>`
+      + `<span class="set-disclosure-caret" aria-hidden="true">${lucideIconSvg(open ? "chevron-down" : "chevron-right", { size: 13 })}</span>`
       + `<span class="set-disclosure-text">`
       + `<span class="set-row-label">${escapeHtml(t(card.title))}${dirty ? tag(t("plug.unsaved"), "accent") : ""}</span>`
       + `<span class="set-row-hint">${escapeHtml(t(card.description))}</span>`
@@ -198,7 +199,7 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
       : "muted";
     const head = `<button class="set-disclosure${open ? " open" : ""}" type="button"`
       + ` data-inv="${escapeHtml(entry.entryId)}" aria-expanded="${open}">`
-      + `<span class="set-disclosure-caret" aria-hidden="true">${open ? "▾" : "▸"}</span>`
+      + `<span class="set-disclosure-caret" aria-hidden="true">${lucideIconSvg(open ? "chevron-down" : "chevron-right", { size: 13 })}</span>`
       + `<span class="set-disclosure-text"><span class="set-row-label">${escapeHtml(moduleShortName(entry.moduleName))}</span></span>`
       + `<span class="set-status ${stateKind}"><i aria-hidden="true"></i>`
       + `${escapeHtml(entry.enabled ? t("inv.enabledTag") : t("inv.disabledTag"))}</span>`

@@ -287,6 +287,18 @@ a { color: var(--link); }
   color: var(--text-dim);
 }
 .dropdown-chevron { width: 12px; height: 12px; color: var(--text-faint); flex-shrink: 0; }
+/* 图标统一走内联 lucide svg:清掉 inline 基线缝,并在按钮里居中。 */
+button > svg, .act-btn svg, .chip-icon svg, .thinking-icon svg, .goal-glyph svg,
+.goal-btn svg, .todo-glyph svg, .ref-chip-icon svg, .toast-icon svg,
+.question-close svg, .question-option-arrow svg, .question-custom-key svg,
+.plan-chip-x svg, .code-copy-btn svg, .set-icon-btn svg, .icon-btn svg,
+#send svg, #attach-btn svg, #settings-back svg, #find-bar button svg,
+.trajectory-toolbar button svg, .picked-pill button svg { display: block; }
+#send, #attach-btn, #settings-back, .act-btn, .goal-btn, .question-close,
+.icon-btn, .code-copy-btn, .set-icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+.menu-item > span.menu-item-icon { flex: 0 0 auto; display: inline-flex; color: var(--text-faint); }
+.menu-item > span.menu-item-icon svg { display: block; }
+.ref-chip-icon { display: inline-flex; align-items: center; }
 
 /* 快捷键提示(按住 ⌘/Ctrl 时显示,对齐原 extension) */
 .shortcut-hint {

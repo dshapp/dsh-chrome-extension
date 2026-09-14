@@ -52,6 +52,21 @@ describe("workspace/follow 归档集合", () => {
   });
 });
 
+describe("宿主打开路径", () => {
+  it("openPath 不带 action;revealPath 带 action:'reveal'", async () => {
+    const { service, connection } = harness();
+    connection.call.mockResolvedValue({});
+    await service.openPath("/work/a.txt");
+    expect(connection.call).toHaveBeenLastCalledWith("session/openWorkspacePath", {
+      request: { path: "/work/a.txt" }
+    });
+    await service.revealPath("/work/a.txt");
+    expect(connection.call).toHaveBeenLastCalledWith("session/openWorkspacePath", {
+      request: { path: "/work/a.txt", action: "reveal" }
+    });
+  });
+});
+
 describe("目录选择器返回值", () => {
   it("接受 DSH 0.1.2 的 string | null 协议", async () => {
     const { service, connection } = harness();

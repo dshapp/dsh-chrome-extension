@@ -5,6 +5,7 @@
 //
 // 线协议见 interaction-flow.js:批准与意见**互斥**,主按钮据输入框内容二选一。
 import { t } from "../../shared/i18n.js";
+import { lucideIcon } from "../chat/file-icons.js";
 import { mdToHtml } from "../../shared/md-to-html.js";
 import { routePlanReview, submitAnswer, reviseAnswer, cancelledResult } from "./interaction-flow.js";
 import { decorateCodeBlocks } from "../chat/chat-view.js";
@@ -19,12 +20,12 @@ function el(tag, className, text) {
   return node;
 }
 
-function iconButton(className, label, glyph) {
+function iconButton(className, label, iconName) {
   const button = el("button", className);
   button.type = "button";
   button.title = label;
   button.setAttribute("aria-label", label);
-  button.textContent = glyph;
+  button.append(lucideIcon(iconName, { size: 14 }));
   return button;
 }
 
@@ -34,8 +35,8 @@ export function createPlanReviewCard(question, review, { onRespond }) {
 
   // ---- 琥珀条 ----
   const strip = el("header", "interaction-strip plan-strip");
-  const copy = iconButton("plan-strip-btn", t("plan.copy"), "⧉");
-  const discuss = iconButton("plan-strip-btn", t("plan.discuss"), "×");
+  const copy = iconButton("plan-strip-btn", t("plan.copy"), "copy");
+  const discuss = iconButton("plan-strip-btn", t("plan.discuss"), "x");
   strip.append(
     el("span", "interaction-dot"),
     el("span", "interaction-strip-label", t("plan.header")),
@@ -46,8 +47,8 @@ export function createPlanReviewCard(question, review, { onRespond }) {
   copy.addEventListener("click", async () => {
     // 复制计划 markdown 原文——与正文渲染同源,所以剪贴板拿到的是文档而非渲染后的文字。
     try { await navigator.clipboard.writeText(review.plan); } catch { /* 剪贴板不可用时静默 */ }
-    copy.textContent = "✓";
-    setTimeout(() => { copy.textContent = "⧉"; }, 1500);
+    copy.replaceChildren(lucideIcon("check", { size: 14 }));
+    setTimeout(() => { copy.replaceChildren(lucideIcon("copy", { size: 14 })); }, 1500);
   });
 
   // ---- 计划正文 ----

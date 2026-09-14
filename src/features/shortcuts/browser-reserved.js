@@ -7,6 +7,11 @@
 // ⚠️ 这张清单是整套键位的承重墙:落在其上的和弦拿不到事件,或者会双重触发
 // (用户既得到我们的动作又得到浏览器的)。新增键位前先在真机侧栏按一次确认,
 // 不要凭印象往里加。
+//
+// 除具体和弦外还有两条平台级禁区,清单表达不了,只能靠这里记:
+// - win:Alt+Shift 是 Windows 默认的输入法切换键(中英双输入法用户几乎必绑),
+//   整档不能用;单 Alt+字母里 Chrome 只占 D/F/E/Home,其余可用。
+// - win:Ctrl+Alt 就是 AltGr,只对方向键/标点安全,字母位可能变成字符输入。
 
 /// 修饰键位掩码。与 EventModifiers 无关,只要能做集合比较与冲突检测。
 export const MOD = {
@@ -39,10 +44,30 @@ export const BROWSER_RESERVED_MAC = [
   // 发得下来但会双重触发
   chord("l", MOD.primary), chord("f", MOD.primary), chord("d", MOD.primary),
   chord("r", MOD.primary), chord("p", MOD.primary), chord("s", MOD.primary),
-  chord("o", MOD.primary), chord("j", MOD.primary),
+  chord("o", MOD.primary), chord("j", MOD.primary), chord("y", MOD.primary),
+  chord("e", MOD.primary), chord("h", MOD.primary | MOD.shift),
+  // 查找下/上一个(⌘G / ⇧⌘G):落在文本查找语义上,不能借用
+  chord("g", MOD.primary), chord("g", MOD.primary | MOD.shift),
+  // 前进/后退:⌘[ / ⌘] 与 ⌘← / ⌘→
+  chord("[", MOD.primary), chord("]", MOD.primary),
+  chord("arrowleft", MOD.primary), chord("arrowright", MOD.primary),
+  // 书签/下载/清除数据/切换用户:⇧⌘B 书签栏、⌥⌘B 书签管理器、⇧⌘J 下载、
+  // ⇧⌘⌫ 清除浏览数据、⇧⌘M 切换用户
+  chord("b", MOD.primary | MOD.shift), chord("b", MOD.primary | MOD.alt),
+  chord("j", MOD.primary | MOD.shift), chord("delete", MOD.primary | MOD.shift),
+  chord("m", MOD.primary | MOD.shift),
+  // Chrome 页面/工具栏焦点:⌥⌘F 搜索网页、⌥⌘↑ 循环到未聚焦对话框、
+  // ⌥⌘N 分屏、⌥⌘P 页面设置、⌥⇧⌘A / ⌥⇧⌘I 对话框与反馈
+  chord("f", MOD.primary | MOD.alt), chord("arrowup", MOD.primary | MOD.alt),
+  chord("n", MOD.primary | MOD.alt), chord("p", MOD.primary | MOD.alt),
+  chord("a", MOD.primary | MOD.alt | MOD.shift),
+  chord("i", MOD.primary | MOD.alt | MOD.shift),
   // macOS 系统级
   chord("f", MOD.primary | MOD.control), chord("q", MOD.primary | MOD.control),
   chord(" ", MOD.primary | MOD.control),
+  // macOS 截屏:⇧⌘3/4/5
+  chord("3", MOD.primary | MOD.shift), chord("4", MOD.primary | MOD.shift),
+  chord("5", MOD.primary | MOD.shift),
   // DevTools / 查看源码
   chord("i", MOD.primary | MOD.alt), chord("j", MOD.primary | MOD.alt),
   chord("u", MOD.primary | MOD.alt), chord("c", MOD.primary | MOD.alt),
@@ -61,12 +86,26 @@ export const BROWSER_RESERVED_WIN = [
   chord("j", MOD.primary), chord("d", MOD.primary), chord("h", MOD.primary),
   chord("p", MOD.primary), chord("s", MOD.primary), chord("o", MOD.primary),
   chord("f", MOD.primary), chord("g", MOD.primary), chord("u", MOD.primary),
+  // 查找下/上一个(Ctrl+G / Ctrl+⇧+G)与 DevTools、清除数据
+  chord("g", MOD.primary | MOD.shift),
   chord("delete", MOD.primary | MOD.shift),
+  // Chrome 主菜单加速键:Alt+F / Alt+E / Alt+Home 是浏览器级,页面收不到
+  chord("f", MOD.alt), chord("e", MOD.alt), chord("home", MOD.alt),
+  // 标签页搜索 / 书签栏 / 书签管理器 / 下载 / 切换用户(⇧+Ctrl 家族)
+  chord("a", MOD.primary | MOD.shift), chord("b", MOD.primary | MOD.shift),
+  chord("o", MOD.primary | MOD.shift), chord("j", MOD.primary | MOD.shift),
+  chord("m", MOD.primary | MOD.shift),
   // 浏览器前进/后退与地址栏
   chord("arrowleft", MOD.alt), chord("arrowright", MOD.alt), chord("d", MOD.alt),
+  // Alt+Shift / Shift+Alt:输入法切换之外的浏览器占用(对话框/工具栏/分屏/反馈)
+  chord("a", MOD.alt | MOD.shift), chord("i", MOD.alt | MOD.shift),
+  chord("t", MOD.alt | MOD.shift), chord("n", MOD.alt | MOD.shift),
+  // 标签栏内移动、在后台打开、关闭标签、任务管理器
+  chord("pageup", MOD.primary | MOD.shift), chord("pagedown", MOD.primary | MOD.shift),
+  chord("enter", MOD.primary | MOD.shift),
+  chord("f4", MOD.primary), chord("escape", MOD.shift),
   // DevTools
-  chord("i", MOD.primary | MOD.shift), chord("j", MOD.primary | MOD.shift),
-  chord("c", MOD.primary | MOD.shift),
+  chord("i", MOD.primary | MOD.shift), chord("c", MOD.primary | MOD.shift),
   // manifest 全局 command:open_sidepanel
   chord("d", MOD.primary | MOD.shift)
 ];

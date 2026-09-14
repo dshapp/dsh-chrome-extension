@@ -13,10 +13,18 @@ import {
   NodeKind, AssistantStatus, RetryState, WorkflowStatus,
   nodeId, anchorSeq, assistantNode, assistantVisible, toolCallNode, toolResult,
   userNode, steeringNode, contextNode, compactionNode, modelRetryNode,
-  turnErrorNode, turnMaxTokensNode, commandNode, turnTailNode, workflowRunNode,
+  turnErrorNode, turnMaxTokensNode, commandNode, turnProcessNode, turnTailNode, workflowRunNode,
   unknownSurfaceNode, toAssistantBlock, emptyBlockFor
 } from "./chat-nodes.js";
 import { EVT } from "../../platform/dsh/rpc-methods.js";
+import { t } from "../../shared/i18n.js";
+import { expandAssistantStream } from "./assistant-stream.js";
+import { mergeTurnRailItems, clipTurnPreview, TurnRailPreview } from "./turn-rail.js";
+import { producedPath, presentedFiles } from "./turn-deliverables.js";
+import { buildTurnProcessSpecs } from "./turn-process.js";
+import { projectReferenceLabels } from "./references.js";
+import { assembleTrajectory } from "../trajectory/trajectory-model.js";
+import { getLang } from "../../shared/i18n.js";
 
 /// 单个 assistant step 最多寻址的块索引。远高于真实回复的块数,远低于会造成问题的分配量。
 const MAX_BLOCK_INDEX = 1024;
@@ -63,6 +71,8 @@ export function createSessionStore() {
       contexts: new Map(),
       // "turn:step" → step/start 事件时间(TTFT 的分发边界)
       stepStartTimes: new Map(),
+      // turn → turn/start seq(turn rail 的分页目标;turnTail 的 seq 会被 turn/end 覆盖,不能复用)。
+      turnStartSeqs: new Map(),
       // 已排序的 turn/end 边界,供二分查找"某 seq 之后的第一个 turn 关闭点"
       turnEndBoundaries: [],
       // inbox 拼接状态:target → messageId[]
@@ -73,6 +83,8 @@ export function createSessionStore() {
       // projections
       projections: new Map(),       // key → { value, seq }
       projectionHistory: new Map(), // key → Map(seq → value)
+      // turnOutline 投影(整本日志的轮次阶梯:turn / turn/start seq / 有界预览)。
+      turnOutline: [],
       todos: [],
       goal: null,
       tokenUsage: null,
@@ -84,6 +96,9 @@ export function createSessionStore() {
       contextBreakdown: null,
       // 会话统计:{ turns, steps, llmMs, toolMs, ttftMs, ttftSteps, decodeMs, decodeTokens }
       sessionStats: null,
+      // live 旁路(DSH 1.5)进行中的 attempt:{ attemptId, turn, step, startedAfterSeq }。
+      // presentation-only,不进 durable 窗口、不参与 gap 检测与重放。
+      liveAttempt: null,
       // 图片附件限制,composer 用它在本地拦截超限文件
       imageLimits: null,
       // 子代理信息(subagent 地址/父会话),决定 composer 是否只读
@@ -96,7 +111,22 @@ export function createSessionStore() {
       pendingQuestion: null,
       // materialize 结果
       nodes: [],
-      nodesDirty: true
+      nodesDirty: true,
+      // 轨迹台账是免观察派生:窗口变脏时按需装配,不进 snapshot() 的热路径。
+      // 缓存同时记住装配时的语言 —— 切语言后文案要跟着变。
+      trajectoryDirty: true,
+      trajectory: null,
+      trajectoryLang: null,
+      // 本轮产出词表(turn → 产出路径,首见顺序去重)与 present 交付清单(turn → 声明)。
+      // 两者都是免观察派生,回合尾行先于迟到的 present/落定结果渲染后会停留在空状态;
+      // deliverablesRevision 在词表实际变化时递增,尾行读它即可重渲染(对齐 mac 5af61e6)。
+      producedPathsByTurn: new Map(),
+      presentedByTurn: new Map(),
+      deliverablesRevision: 0,
+      // Turn process 折叠规格(turn → spec),渲染层用它判断成员与折叠头文案。
+      turnProcessByTurn: new Map(),
+      // turn rail(投影 + 加载窗口锚点合并后的阶梯)。
+      turnRail: []
     };
   }
 
@@ -177,6 +207,7 @@ export function createSessionStore() {
       route(event, view);
     }
     state.nodesDirty = true;
+    state.trajectoryDirty = true;
   }
 
   function applyEvent(event, view) {
@@ -219,6 +250,7 @@ export function createSessionStore() {
     }
     state.lastSeq = Math.max(state.lastSeq, seq);
     state.nodesDirty = true;
+    state.trajectoryDirty = true;
     route(event, view);
   }
 
@@ -228,10 +260,13 @@ export function createSessionStore() {
       case EVT.userMessage: return applyUserMessage(event);
       case EVT.assistantChunk: return applyAssistantChunk(event);
       case EVT.assistantMessage: return applyAssistantMessage(event);
+      case EVT.assistantAttempt: return applyAssistantAttempt(event);
       case EVT.toolCall: return applyToolCall(event, view);
       case EVT.toolResult: return applyToolResult(event, view);
-      case EVT.codeDispatchStart: return applySubcallStart(event);
-      case EVT.codeDispatch: return applySubcallEnd(event);
+      case EVT.codeDispatchStart:
+      case EVT.ptcDispatchStart: return applySubcallStart(event);
+      case EVT.codeDispatch:
+      case EVT.ptcDispatch: return applySubcallEnd(event);
       case EVT.turnStart: return applyTurnStart(event);
       case EVT.turnEnd: return applyTurnEnd(event);
       case EVT.stepStart: return applyStepStart(event);
@@ -249,10 +284,25 @@ export function createSessionStore() {
       case EVT.workflowAgentEnd:
       case EVT.workflowRunEnd: return applyWorkflow(event);
       case EVT.sessionTitle: return applyTitle(event);
-      // request/header 与 step 边界一样不产生行,但也不是"未知":显式忽略。
+      // present 工具的交付清单(web ui-deliverables):它不带 surfaceOp,不产生自己的一行,
+      // 只为回合尾行的交付卡与 mention 词表供数据。
+      case EVT.deliverablesPresented: return applyPresented(event);
+      // request/header、system/message 与 step 边界一样不产生行,但也不是"未知":
+      // system/message 属于 Web 的 request/trajectory 视图,主记录里不该有行。
+      case EVT.systemMessage:
       case EVT.requestHeader: return;
-      default: return applyUnknownSurface(event);
+      default:
+        // Web 的会话投影只认领对白事件:system/* 与 request/* 属于
+        // request/trajectory 等旁路视图,任何变体都不该在主记录里长行。
+        // 只对这两个命名空间做前缀屏蔽,别处的未知 append 事件仍保留兜底行。
+        if (isNonTranscriptType(event.type)) return;
+        return applyUnknownSurface(event);
     }
+  }
+
+  /// system/* 与 request/* 事件在主聊天记录里永不占位(对齐 Web 的会话投影)。
+  function isNonTranscriptType(type) {
+    return typeof type === "string" && (type.startsWith("system/") || type.startsWith("request/"));
   }
 
   /// 没有任何定义认领的 **append 面**:保留一个可见行,而不是从记录里消失。
@@ -506,6 +556,119 @@ export function createSessionStore() {
     state.contexts.set(key, { type: "assistant", node });
   }
 
+  // ---- DSH 1.5 live 旁路与 attempt 结算 ----
+
+  /// 折叠一条 live 旁路 token(进程内 assistant side channel)。
+  ///
+  /// 帧不携带会话 seq(presentation-only),归属 attempt 的 turn/step 在 start 帧
+  /// 捕获,startedAfterSeq 是 attempt 开始时 durable cursor 的位置。最终的
+  /// assistant/message 会覆写这里画出的内容,所以丢帧/畸形帧至多留下陈旧残片。
+  function applyAssistantLiveChunk(turn, step, startedAfterSeq, time, rawChunk) {
+    const chunk = decodeChunk({ turn, step, chunk: rawChunk });
+    if (!chunk) return;
+    const key = assistantKey(turn, step);
+    const existing = state.contexts.get(key);
+    const node = existing?.type === "assistant"
+      ? existing.node
+      : assistantNode({ turn, step, startSeq: startedAfterSeq, time });
+    node.time = time;
+    if (node.stepStartTime == null) {
+      node.stepStartTime = state.stepStartTimes.get(`${turn}:${step}`) ?? null;
+    }
+    applyStreamChunk(chunk, startedAfterSeq, node);
+    state.contexts.set(key, { type: "assistant", node });
+  }
+
+  /// 把一条 attempt 的紧凑 stream 重放进它所属的 step。
+  ///
+  /// 用于重连 baseline(离开期间到达的 token)与 assistant/attempt 结算
+  /// (失败/取消的 attempt 唯一留下的 durable 记录)。
+  function applyAssistantStreamRecords(turn, step, startSeq, stream) {
+    const chunks = expandAssistantStream(stream);
+    if (!chunks.length) return;
+    for (const { time, chunk } of chunks) {
+      applyAssistantLiveChunk(turn, step, startSeq, time, chunk);
+    }
+  }
+
+  /// 结算一条没有提交任何可见消息的 attempt(DSH 1.5 新增)。
+  ///
+  /// assistant/attempt 保留失败、重试、取消或流错误掉的 attempt,而不伪造
+  /// 模型可见的历史。该 step 保留旁路画过的内容并停止 running。
+  function applyAssistantAttempt(event) {
+    const d = event.data;
+    if (!isObject(d)) return;
+    const turn = num(d.turn) ?? 0;
+    const step = num(d.step) ?? 0;
+    const key = assistantKey(turn, step);
+    let node;
+    const existing = state.contexts.get(key);
+    if (existing?.type === "assistant") {
+      node = existing.node;
+    } else {
+      node = assistantNode({ turn, step, startSeq: event.seq, time: event.time });
+      state.contexts.set(key, { type: "assistant", node });
+      // 冷历史/离屏期间结算:没有 live 帧画过这一步,从内嵌 stream 恢复。
+      applyAssistantStreamRecords(turn, step, event.seq, d.stream);
+      const rebuilt = state.contexts.get(key);
+      if (rebuilt?.type === "assistant") node = rebuilt.node;
+    }
+    if (node.stepStartTime == null) {
+      node.stepStartTime = state.stepStartTimes.get(`${turn}:${step}`) ?? null;
+    }
+    node.time = event.time;
+    node.status = AssistantStatus.interrupted;
+    node.interrupted = true;
+    state.contexts.set(key, { type: "assistant", node });
+  }
+
+  /// 应用一条 live 旁路帧(start/chunk/end)。
+  function applyAssistantStreamFrame(frame) {
+    if (!frame || typeof frame.type !== "string" || typeof frame.attemptId !== "string") return;
+    switch (frame.type) {
+      case "start": {
+        state.liveAttempt = {
+          attemptId: frame.attemptId,
+          turn: num(frame.turn) ?? 0,
+          step: num(frame.step) ?? 0,
+          startedAfterSeq: num(frame.startedAfterSeq) ?? 0
+        };
+        break;
+      }
+      case "chunk": {
+        // 从未见过 start(帧缺口,或 follow 在 attempt 中段打开而没有 baseline)
+        // 时没有 step 可寻址,durable settlement 会补上内容。
+        const attempt = state.liveAttempt;
+        if (!attempt || attempt.attemptId !== frame.attemptId) return;
+        applyAssistantLiveChunk(attempt.turn, attempt.step, attempt.startedAfterSeq,
+          num(frame.time) ?? 0, frame.chunk);
+        state.nodesDirty = true;
+        break;
+      }
+      case "end": {
+        if (state.liveAttempt?.attemptId === frame.attemptId) state.liveAttempt = null;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  /// 重连快照时从 baseline 恢复被打断的 attempt。
+  function applyAssistantStreamBaseline(baseline) {
+    const attempt = baseline?.activeAttempt;
+    if (!attempt) {
+      state.liveAttempt = null;
+      return;
+    }
+    const turn = num(attempt.turn) ?? 0;
+    const step = num(attempt.step) ?? 0;
+    const startedAfterSeq = num(attempt.startedAfterSeq) ?? 0;
+    state.liveAttempt = { attemptId: attempt.attemptId, turn, step, startedAfterSeq };
+    applyAssistantStreamRecords(turn, step, startedAfterSeq, attempt.stream);
+    state.nodesDirty = true;
+  }
+
   // ---- 工具调用 ----
 
   function toolKey(callId) {
@@ -662,6 +825,7 @@ export function createSessionStore() {
     const turn = num(d.turn);
     if (turn == null) return;
     state.currentTurn = turn;
+    state.turnStartSeqs.set(turn, event.seq);
     state.running = true;
     const errKey = `turn-error:${turn}`;
     if (!state.contexts.has(errKey)) {
@@ -793,8 +957,15 @@ export function createSessionStore() {
   /// turn/end error 的人读文案:优先结构化 message,回退到 code。
   function turnFailureMessage(reason) {
     const failure = reason && isObject(reason.error) ? reason.error : null;
-    if (!failure) return "model error";
-    return str(failure.message) || str(failure.code) || "model error";
+    if (!failure) return t("failure.modelError");
+    return failureText(failure.message, str(failure.code));
+  }
+
+  /// AUTH 失败可能携带凭据/服务端诊断,统一换成通用文案
+  /// (web `displayFailure` / mac `TurnFailureMessage`:AUTH 一律脱敏)。
+  function failureText(message, code) {
+    if (code === "AUTH") return t("failure.auth");
+    return str(message) || str(code) || t("failure.modelError");
   }
 
   // ---- compaction ----
@@ -839,8 +1010,8 @@ export function createSessionStore() {
       node.maxRetries = num(d.maxRetries);
       node.delayMs = num(d.delayMs);
       const failure = isObject(d.failure) ? d.failure : null;
-      node.failureMessage = failure ? str(failure.message) : null;
       node.failureCode = failure ? str(failure.code) : null;
+      node.failureMessage = failure ? failureText(failure.message, node.failureCode) : null;
       node.provider = str(d.provider);
       node.retryState = RetryState.scheduled;
     } else if (event.type === EVT.llmRetryStarted) {
@@ -997,6 +1168,20 @@ export function createSessionStore() {
     if (title) state.title = title;
   }
 
+  /// 折叠 `deliverables/presented`:同路径的重复声明覆盖旧声明(以 durable seq/index 定位),
+  /// 新路径追加。交付清单变化即递增 revision,供回合尾行重渲染。
+  function applyPresented(event) {
+    const parsed = presentedFiles(event.seq, event.data);
+    if (!parsed) return;
+    const files = state.presentedByTurn.get(parsed.turn) ?? [];
+    for (const file of parsed.files) {
+      const at = files.findIndex((existing) => existing.path === file.path);
+      if (at >= 0) files[at] = file; else files.push(file);
+    }
+    state.presentedByTurn.set(parsed.turn, files);
+    state.deliverablesRevision += 1;
+  }
+
   // ---- projections ----
 
   function applyProjection(key, value, seq) {
@@ -1074,6 +1259,10 @@ export function createSessionStore() {
       case "imageLimits":
         state.imageLimits = isObject(value) ? value : null;
         break;
+      // 整本日志的轮次阶梯(见 turn-rail.js)。投影 value 是 entry 数组(wire view)。
+      case "turnOutline":
+        state.turnOutline = Array.isArray(value) ? value : [];
+        break;
       case "subagent":
         state.subagent = isObject(value) ? value : null;
         break;
@@ -1089,6 +1278,18 @@ export function createSessionStore() {
   }
 
   // ---- materialize ----
+
+  /// 比较两个 "turn → [path]" 映射是否逐值相等(用于判定 deliverablesRevision 是否递增)。
+  function sameProducedMaps(a, b) {
+    if (a === b) return true;
+    if (a.size !== b.size) return false;
+    for (const [turn, paths] of a) {
+      const other = b.get(turn);
+      if (!other || paths.length !== other.length) return false;
+      for (let i = 0; i < paths.length; i += 1) if (paths[i] !== other[i]) return false;
+    }
+    return true;
+  }
 
   function rebuildNodes() {
     const built = [];
@@ -1177,6 +1378,63 @@ export function createSessionStore() {
     const keyed = built.map((node) => ({ anchor: anchorSeq(node), id: nodeId(node), node }));
     keyed.sort((a, b) => (a.anchor - b.anchor) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     state.nodes = keyed.map((k) => k.node);
+    // 收尾 assistant:每轮最后一个已结算、带 messageId 的可见 assistant step。
+    // 只有它能拿到本轮产出词表、渲染行内 mention(web/Mac 的 closing assistant);
+    // 更早的 step 与仍在流式的尾部都不获得。
+    const closingByTurn = new Map();
+    for (const node of state.nodes) {
+      if (node.kind === NodeKind.assistant && node.status !== AssistantStatus.running && node.messageId) {
+        closingByTurn.set(node.turn, node);
+      }
+    }
+    for (const node of state.nodes) {
+      if (node.kind === NodeKind.assistant) node.closing = closingByTurn.get(node.turn) === node;
+    }
+    // 本轮产出词表:从 settled 非 error 的变更调用解析参数。词表实际变化时递增 revision,
+    // 供回合尾行与 mention 词表重渲染(对齐 mac indexRows)。
+    // 递归进 subCalls:本机 DSH 走 PTC(run_code)时 write/edit 都是 root 程序下的
+    // tool/ptc-dispatch 子调用,只看 root 会让所有产出文件都消失。
+    const producedBefore = state.producedPathsByTurn;
+    const nextProduced = new Map();
+    const collectProduced = (node) => {
+      if (node.result && !node.result.isError) {
+        const path = producedPath(node.name, node.argsRaw ?? "");
+        if (path) {
+          const turn = num(node.turn) ?? 0;
+          let list = nextProduced.get(turn);
+          if (!list) { list = []; nextProduced.set(turn, list); }
+          if (!list.includes(path)) list.push(path);
+        }
+      }
+      for (const child of node.subCalls ?? []) collectProduced(child);
+    };
+    for (const node of state.nodes) {
+      if (node.kind !== NodeKind.toolCall) continue;
+      collectProduced(node);
+    }
+    if (!sameProducedMaps(producedBefore, nextProduced)) {
+      state.producedPathsByTurn = nextProduced;
+      state.deliverablesRevision += 1;
+    }
+
+    // Turn process 折叠头:该轮出现最终回答后,把过程行收进一个折叠头。
+    // 折叠头自身 anchor 比首个成员小 0.1(web processControl 偏移),排在成员之前。
+    const processSpecs = buildTurnProcessSpecs(state.nodes, state.turnStartSeqs);
+    state.turnProcessByTurn = new Map();
+    if (processSpecs.size) {
+      for (const [turn, spec] of processSpecs) state.turnProcessByTurn.set(turn, spec);
+      const withProcess = [...state.nodes, ...[...processSpecs.values()].map((spec) => turnProcessNode(spec))];
+      withProcess.sort((a, b) => {
+        const delta = anchorSeq(a) - anchorSeq(b);
+        if (delta) return delta;
+        const idA = nodeId(a);
+        const idB = nodeId(b);
+        return idA < idB ? -1 : idA > idB ? 1 : 0;
+      });
+      state.nodes = withProcess;
+    }
+    // 引用标签:recall 上下文回贴到紧随其前的用户/steering 消息。
+    projectReferenceLabels(state.nodes);
     state.nodesDirty = false;
     // 派生缓存:流式期间每帧都要读尾节点与运行中的工具,这里一次性算好,
     // 渲染层就不用每帧复制整个 nodes 数组反向扫描(那是 O(n) 且带分配)。
@@ -1187,6 +1445,110 @@ export function createSessionStore() {
       if (node.kind === NodeKind.toolCall && node.result == null) { runningTool = node; break; }
     }
     state.runningTool = runningTool;
+    rebuildTurnRail();
+  }
+
+  // ---- turn rail ----
+
+  /// 文本块(不占主对话批次的行不参与:turnTail/turnMaxTokens/compaction…)。
+  function isTurnAnchorCandidate(node) {
+    switch (node.kind) {
+      case NodeKind.user:
+      case NodeKind.assistant:
+      case NodeKind.toolCall:
+      case NodeKind.turnError:
+      case NodeKind.command:
+      case NodeKind.context:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  function userTextParts(node) {
+    return (node.content ?? [])
+      .filter((part) => part && part.type === "text")
+      .map((part) => part.text ?? "");
+  }
+
+  function assistantTextParts(node) {
+    return (node.blocks ?? [])
+      .filter((block) => block && block.type === "text")
+      .map((block) => block.text ?? "");
+  }
+
+  /// 重新合并整本 turnOutline 投影与加载窗口的锚点/预览。
+  /// 锚点:每个 turn 区间(turn/start seq → 下一 turn/start seq)内第一个对话行。
+  /// 预览:第一个真人 prompt 与最后一个带文本的 assistant 回复(对齐投影的 newest-wins)。
+  function rebuildTurnRail() {
+    const startSeqs = state.turnStartSeqs;
+    const turns = [...startSeqs.keys()].sort((a, b) => a - b);
+    const intervals = turns.map((turn, i) => ({
+      turn,
+      start: startSeqs.get(turn),
+      end: i + 1 < turns.length ? startSeqs.get(turns[i + 1]) : Infinity
+    }));
+    const anchors = new Map();
+    const prompts = new Map();
+    const responses = new Map();
+    let iv = 0;
+    for (const node of state.nodes) {
+      const seq = node.seq;
+      while (iv < intervals.length && seq >= intervals[iv].end) iv += 1;
+      if (iv >= intervals.length) break;
+      const cur = intervals[iv];
+      if (seq < cur.start) continue;
+      if (!anchors.has(cur.turn) && isTurnAnchorCandidate(node)) anchors.set(cur.turn, nodeId(node));
+      if (!prompts.has(cur.turn) && node.kind === NodeKind.user) {
+        const p = clipTurnPreview(userTextParts(node), TurnRailPreview.promptLimit);
+        if (p) prompts.set(cur.turn, p);
+      }
+      if (node.kind === NodeKind.assistant) {
+        const r = clipTurnPreview(assistantTextParts(node), TurnRailPreview.responseLimit);
+        if (r) responses.set(cur.turn, r);
+      }
+    }
+    state.turnRail = mergeTurnRailItems(state.turnOutline, anchors, (turn) => ({
+      prompt: prompts.get(turn) ?? "",
+      response: responses.get(turn) ?? ""
+    }));
+  }
+
+  // ---- 轨迹台账 ----
+
+  /// 免观察的轨迹快照。装配成本只在窗口真正变脏(或语言切换)时付一次。
+  function trajectorySnapshot() {
+    const lang = getLang();
+    if (!state.trajectoryDirty && state.trajectory && state.trajectoryLang === lang) {
+      return state.trajectory;
+    }
+    state.trajectory = assembleTrajectory(state.window);
+    state.trajectoryDirty = false;
+    state.trajectoryLang = lang;
+    return state.trajectory;
+  }
+
+  /// 往前追加更早的一页历史。现有所有入口都是 reset + 全量重放,无法增量前扩;
+  /// 这里按 seq 归并进窗口后只重折一次,既保住节点模型,也保住轨迹窗口。
+  function prependEntries(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) return false;
+    const existing = state.window;
+    const firstSeq = existing.length ? existing[0].event.seq : Number.POSITIVE_INFINITY;
+    const known = new Set(existing.map((entry) => entry.event.seq));
+    const fresh = entries.filter((entry) => {
+      const seq = entry?.event?.seq;
+      return Number.isInteger(seq) && seq < firstSeq && !known.has(seq);
+    });
+    if (fresh.length === 0) return false;
+    fresh.sort((left, right) => left.event.seq - right.event.seq);
+    const merged = [...fresh, ...existing];
+    if (merged.length > MAX_WINDOW_EVENTS) {
+      merged.splice(0, merged.length - MAX_WINDOW_EVENTS);
+      state.windowTruncated = true;
+    }
+    state.window = merged;
+    replayWindow();
+    return true;
   }
 
   // ---- 对外快照 ----
@@ -1205,6 +1567,7 @@ export function createSessionStore() {
       nodes: state.nodes,
       lastNode: state.lastNode ?? null,
       runningTool: state.runningTool ?? null,
+      turnRail: state.turnRail,
       todos: state.todos,
       goal: state.goal,
       tokenUsage: state.tokenUsage,
@@ -1220,7 +1583,11 @@ export function createSessionStore() {
       queue: state.queue,
       jobs: state.jobs,
       pendingApproval: state.pendingApproval,
-      pendingQuestion: state.pendingQuestion
+      pendingQuestion: state.pendingQuestion,
+      producedPathsByTurn: state.producedPathsByTurn,
+      presentedByTurn: state.presentedByTurn,
+      deliverablesRevision: state.deliverablesRevision,
+      turnProcessByTurn: state.turnProcessByTurn
     };
   }
 
@@ -1231,11 +1598,17 @@ export function createSessionStore() {
     },
     applyEvent,
     applyProjection,
+    applyAssistantStreamFrame,
+    applyAssistantStreamBaseline,
     setQueue(items) { state.queue = Array.isArray(items) ? items : []; },
     setJobs(jobs) { state.jobs = Array.isArray(jobs) ? jobs : []; },
     setApproval(approval) { state.pendingApproval = approval ?? null; },
     setQuestion(question) { state.pendingQuestion = question ?? null; },
     setRunning(running) { state.running = Boolean(running); },
+    /// 某轮的变更工具产出路径(首见顺序)。渲染回合尾行与 mention 词表用。
+    producedPaths(turn) { return state.producedPathsByTurn.get(turn) ?? []; },
+    /// 某轮的 present 交付声明(首见路径顺序)。
+    presentedFiles(turn) { return state.presentedByTurn.get(turn) ?? []; },
     /// follow 流失败的落地点:对齐 Mac StreamCoordinator 的 failEventStream。
     /// 同时清掉 running —— 流已经死了,再没有 turn/end 会来把转圈停下。
     setHistoryError(message) {
@@ -1253,6 +1626,8 @@ export function createSessionStore() {
       return ctx?.type === "toolCall" ? ctx.node : null;
     },
     getSnapshot: snapshot,
+    getTrajectory: trajectorySnapshot,
+    prependEntries,
     get windowTruncated() { return state.windowTruncated === true; },
     clearWindowTruncated() { state.windowTruncated = false; }
   };

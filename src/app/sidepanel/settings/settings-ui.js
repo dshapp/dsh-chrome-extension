@@ -2,6 +2,7 @@
 // LabeledContent(标题 + 副标题 + 尾随控件);这里用同样的三段结构落成 DOM,
 // 让五个 pane 的行高、副标题灰度、控件对齐一次定义、处处一致。
 import { t } from "../../../shared/i18n.js";
+import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 
 export function escapeHtml(text) {
   return String(text ?? "")
@@ -72,10 +73,10 @@ export function button({ id, label, kind = "plain", disabled, title }) {
 }
 
 /// 图标按钮(行尾的查看/复制/删除)。
-export function iconButton({ id, glyph, title, kind = "", disabled }) {
+export function iconButton({ id, glyph, icon, title, kind = "", disabled }) {
   return `<button class="set-icon-btn ${kind}" type="button" id="${escapeHtml(id)}"`
     + ` title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"${disabled ? " disabled" : ""}>`
-    + `${escapeHtml(glyph)}</button>`;
+    + `${icon ? lucideIconSvg(icon, { size: 14 }) : escapeHtml(glyph ?? "")}</button>`;
 }
 
 /// 胶囊标记(自定义 / 已覆盖 / 未保存)。

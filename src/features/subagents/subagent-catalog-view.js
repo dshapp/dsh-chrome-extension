@@ -1,5 +1,6 @@
 // 子代理目录入口的 DOM 层:header chip + 树形 popover。对齐 Mac SubagentCatalogAction/Level/Row。
 import { t } from "../../shared/i18n.js";
+import { lucideIcon } from "../chat/file-icons.js";
 import {
   createSubagentCatalogState, catalogVisible, catalogTriggerLabel,
   childSecondaryText, diagnosticReasonText, subagentTokenTotal, subagentDurationMs,
@@ -153,7 +154,7 @@ export function mountSubagentCatalog(trigger, menu, { deps, getSessionId, onOpen
       disc.type = "button";
       disc.setAttribute("aria-expanded", String(expanded));
       disc.setAttribute("aria-label", t(expanded ? "subagentCollapseDescendants" : "subagentExpandDescendants", { name: displayLabel }));
-      disc.textContent = expanded ? "▾" : "▸";
+      disc.append(lucideIcon(expanded ? "chevron-down" : "chevron-right", { size: 13 }));
       disc.addEventListener("click", (event) => {
         event.stopPropagation();
         catalog.toggle(entry.id, (childId) => load(childId));

@@ -51,6 +51,15 @@ describe("foldMessageText", () => {
     expect(text.slice(fold.preview.length)).toHaveLength(fold.hidden);
   });
 
+  it("never cuts a ZWJ family sequence in half", () => {
+    const family = "👨‍👩‍👧";
+    const text = "a".repeat(FOLD_LIMIT - 1) + family + "b".repeat(20);
+    const fold = foldMessageText(text);
+    expect(fold.folded).toBe(true);
+    expect(fold.preview).toBe("a".repeat(FOLD_LIMIT - 1));
+    expect(fold.preview.length + fold.hidden).toBe(fold.total);
+  });
+
   it("keeps a pair that lands wholly inside the limit", () => {
     const text = "a".repeat(FOLD_LIMIT - 2) + "😀" + "b".repeat(50);
     const fold = foldMessageText(text);

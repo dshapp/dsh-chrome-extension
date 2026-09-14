@@ -109,6 +109,9 @@ export const HOST = Object.freeze({
 export const EVT = Object.freeze({
   inboxSpliced: "agent/inbox/spliced",
   requestHeader: "request/header",
+  // system/message 属于 Web 的 request/trajectory 视图,不进主聊天记录:
+  // 不显式忽略会在每次会话开头画一行"未处理的事件:system/message"。
+  systemMessage: "system/message",
   userMessage: "user/message",
   turnStart: "turn/start",
   turnEnd: "turn/end",
@@ -116,10 +119,15 @@ export const EVT = Object.freeze({
   stepEnd: "step/end",
   assistantChunk: "assistant/chunk",
   assistantMessage: "assistant/message",
+  assistantAttempt: "assistant/attempt",
   toolCall: "tool/call",
   toolResult: "tool/result",
+  // 会话格式 v3 起改名为 ptc-dispatch(Code Dispatch 的旧名只出现在历史会话里),
+  // 两个都收,否则 run_code 下的所有子调用在扩展里整段消失。
   codeDispatchStart: "tool/code-dispatch-start",
   codeDispatch: "tool/code-dispatch",
+  ptcDispatchStart: "tool/ptc-dispatch-start",
+  ptcDispatch: "tool/ptc-dispatch",
   llmRetry: "llm/retry",
   llmRetryStarted: "llm/retry-started",
   compactionStart: "compaction/start",
@@ -132,7 +140,8 @@ export const EVT = Object.freeze({
   workflowRunStart: "tool-workflow/run-start",
   workflowAgentStart: "tool-workflow/agent-start",
   workflowAgentEnd: "tool-workflow/agent-end",
-  workflowRunEnd: "tool-workflow/run-end"
+  workflowRunEnd: "tool-workflow/run-end",
+  deliverablesPresented: "deliverables/presented"
 });
 
 /// 审批结论。宿主只接受这四个字面量。

@@ -198,7 +198,7 @@ describe("md-to-html", () => {
 
   it("渲染标题/代码/列表/链接", () => {
     const html = mdToHtml("## Title\n\n- a\n- b\n\n`code`\n\n[link](https://example.com)");
-    expect(html).toContain("<h4>Title</h4>");
+    expect(html).toContain("<h2>Title</h2>");
     expect(html).toContain("<ul><li>a</li><li>b</li></ul>");
     expect(html).toContain("<code>code</code>");
     expect(html).toContain('href="https://example.com"');
@@ -208,6 +208,31 @@ describe("md-to-html", () => {
     const html = mdToHtml("```js\nconst x = \"<b>\";\n```");
     expect(html).toContain("<pre");
     expect(html).toContain("&lt;b&gt;");
+  });
+
+  it("渲染 h1-h4 与删除线", () => {
+    expect(mdToHtml("# Top")).toContain("<h1>Top</h1>");
+    expect(mdToHtml("#### Four")).toContain("<h4>Four</h4>");
+    expect(mdToHtml("~~gone~~")).toContain("<del>gone</del>");
+  });
+
+  it("渲染分隔线", () => {
+    expect(mdToHtml("a\n\n---\n\nb")).toContain("<hr>");
+    expect(mdToHtml("a\n\n***\n\nb")).toContain("<hr>");
+  });
+
+  it("渲染 GFM 任务列表", () => {
+    const html = mdToHtml("- [ ] todo\n- [x] done");
+    expect(html).toContain('<li class="task-list-item"><input type="checkbox" disabled> todo</li>');
+    expect(html).toContain('<li class="task-list-item"><input type="checkbox" disabled checked> done</li>');
+  });
+
+  it("表格对齐按分隔行落类", () => {
+    const html = mdToHtml("| a | b | c |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |");
+    expect(html).toContain('<th class="align-left">a</th>');
+    expect(html).toContain('<th class="align-center">b</th>');
+    expect(html).toContain('<th class="align-right">c</th>');
+    expect(html).toContain('<td class="align-center">2</td>');
   });
 
   it("渲染表格:表头/分隔行/数据行,支持行内加粗", () => {

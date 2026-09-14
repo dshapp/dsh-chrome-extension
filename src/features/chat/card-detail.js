@@ -5,6 +5,7 @@
 // 这样长会话不会在滚动区里堆出成百上千个隐藏的 <pre>:弹窗一次只活一个,
 // 关闭即销毁。内容用 builder 惰性构建,入口行本身不持有任何重 DOM。
 import { t } from "../../shared/i18n.js";
+import { lucideIcon, lucideIconSvg } from "./file-icons.js";
 
 let singleton = null;
 
@@ -23,7 +24,7 @@ function ensureDialog() {
     '<div class="card-detail-head">' +
       '<span class="card-detail-title"></span>' +
       '<button class="card-detail-copy act-btn" type="button"></button>' +
-      '<button class="card-detail-close act-btn" type="button">×</button>' +
+      '<button class="card-detail-close act-btn" type="button">' + lucideIconSvg("x", { size: 14 }) + '</button>' +
     '</div>' +
     '<div class="card-detail-body"></div>';
   document.body.append(dialog);
@@ -79,15 +80,16 @@ export function openCardDetail({ title, build, copyText }) {
   const text = lazyCopy ? null : copyText;
   copy.hidden = !(lazyCopy || text);
   if (lazyCopy || text) {
-    copy.textContent = "⧉";
+    const paint = (done) => copy.replaceChildren(lucideIcon(done ? "check" : "copy", { size: 14 }));
+    paint(false);
     copy.title = t("copy");
     copy.setAttribute("aria-label", t("copy"));
     copy.onclick = () => {
       const value = lazyCopy ? lazyCopy() : text;
       if (!value) return;
       navigator.clipboard?.writeText(value).catch(() => {});
-      copy.textContent = "✓";
-      setTimeout(() => { copy.textContent = "⧉"; }, 1200);
+      paint(true);
+      setTimeout(() => paint(false), 1200);
     };
   }
 

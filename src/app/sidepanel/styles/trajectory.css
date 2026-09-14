@@ -1,0 +1,405 @@
+/* 轨迹页:对话列内切换(对齐 Mac ConversationRoot)。入口在统计浮层里。
+   台账行按"主行 + 元信息行"两段式排布 —— 侧栏宽度只有 ~380px,照搬 web 的
+   多列表格会挤成一团。 */
+
+#messages.trajectory-open { padding: 0; }
+/* 轨迹打开时藏掉对话列的一切兄弟节点(find-bar/empty-hint/msg-list/interactions),
+   composer 在 #messages 之外,照常可用。 */
+#messages.trajectory-open > :not(#trajectory-pane) { display: none; }
+
+#trajectory-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 0 0.875rem 1.25rem;
+}
+
+/* ── 工具栏 ── */
+.trajectory-toolbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 0 0.5rem;
+  background: var(--bg);
+  border-block-end: 1px solid var(--border-soft);
+}
+.trajectory-toggle,
+.trajectory-close {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+}
+.trajectory-toggle:hover,
+.trajectory-close:hover { color: var(--text); border-color: var(--border); }
+.trajectory-toggle:disabled { opacity: 0.45; cursor: default; }
+.trajectory-toggle { display: inline-flex; align-items: center; gap: 4px; }
+.trajectory-fold-icon, .trajectory-call-fold svg { display: block; }
+.trajectory-search { position: relative; flex: 1; min-inline-size: 0; }
+.trajectory-search input {
+  inline-size: 100%;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.25rem 1.5rem 0.25rem 0.5rem;
+}
+.trajectory-search input:focus { outline: none; border-color: var(--border); }
+.trajectory-search-clear {
+  position: absolute;
+  inset-inline-end: 0.25rem;
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.trajectory-search-clear[hidden] { display: none; }
+
+/* ── 加载更早 ── */
+.trajectory-load-earlier { display: flex; justify-content: center; padding: 0.5rem 0; }
+.trajectory-load-earlier[hidden] { display: none; }
+.trajectory-load-btn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--link);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+}
+.trajectory-load-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ── 台账 ── */
+#trajectory-ledger { display: flex; flex-direction: column; gap: 0.25rem; }
+.trajectory-empty {
+  color: var(--text-faint);
+  text-align: center;
+  font-size: 13px;
+  padding: 3rem 0;
+}
+
+.trajectory-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.trajectory-row:hover { background: var(--bg-raised); border-color: var(--border-soft); }
+.trajectory-row-top { display: flex; align-items: baseline; gap: 0.375rem; min-inline-size: 0; }
+.trajectory-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.trajectory-turn-chip {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  cursor: pointer;
+}
+.trajectory-turn-chip.folded { color: var(--text-faint); text-decoration: line-through; }
+
+.trajectory-kind {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border-inline-start: 3px solid var(--border);
+  padding-inline-start: 0.35rem;
+}
+.trajectory-kind.kind-system { border-color: var(--text-dim); }
+.trajectory-kind.kind-user { border-color: var(--link); }
+.trajectory-kind.kind-context { border-color: var(--text-faint); }
+.trajectory-kind.kind-assistant { border-color: var(--ok); }
+.trajectory-kind.kind-tool,
+.trajectory-kind.kind-subtool { border-color: var(--warn); }
+.trajectory-kind.kind-compacted { border-color: var(--danger); }
+
+.trajectory-summary {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.trajectory-row.status-error .trajectory-summary { color: var(--danger); }
+.trajectory-duration { flex: none; font-size: 11px; color: var(--text-faint); }
+
+.trajectory-index { flex: none; font-variant-numeric: tabular-nums; }
+.trajectory-request-dot { flex: none; }
+.trajectory-status-dot {
+  flex: none;
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.trajectory-status-dot.status-complete { background: var(--ok); }
+.trajectory-status-dot.status-running { background: var(--link); animation: trajectory-pulse 1.2s ease-in-out infinite; }
+.trajectory-status-dot.status-error { background: var(--danger); }
+@keyframes trajectory-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.trajectory-group { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trajectory-call-fold {
+  flex: none;
+  display: inline-flex; align-items: center;
+  margin-inline-start: auto;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.trajectory-boundary { display: flex; justify-content: center; padding: 0.25rem 0; }
+.trajectory-boundary-btn {
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-faint);
+  background: transparent;
+  border: 0;
+  border-block-end: 1px dashed var(--border-soft);
+  cursor: pointer;
+  padding: 0.1rem 0.5rem;
+}
+.trajectory-folded-summary {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 0.375rem 0.5rem;
+  background: var(--bg-raised);
+  border-radius: var(--radius);
+}
+
+/* ── 详情模态(复用 card-detail;仅补轨迹专有块) ── */
+.trajectory-detail { display: flex; flex-direction: column; gap: 0.875rem; }
+.trajectory-detail-title { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.trajectory-detail-rows { display: grid; grid-template-columns: 8rem 1fr; gap: 0.2rem 0.75rem; margin: 0; font-size: 12.5px; }
+.trajectory-detail-label { color: var(--text-faint); }
+.trajectory-detail-value { color: var(--text); margin: 0; word-break: break-word; }
+.trajectory-detail-sub { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-block-start: 0.5rem; }
+.trajectory-detail-stack { display: flex; flex-direction: column; }
+.trajectory-detail-pre { white-space: pre-wrap; word-break: break-word; }
+.trajectory-detail-tools { display: flex; flex-direction: column; gap: 0.35rem; }
+.trajectory-tool-row { display: flex; flex-direction: column; font-size: 12px; }
+.trajectory-tool-name { color: var(--text); font-weight: 600; }
+.trajectory-tool-desc { color: var(--text-faint); }
+
+/* 宽一点的侧栏可以把轨迹行排成单行,接近 web 的表格观感。 */
+@container sidepanel (min-width: 520px) {
+  .trajectory-row { flex-direction: row; align-items: center; }
+  .trajectory-row-top { flex: 1; }
+  .trajectory-row-meta { flex: none; }
+}
+
+/* ── 时间线概览(逻辑=Web TrajectoryTimeline,视觉/交互=Mac TrajectoryTimeline) ──
+   50px 高的三车道色块条:44px 标签列 + 1fr 轨道。 */
+.trajectory-timeline {
+  flex: none;
+  padding-inline: 0;
+  user-select: none;
+  border-block-end: 1px solid var(--border-soft);
+}
+.trajectory-timeline-plot {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  block-size: 50px;
+  overflow: hidden;
+  background: var(--bg-raised);
+}
+.trajectory-timeline-labels {
+  position: relative;
+  border-inline-end: 1px solid var(--border-soft);
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1;
+}
+.trajectory-timeline-labels span {
+  position: absolute;
+  inset-inline-end: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  block-size: 8px;
+  text-align: right;
+}
+.trajectory-timeline-labels span:nth-child(1) { inset-block-start: 7px; }
+.trajectory-timeline-labels span:nth-child(2) { inset-block-start: 21px; }
+.trajectory-timeline-labels span:nth-child(3) { inset-block-start: 35px; }
+.trajectory-timeline-track {
+  position: relative;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+}
+.trajectory-timeline-track.empty { cursor: default; }
+.trajectory-timeline-track.empty::after {
+  content: attr(data-empty);
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  translate: -50% -50%;
+  color: var(--text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.trajectory-timeline-earlier {
+  position: absolute;
+  z-index: 5;
+  inset-block: 0;
+  inset-inline-start: 0;
+  display: flex;
+  inline-size: 28px;
+  align-items: center;
+  justify-content: flex-start;
+  padding-inline-start: 3px;
+  border: 0;
+  background: linear-gradient(to right, var(--bg-raised) 0, var(--bg-raised) 38%, transparent 100%);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.72;
+  cursor: pointer;
+}
+.trajectory-timeline-earlier:hover { opacity: 1; }
+.trajectory-timeline-earlier:disabled { cursor: default; }
+.trajectory-timeline-lanes {
+  position: absolute;
+  inset-block: 7px;
+  inset-inline: 0;
+}
+.trajectory-timeline-boundaries {
+  position: absolute;
+  inset-block: 0;
+  inset-inline: 0;
+  pointer-events: none;
+}
+.trajectory-timeline-boundary {
+  position: absolute;
+  inset-block: 0;
+  inline-size: 1px;
+  background: var(--border-soft);
+}
+.trajectory-timeline-span {
+  position: absolute;
+  block-size: 8px;
+  min-inline-size: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--text-faint);
+  opacity: 0.82;
+  cursor: pointer;
+}
+.trajectory-timeline-span.lane-0 { inset-block-start: 0; }
+.trajectory-timeline-span.lane-1 { inset-block-start: 14px; }
+.trajectory-timeline-span.lane-2 { inset-block-start: 28px; }
+.trajectory-timeline-span.kind-user { background: #3b82f6; }
+.trajectory-timeline-span.kind-context { background: #22c55e; }
+.trajectory-timeline-span.kind-assistant { background: #a855f7; opacity: 1; }
+.trajectory-timeline-span.kind-compacted { background: #a855f7; opacity: 1; }
+.trajectory-timeline-span.kind-tool,
+.trajectory-timeline-span.kind-subtool { background: #f59e0b; opacity: 1; }
+.trajectory-timeline-span.status-error { background: #ef4444; }
+.trajectory-timeline-span.dimmed { opacity: 0.14; }
+.trajectory-timeline-span.out-of-focus { opacity: 0.2; }
+.trajectory-timeline-span.hovered,
+.trajectory-timeline-span.selected {
+  z-index: 1;
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--bg-raised), 0 0 0 2px #a855f7;
+}
+.trajectory-timeline-selection {
+  position: absolute;
+  inset-block: 0;
+  z-index: 1;
+  min-inline-size: 1px;
+  background: color-mix(in srgb, #3b82f6 16%, transparent);
+  box-shadow: inset 2px 0 0 #3b82f6, inset -2px 0 0 #3b82f6;
+  pointer-events: none;
+}
+.trajectory-timeline-tooltip {
+  position: absolute;
+  z-index: 6;
+  inset-block-start: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-inline-size: 16rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg-raised));
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+}
+.trajectory-timeline-tip-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.trajectory-timeline-tip-line { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* 悬停竖线(空白处)与拖拽态。 */
+.trajectory-timeline-hover-line {
+  position: absolute;
+  inset-block: 0;
+  z-index: 4;
+  inline-size: 2px;
+  background: #3b82f6;
+  pointer-events: none;
+}
+.trajectory-timeline-selection[data-dragging="true"] {
+  background: color-mix(in srgb, #3b82f6 18%, transparent);
+}
+/* time 模式(actualDuration=false)只落开始标记,固定 8px 便于点选。 */
+.trajectory-timeline-span.marker { min-inline-size: 8px; }
+/* assistant 段:TTFT 浅紫 + 解码紫,比例来自计时。 */
+.trajectory-timeline-span.has-timing {
+  background: linear-gradient(
+    to right,
+    #c084fc 0,
+    #c084fc var(--trajectory-assistant-ttft, 100%),
+    #a855f7 var(--trajectory-assistant-ttft, 100%),
+    #a855f7 100%
+  );
+}
+.trajectory-timeline-track:focus-visible {
+  outline: 1px solid #3b82f6;
+  outline-offset: -1px;
+}
+
+/* 工具行结果箭头与选择聚焦。 */
+.trajectory-arrow { flex: none; color: var(--text-dim); font-size: 11px; }
+.trajectory-result { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); font-size: 11px; }
+.trajectory-result.pending { font-style: italic; opacity: 0.7; }
+.trajectory-row.out-of-focus { opacity: 0.32; }
+
+
+

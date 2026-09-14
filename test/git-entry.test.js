@@ -202,8 +202,10 @@ describe("Git 入口:动作", () => {
     const { menu, gitService } = await opened();
     // 当前分支不在可切换列表里,所以构造一次「列表里就是 head」的点击路径:
     // 直接验证可切换列表不含 head 即可。
-    const names = [...menu.querySelectorAll(".git-row")].map((r) => r.textContent);
-    expect(names.some((n) => n.trim().startsWith("main") && n.includes("▾"))).toBe(true);
+    const head = menu.querySelector("#git-current");
+    expect(head.textContent.trim().startsWith("main")).toBe(true);
+    // 展开指示改成 lucide chevron(不再用 ▾ 字符)。
+    expect(head.querySelector(".disclosure-chevron svg, svg.disclosure-chevron")).toBeTruthy();
     expect(gitService.checkout).not.toHaveBeenCalled();
   });
 

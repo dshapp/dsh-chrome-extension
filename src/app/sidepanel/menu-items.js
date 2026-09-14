@@ -4,6 +4,7 @@
 // 而这里是一套**被四个不同菜单复用**的通用渲染器 —— 两者的变更理由不同,
 // 合在一处也把那个文件顶过了 400 行的硬上限。
 import { escapeHtml } from "../../shared/md-to-html.js";
+import { lucideIconSvg } from "../../features/chat/file-icons.js";
 
 // popover 菜单构建(模型/权限/技能共用)。
 /// @param onReorder 给出后,标了 draggable 的条目可拖拽重排,回调形如
@@ -26,6 +27,7 @@ export function renderMenuItems(container, entries, { selectedId, onSelect, grou
     (group ? `<div class="menu-group-label">${escapeHtml(group)}</div>` : "")
     + items.map((item) => (
       `<button type="button" class="menu-item${item.id === selectedId ? " selected" : ""}" data-item-id="${escapeHtml(item.id)}"${onReorder && item.draggable ? ' draggable="true"' : ""}>`
+      + (item.icon ? `<span class="menu-item-icon">${lucideIconSvg(item.icon, { size: 14 })}</span>` : "")
       + `<span>${escapeHtml(item.label)}</span>${item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}`
       + `</button>`
     )).join("")

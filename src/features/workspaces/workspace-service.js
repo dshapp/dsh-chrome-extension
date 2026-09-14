@@ -75,9 +75,13 @@ export function createWorkspaceService(connection, { onArchivedChange } = {}) {
       if (!path) return null;
       return this.createForPath(path);
     },
-    // 用宿主操作系统的默认方式打开某路径(系统文件管理器)。
+    // 用宿主操作系统的默认方式打开某路径(默认应用)。
     async openPath(path) {
       await connection.call(RPC.hostOpenPath, { request: { path } });
+    },
+    // 在系统文件管理器中定位该路径(web PresentedAction 'reveal')。
+    async revealPath(path) {
+      await connection.call(RPC.hostOpenPath, { request: { path, action: "reveal" } });
     },
 
     /// 工作区排序。beforeWorkspaceId 省略 = 移到末尾。

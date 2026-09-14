@@ -99,6 +99,25 @@ describe("命令表", () => {
       if (value) expect(Boolean(value.mods & MOD.control), command.id).toBe(false);
     }
   });
+
+  // Chrome 惯用键的回归锁:这些键位是照官方快捷键表迁出来的,别改回去。
+  it("win: Alt+Shift 必须带 Ctrl(裸 Alt+Shift 是 Windows 输入法切换键)", () => {
+    for (const command of COMMANDS) {
+      const value = chordFor(command, "win");
+      if (!value || !(value.mods & MOD.alt) || !(value.mods & MOD.shift)) continue;
+      expect(Boolean(value.mods & MOD.primary), command.id).toBe(true);
+    }
+  });
+
+  it("迁出 Chrome 已占用的 mac 和弦(⌥⌘F 搜索网页 / ⌥⌘P 页面设置 / ⌥⌘↑ 焦点循环)", () => {
+    const byId = Object.fromEntries(COMMANDS.map((c) => [c.id, c]));
+    expect(chordLabel(byId.findInSession.mac, "mac")).toBe("⇧⌘F");
+    expect(chordLabel(byId.choosePermission.mac, "mac")).toBe("⇧⌘P");
+    expect(chordLabel(byId.increaseEffort.mac, "mac")).toBe("⌥⇧⌘↑");
+    expect(chordLabel(byId.decreaseEffort.mac, "mac")).toBe("⌥⇧⌘↓");
+    expect(chordLabel(byId.findInSession.win, "win")).toBe("Ctrl+Shift+F");
+    expect(chordLabel(byId.editGoal.win, "win")).toBe("Ctrl+Shift+E");
+  });
 });
 
 describe("和弦拆成按键 token", () => {

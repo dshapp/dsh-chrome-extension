@@ -1,6 +1,6 @@
 // 最小 Markdown → HTML 渲染:先整体转义再套标签,输出可安全 innerHTML。
-// 支持:标题、fenced code、行内 code、粗体/斜体、链接、图片、数学公式、
-// 无序/有序列表、引用、表格、段落。
+// 支持:标题(h1–h4)、fenced code、行内 code、粗体/斜体/删除线、链接、图片、
+// 数学公式、无序/有序列表、任务列表、分隔线、引用、表格(含对齐)、段落。
 import { autoLinkUrls } from "./auto-link.js";
 import { isSafeImageSrc } from "./image-src.js";
 import { splitMathSegments, renderMath } from "./math-render.js";
@@ -23,6 +23,8 @@ function renderInlineMarkup(escaped) {
   // 行内 code 通常已被 renderInline 挖成占位符,这条规则因此多数时候不命中。
   // 保留它是为了让本函数**自身成立**:它不假设调用方一定做过挖取。
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+  // 删除线(GFM)。放在粗体之前:~~a~~ 里若含 **b**,先切删除线再处理内部强调。
+  out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");
   // 图片必须排在链接之前:两者只差一个前导 "!",链接规则先跑会把
   // ![alt](src) 的 [alt](src) 部分吃掉,只剩一个孤零零的 "!"。
   out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, src) =>
@@ -156,7 +158,13 @@ function renderTextBlock(lines) {
   const flushList = () => {
     if (listItems) {
       const tag = listOrdered ? "ol" : "ul";
-      html.push(`<${tag}>${listItems.map((item) => `<li>${renderInline(item)}</li>`).join("")}</${tag}>`);
+      const items = listItems.map((item) => {
+        // task 为布尔值即 GFM 任务项;null 是普通项。
+        if (item.task == null) return `<li>${renderInline(item.text)}</li>`;
+        const checked = item.task ? " checked" : "";
+        return `<li class="task-list-item"><input type="checkbox" disabled${checked}> ${renderInline(item.text)}</li>`;
+      }).join("");
+      html.push(`<${tag}>${items}</${tag}>`);
       listItems = null;
     }
   };
@@ -166,14 +174,33 @@ function renderTextBlock(lines) {
     const heading = /^(#{1,4})\s+(.*)$/.exec(line);
     if (heading) {
       flushParagraph(); flushList();
+      // 保留语义层级;尺寸由 .msg-agent h1…h6 限定,不会溢到侧栏标题。
       const level = heading[1].length;
-      html.push(`<h${level + 2}>${renderInline(heading[2])}</h${level + 2}>`); // h3-h6,避免覆盖侧栏标题
+      html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      continue;
+    }
+    // 分隔线:---/***/___ 独占一行(至少 3 个)。
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushParagraph(); flushList();
+      html.push("<hr>");
       continue;
     }
     // 表格:当前行含 |,且下一行是分隔行(|---|---|)。
     if (line.includes("|") && i + 1 < lines.length && isTableSeparatorRow(lines[i + 1])) {
       flushParagraph(); flushList();
       const header = splitTableRow(line);
+      const separator = splitTableRow(lines[i + 1]);
+      // GFM 对齐::---: 居中、:--- 左、---: 右。
+      const aligns = header.map((_, ci) => {
+        const cell = separator[ci] ?? "";
+        const left = cell.startsWith(":");
+        const right = cell.endsWith(":");
+        if (left && right) return "center";
+        if (right) return "right";
+        if (left) return "left";
+        return null;
+      });
+      const alignClass = (ci) => (aligns[ci] ? ` class="align-${aligns[ci]}"` : "");
       const rows = [];
       i += 2; // 跳过表头 + 分隔行
       while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
@@ -182,10 +209,10 @@ function renderTextBlock(lines) {
       }
       i--; // for 循环会 i++,这里回退一格
       let table = '<table class="md-table"><thead><tr>';
-      table += header.map((cell) => `<th>${renderInline(cell)}</th>`).join("");
+      table += header.map((cell, ci) => `<th${alignClass(ci)}>${renderInline(cell)}</th>`).join("");
       table += "</tr></thead><tbody>";
       for (const row of rows) {
-        table += "<tr>" + header.map((_, ci) => `<td>${renderInline(row[ci] || "")}</td>`).join("") + "</tr>";
+        table += "<tr>" + header.map((_, ci) => `<td${alignClass(ci)}>${renderInline(row[ci] || "")}</td>`).join("") + "</tr>";
       }
       table += "</tbody></table>";
       html.push(table);
@@ -196,7 +223,9 @@ function renderTextBlock(lines) {
       flushParagraph();
       if (listItems && listOrdered) flushList();
       if (!listItems) { listItems = []; listOrdered = false; }
-      listItems.push(bullet[1]);
+      const task = /^\[([ xX])\]\s+(.*)$/.exec(bullet[1]);
+      if (task) listItems.push({ text: task[2], task: task[1].toLowerCase() === "x" });
+      else listItems.push({ text: bullet[1], task: null });
       continue;
     }
     const ordered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
@@ -204,7 +233,7 @@ function renderTextBlock(lines) {
       flushParagraph();
       if (listItems && !listOrdered) flushList();
       if (!listItems) { listItems = []; listOrdered = true; }
-      listItems.push(ordered[1]);
+      listItems.push({ text: ordered[1], task: null });
       continue;
     }
     const quote = /^>\s?(.*)$/.exec(line);

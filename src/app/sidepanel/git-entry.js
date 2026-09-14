@@ -23,6 +23,7 @@ import { t } from "../../shared/i18n.js";
 import { isClean } from "../../features/host-proxy/git-summary.js";
 import { occupancyMap } from "../../features/host-proxy/worktree-occupancy.js";
 import { ICON_WORKTREE, ICON_BRANCH, escapeHtml, row } from "./git-entry-view.js";
+import { lucideIconSvg } from "../../features/chat/file-icons.js";
 
 /// 超过这个数量才给搜索框(Mac: searchThreshold = 8)。
 const SEARCH_THRESHOLD = 8;
@@ -109,7 +110,9 @@ export function mountGitEntry(trigger, menu, deps) {
         id: "git-current",
         name: head,
         icon: summary.isWorktree ? ICON_WORKTREE : ICON_BRANCH,
-        trailing: canExpand ? (expanded ? "▾" : "▸") : "",
+        trailingHtml: canExpand
+          ? lucideIconSvg(expanded ? "chevron-down" : "chevron-right", { size: 13, className: "disclosure-chevron" })
+          : "",
         disabled: !canExpand
       });
       if (expanded) {
@@ -138,16 +141,16 @@ export function mountGitEntry(trigger, menu, deps) {
     }
 
     html += `<div class="git-sep"></div>`;
-    html += row({ id: "git-create", name: t("branch.createNew"), icon: "+" });
+    html += row({ id: "git-create", name: t("branch.createNew"), icon: lucideIconSvg("plus", { size: 13 }) });
 
     // push / pull 排在新建之后:它们作用于「已经检出的这个分支」,而不是
     // 「检出哪个分支」。
     const up = summary.upstream;
     if (head && up?.hasRemote && up.ahead > 0) {
-      html += row({ id: "git-push", name: t("branch.push"), icon: "↑", trailing: syncing === "push" ? "…" : String(up.ahead) });
+      html += row({ id: "git-push", name: t("branch.push"), icon: lucideIconSvg("arrow-up", { size: 13 }), trailing: syncing === "push" ? "…" : String(up.ahead) });
     }
     if (head && up?.hasRemote && up.behind > 0) {
-      html += row({ id: "git-pull", name: t("branch.pull"), icon: "↓", trailing: syncing === "pull" ? "…" : String(up.behind) });
+      html += row({ id: "git-pull", name: t("branch.pull"), icon: lucideIconSvg("arrow-down", { size: 13 }), trailing: syncing === "pull" ? "…" : String(up.behind) });
     }
 
     menu.innerHTML = html;

@@ -10,6 +10,7 @@
 import { escapeHtml } from "../../shared/md-to-html.js";
 import { t } from "../../shared/i18n.js";
 import { blocksToText } from "../sessions/chat-nodes.js";
+import { lucideIconSvg } from "../chat/file-icons.js";
 
 /// 仅当每个内容块都是纯文本时才可编辑 —— 图片/附件无法用单行输入框无损表达,
 /// 保存会静默丢掉它们(对齐 Mac QueueInteractionState.editableText)。
@@ -26,28 +27,16 @@ export function editableText(message) {
   return text ? text : null;
 }
 
-// 图标取自 Lucide(https://github.com/lucide-icons/lucide,ISC),沿用官方 24×24 网格的原始路径,
-// 仅把 stroke-width 从 2 调到 1.7 以适配 14px 的渲染尺寸;原先的实心图标统一换成 Lucide 的描边风格。
-const lucide = (body, className) =>
-  `<svg${className ? ` class="${className}"` : ""} viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
-
-// lucide: list
-const GLYPH = lucide(
-  '<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>',
-  "queue-glyph"
-);
+// 图标统一取自共享 lucide 图标表(见 features/chat/file-icons.js),
+// 不再在这里自建 svg 字符串;stroke 也随之统一到 lucide 默认的 2。
+const GLYPH = lucideIconSvg("list", { size: 14, className: "queue-glyph" });
 
 const ICONS = {
-  // lucide: pencil
-  edit: lucide('<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>'),
-  // lucide: trash-2
-  remove: lucide('<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
-  // lucide: send-horizontal
-  steer: lucide('<path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z"/><path d="M6 12h16"/>'),
-  // lucide: check
-  save: lucide('<path d="M20 6 9 17l-5-5"/>'),
-  // lucide: x
-  cancel: lucide('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>')
+  edit: lucideIconSvg("pencil", { size: 14 }),
+  remove: lucideIconSvg("trash-2", { size: 14 }),
+  steer: lucideIconSvg("send-horizontal", { size: 14 }),
+  save: lucideIconSvg("check", { size: 14 }),
+  cancel: lucideIconSvg("x", { size: 14 })
 };
 
 /// 渲染排队面板。

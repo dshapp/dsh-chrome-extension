@@ -206,9 +206,14 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   function trailingHtml(trailing) {
     switch (trailing.kind) {
       case SessionRowTrailingKind.awaitingUser: {
-        const isApproval = trailing.awaiting === SessionAwaitingKind.approval;
-        const label = t(isApproval ? "session.awaitingApproval" : "session.awaitingQuestion");
-        const help = t(isApproval ? "session.awaitingApprovalHelp" : "session.awaitingQuestionHelp");
+        const keys = {
+          [SessionAwaitingKind.approval]: ["session.awaitingApproval", "session.awaitingApprovalHelp"],
+          [SessionAwaitingKind.planReview]: ["session.awaitingPlanReview", "session.awaitingPlanReviewHelp"],
+          [SessionAwaitingKind.question]: ["session.awaitingQuestion", "session.awaitingQuestionHelp"]
+        };
+        const [labelKey, helpKey] = keys[trailing.awaiting] ?? keys[SessionAwaitingKind.question];
+        const label = t(labelKey);
+        const help = t(helpKey);
         return `<span class="h-badge h-badge-warn" title="${escapeHtml(help)}" aria-label="${escapeHtml(help)}">${escapeHtml(label)}</span>`;
       }
       case SessionRowTrailingKind.draft: {
@@ -277,7 +282,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       return [
         `<li class="history-item${item.sessionId === activeSessionId ? " active" : ""}${index === selectedIndex ? " selected" : ""}" data-session-id="${escapeHtml(item.sessionId)}" data-index="${index}"${draggable ? ' draggable="true"' : ""}>`,
         statusHtml(status, showStatus),
-        `<span class="h-title">${escapeHtml(itemTitle(item))}</span>`,
+        `<span class="h-title" title="${escapeHtml(itemTitle(item))}">${escapeHtml(itemTitle(item))}</span>`,
         `<span class="h-when-row"><kbd class="shortcut-hint hist-shortcut-hint" aria-hidden="true">${escapeHtml(hint)}</kbd>${trailingHtml(trailing)}</span>`,
         `<span class="h-actions">`,
         `<button type="button" data-action="fork" title="${escapeHtml(t("fork"))}" aria-label="${escapeHtml(t("fork"))}">${HISTORY_ACTION_ICONS.fork}</button>`,

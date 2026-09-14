@@ -320,6 +320,8 @@ export function createComposerDock({ elements, deps, state, showToast, format })
 
   return {
     renderPlanChip, renderPermMenu, refreshModelMenu, refreshPresetMenu,
-    confirmFullAccess, currentPresetName
+    confirmFullAccess, currentPresetName,
+    // 快捷键"退出 Plan 模式"复用同一个动作(药丸点击也走它)。
+    exitPlanMode
   };
 }

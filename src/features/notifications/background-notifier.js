@@ -5,6 +5,7 @@
 // 漏报。所以把 running 集合持久化到 storage.local,worker 重启后先恢复再轮询。
 import { notificationIdForSession } from "./notification-click.js";
 import { RPC } from "../../platform/dsh/rpc-methods.js";
+import { setLang, t } from "../../shared/i18n.js";
 
 const RUNNING_KEY = "dsh_running_sessions";
 
@@ -45,15 +46,19 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
     area.set({ [RUNNING_KEY]: [...running] }).catch(() => {});
   }
 
-  async function notify(sessionId, title, message) {
+  async function notify(sessionId, titleKey, messageKey, params) {
     // 非扩展环境(dev web 模式、测试)没有 notifications API:静默跳过。
     if (!notifications?.create) return;
     if (!(await settings.getNotificationsEnabled())) return;
+    // service worker 有自己的模块作用域,侧栏切语言不会传播过来 —— 每次发通知
+    // 都从扩展本地设置取一次语言,文案才跟得上用户的选择。
+    const lang = await settings.getLang?.();
+    if (lang) setLang(lang);
     // id 携带会话 id:点击通知时 service worker 靠它定位要打开的会话。
     notifications.create(notificationIdForSession(sessionId), {
       type: "basic",
-      title,
-      message,
+      title: t(titleKey),
+      message: t(messageKey, params),
       iconUrl: globalThis.chrome?.runtime?.getURL?.("icons/icon128.png")
     });
   }
@@ -69,16 +74,15 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
         }
       } else if (running.delete(sessionId)) {
         persistRunning();
-        notify(sessionId, "DSH", "后台任务已完成");
+        notify(sessionId, "notif.running_title", "notif.finished");
       }
     },
     /// 后台会话的轮以错误结束:由侧栏帧偷看驱动(轮询只报"完成",区分不了失败)。
     /// 丢帧策略下这是失败信息唯一的出口,详情截断防止通知气泡溢出。
     reportFailure(sessionId, detail) {
-      const text = detail
-        ? `后台任务失败:${String(detail).slice(0, 160)}`
-        : "后台任务失败";
-      notify(sessionId, "DSH", text);
+      const trimmed = detail ? String(detail).slice(0, 160) : "";
+      if (trimmed) notify(sessionId, "notif.error_title", "notif.failedWithDetail", { detail: trimmed });
+      else notify(sessionId, "notif.error_title", "notif.failed");
     },
     reset() {
       running.clear();

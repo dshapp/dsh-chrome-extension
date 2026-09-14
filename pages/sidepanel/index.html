@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/conversation.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/tools.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/composer.css">
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/trajectory.css">
   <!-- KaTeX 样式(MIT,vendor 自 katex@0.16)。样式表静态引入而脚本按需异步加载:
        CSS 只有 24KB 且必须与公式同帧就位,否则会闪一下无样式的公式;
        268KB 的脚本则由 katex-loader 在首次遇到公式时才拉。 -->
@@ -20,7 +21,7 @@
     <div id="hdr-status" title=""></div>
     <button class="hdr-btn" id="hdr-new" aria-label="New Chat" title="新建会话">
       <!-- lucide: square-pen -->
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
         <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>
       </svg>
@@ -32,7 +33,7 @@
            分隔符是 CSS ::after 画的,目录名为空时随前缀一起隐藏。 -->
       <span id="hdr-workspace-prefix"></span>
       <span id="hdr-title">New Chat</span>
-      <svg id="hdr-title-chevron" class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg id="hdr-title-chevron" class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="m6 9 6 6 6-6"/>
       </svg>
       <kbd class="shortcut-hint" id="shortcut-history" aria-hidden="true"></kbd>
@@ -41,6 +42,12 @@
     <button class="hdr-btn" id="subagent-catalog-btn" type="button" popovertarget="subagent-catalog-menu" hidden aria-haspopup="dialog">
       <span class="subagent-dot" aria-hidden="true"></span>
       <span class="subagent-label"></span>
+    </button>
+    <!-- 后台任务入口:对齐 Mac JobListAction —— 与子代理入口同排(工具栏),
+         有任务才显示;触发钮只报计数,明细在浮层里,不再塞进上下文统计浮层。 -->
+    <button class="hdr-btn" id="jobs-btn" type="button" popovertarget="jobs-menu" hidden aria-haspopup="dialog">
+      <span class="jobs-dot" aria-hidden="true"></span>
+      <span class="jobs-label"></span>
     </button>
     <!-- Git 入口:对齐 Mac WorkspaceGitAction —— 位置也一致(紧挨在"打开工作目录"之前)。
          默认 hidden:只有当前工作目录确实是 git 仓库、且宿主代理可用时才出现;
@@ -56,13 +63,13 @@
     </button>
     <button class="hdr-btn" id="hdr-open-folder" type="button" aria-label="打开工作目录" title="用系统打开工作目录">
       <!-- lucide: folder-open -->
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
       </svg>
     </button>
     <button class="hdr-btn" id="hdr-settings" type="button" aria-label="Settings" title="设置">
       <!-- lucide: ellipsis-vertical -->
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="1"/>
         <circle cx="12" cy="5" r="1"/>
         <circle cx="12" cy="19" r="1"/>
@@ -76,16 +83,16 @@
         <button class="hdr-btn" id="hdr-workspace" type="button" popovertarget="workspace-menu"
                 aria-label="Workspace" title="切换工作目录">
           <!-- lucide: folder -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
           </svg>
           <span id="hdr-workspace-label">全部</span>
-          <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="m6 9 6 6 6-6"/>
           </svg>
         </button>
         <!-- lucide: search -->
-        <svg id="history-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg id="history-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="m21 21-4.34-4.34"/>
           <circle cx="11" cy="11" r="8"/>
         </svg>
@@ -102,6 +109,7 @@
 
   <!-- 子代理目录树 popover(随 chip 打开) -->
   <div id="subagent-catalog-menu" popover="auto" aria-label="子代理会话"></div>
+  <div id="jobs-menu" popover="auto" aria-label="后台任务"></div>
   <div id="git-entry-menu" popover="auto" aria-label="Git 分支"></div>
 
   <!-- ── 主区域 ── -->
@@ -109,33 +117,42 @@
 
     <!-- 消息区 -->
     <div id="messages">
+      <!-- 会话内查找(⌘F):sticky 在消息区顶部,内容由 find-in-chat 填充标记。
+           data-find-skip 让查找条自身不参与搜索。 -->
+      <div id="find-bar" hidden role="search" data-find-skip>
+        <input id="find-input" type="text" placeholder="在会话中查找…" aria-label="在会话中查找" autocomplete="off" spellcheck="false" />
+        <span id="find-count" aria-live="polite"></span>
+        <button id="find-prev" type="button" aria-label="上一个匹配" title="上一个"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg></button>
+        <button id="find-next" type="button" aria-label="下一个匹配" title="下一个"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button id="find-close" type="button" aria-label="关闭查找" title="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
       <div id="empty-hint">
         <div class="empty-lede">
-          <b>开始对话</b>
+          <b id="empty-title">开始对话</b>
           <!-- 新建会话的选择区:工作目录 + Agent 预设(对齐 Mac EmptyHero 的 chip 行)。
                两者都是"下一个会话用什么"的暂存选择,所以只在空会话时出现。 -->
           <div class="hero-chips">
             <button class="hero-chip" id="hero-workspace" type="button" popovertarget="workspace-menu"
                     aria-label="Workspace" title="切换工作目录">
               <!-- lucide: folder -->
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
               </svg>
               <!-- 首帧默认值:未选工作目录时新会话落在宿主分配的临时目录,
                    挂载后由 workspace-menu 的 paint() 按当前选择覆盖。 -->
               <span id="hero-workspace-label">临时目录</span>
-              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m6 9 6 6 6-6"/>
               </svg>
             </button>
             <button class="hero-chip" id="preset-btn" type="button" popovertarget="preset-menu" hidden>
               <!-- lucide: layers -->
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/>
                 <path d="M2 12.18a1 1 0 0 0 .6.92l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 .6-.93"/>
               </svg>
               <span id="preset-label">—</span>
-              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m6 9 6 6 6-6"/>
               </svg>
             </button>
@@ -145,6 +162,40 @@
       </div>
       <div id="msg-list"></div>
       <div id="interactions"></div>
+
+      <!-- 轨迹页(对话列内切换,composer 仍可用)。入口在统计浮层底部的"查看轨迹"。
+           工具栏:轮次/调用折叠、搜索、关闭;台账由 trajectory-view 渲染。 -->
+      <div id="trajectory-pane" hidden>
+        <div class="trajectory-toolbar" role="toolbar" aria-label="轨迹">
+          <button class="trajectory-toggle" data-action="turns" type="button">轮次</button>
+          <button class="trajectory-toggle" data-action="calls" type="button">调用</button>
+          <button class="trajectory-toggle trajectory-timeline-mode" type="button" aria-pressed="false">顺序</button>
+          <div class="trajectory-search">
+            <input id="trajectory-search" type="search" placeholder="搜索轨迹…" aria-label="搜索轨迹" autocomplete="off" spellcheck="false" />
+            <button class="trajectory-search-clear" type="button" aria-label="清空搜索" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+          </div>
+          <button class="trajectory-close" type="button" aria-label="关闭轨迹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+        <section id="trajectory-timeline" class="trajectory-timeline" aria-label="轨迹时间线">
+          <div class="trajectory-timeline-plot">
+            <div class="trajectory-timeline-labels" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="trajectory-timeline-track">
+              <button class="trajectory-timeline-earlier" type="button" hidden>…</button>
+              <div class="trajectory-timeline-lanes"></div>
+              <div class="trajectory-timeline-boundaries" aria-hidden="true"></div>
+              <div class="trajectory-timeline-selection" hidden aria-hidden="true"></div>
+              <div class="trajectory-timeline-hover-line" hidden aria-hidden="true"></div>
+              <div class="trajectory-timeline-tooltip" role="tooltip" hidden></div>
+            </div>
+          </div>
+        </section>
+        <div class="trajectory-load-earlier" hidden>
+          <button class="trajectory-load-btn" type="button">加载更早的历史</button>
+        </div>
+        <div id="trajectory-ledger" role="table" aria-label="轨迹事件记录表"></div>
+      </div>
     </div>
 
     <!-- Composer -->
@@ -170,11 +221,11 @@
             <button id="picked-elements-trigger" type="button" popovertarget="picked-elements-menu">
               <span class="picked-dot" aria-hidden="true"></span>
               <span id="picked-elements-label">已选取 0 个元素</span>
-              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m6 9 6 6 6-6"/>
               </svg>
             </button>
-            <button id="picked-elements-clear" type="button" aria-label="清空已选元素" title="清空已选元素">×</button>
+            <button id="picked-elements-clear" type="button" aria-label="清空已选元素" title="清空已选元素"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
           </div>
           <div id="picked-elements-menu" popover="auto" aria-label="已选取的元素"></div>
         </div>
@@ -193,12 +244,12 @@
         <div id="composer-bar">
           <!-- 加号按钮:打开的就是输入 "@" 时那个候选浮层(#trigger-menu) -->
           <button id="attach-btn" type="button" aria-label="添加上下文"
-                  aria-haspopup="listbox" aria-expanded="false">＋</button>
+                  aria-haspopup="listbox" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
 
           <!-- 页面元素选取:在当前网页上圈选元素,发送时随消息附上定位信息 -->
           <button class="bar-btn state-off" id="element-picker-btn" type="button" aria-pressed="false" aria-label="选取页面元素">
             <!-- lucide: square-dashed-mouse-pointer -->
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/>
               <path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/>
               <path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/>
@@ -208,7 +259,7 @@
 
           <!-- plan mode 药丸:仅在计划模式开启时显示,点击执行 /plan off -->
           <button class="bar-btn plan-chip" id="plan-chip" type="button" hidden>
-            <span>Plan</span><span class="plan-chip-x" aria-hidden="true">×</span>
+            <span>Plan</span><span class="plan-chip-x" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
           </button>
 
           <!-- 技能/命令候选菜单:仅由输入框的 "/" 触发,底栏不再放入口按钮 -->
@@ -216,7 +267,7 @@
 
           <button class="bar-btn" id="perm-btn" type="button" popovertarget="perm-menu">
             <span id="perm-label">—</span>
-            <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="m6 9 6 6 6-6"/>
             </svg>
           </button>
@@ -225,7 +276,7 @@
           <div id="model-picker">
             <button class="bar-btn" id="model-btn" type="button" popovertarget="model-menu" aria-label="Select model">
               <span id="model-label">—</span>
-              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m6 9 6 6 6-6"/>
               </svg>
             </button>
@@ -238,15 +289,18 @@
           </button>
           <div id="stats-menu" popover="auto" aria-label="上下文与统计"></div>
 
-          <button id="send" class="state-idle" disabled aria-label="Send">↑</button>
+          <button id="send" class="state-idle" disabled aria-label="Send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
         </div>
       </div>
     </div>
 
     <!-- file input(隐藏) -->
-    <input id="file-input" type="file" accept="image/*" multiple hidden />
+    <input id="file-input" type="file" multiple hidden />
 
   </div>
+
+  <!-- 会话 turn 轨道:浮在消息区右缘的轮次刻度,由 turn-rail-view 渲染 -->
+  <div id="turn-rail" hidden aria-label="轮次导航"></div>
 
   <div id="toast" hidden></div>
 
@@ -269,7 +323,7 @@
        tab 条是 role="tablist",每个 pane 的内容由 JS 渲染进 .settings-pane。 ── -->
   <div id="view-settings">
     <div id="settings-header">
-      <button id="settings-back" aria-label="Back">←</button>
+      <button id="settings-back" aria-label="Back"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
       <span id="settings-title">设置</span>
     </div>
     <div id="settings-tabs" role="tablist" aria-label="设置分区">
@@ -326,13 +380,13 @@
   <div id="drop-overlay" hidden aria-hidden="true">
     <div class="drop-overlay-card">
       <!-- lucide: image-plus -->
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M16 5h6"/><path d="M19 2v6"/>
         <path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/>
         <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
         <circle cx="9" cy="9" r="2"/>
       </svg>
-      <span id="drop-overlay-hint">松手添加图片</span>
+      <span id="drop-overlay-hint">拖入图片或文件</span>
     </div>
   </div>
 

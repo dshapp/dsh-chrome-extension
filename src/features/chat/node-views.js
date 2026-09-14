@@ -7,13 +7,15 @@ import { t } from "../../shared/i18n.js";
 import { mdToHtml, escapeHtml } from "../../shared/md-to-html.js";
 import { NodeKind, AssistantStatus, ToolRowState, blocksToText } from "../sessions/chat-nodes.js";
 import { toolRowModel, resultText, hasResultText, ToolVariant } from "./tool-row-model.js";
+import { resolveMention, deliverablesBasename } from "../sessions/turn-deliverables.js";
 import { getToolIconSvg, getToolPresentation } from "./tool-presentation.js";
-import { decorateCodeBlocks, renderMarkdownInto, fmtTime } from "./chat-view.js";
+import { decorateCodeBlocks, fmtTime } from "./chat-view.js";
+import { renderIncrementalMarkdown } from "./incremental-markdown.js";
 import { openCardDetail } from "./card-detail.js";
+import { splitUserContent, projectUserText, referenceSummary, fileExtension, fileSizeText } from "./user-content.js";
+import { attachCopyFeedback } from "./copy-feedback.js";
 import { foldMessageText, chunkText } from "./long-message.js";
-
-// lucide: chevron-down (https://github.com/lucide-icons/lucide,ISC),原始路径,stroke-width 调至 1.7。
-const CHEVRON = '<svg class="tool-chevron dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+import { lucideIcon, fileTypeIconName, linkIconName, fileTypeKind } from "./file-icons.js";
 
 /// assistant 正文的折叠阈值。比用户消息的 1000 宽松得多:模型回答本来就长,
 /// 过早折叠会破坏正常阅读。这里要挡的是"打印整个文件"那一类,所以取一个
@@ -27,6 +29,48 @@ function el(tag, className, text) {
   return node;
 }
 
+/// 历史图片按 attachmentId 惰性读回(content-addressed,块里没有字节)。
+/// 同一 id 只读一次;读回前留 loading 占位,失败标 failed(绝不写 ...base64,undefined)。
+const attachmentImageCache = new Map();
+
+function applyImageSource(img, source, context = {}) {
+  const a = source ?? {};
+  const mediaType = a.mediaType || "image/png";
+  if (typeof a.data === "string" && a.data) {
+    img.src = `data:${mediaType};base64,${a.data}`;
+    img.classList.remove("img-loading", "img-failed");
+    return;
+  }
+  const id = a.attachmentId ?? a.attachment?.attachmentId;
+  if (!id || typeof context.readAttachment !== "function") {
+    img.classList.add("img-failed");
+    return;
+  }
+  const cached = attachmentImageCache.get(id);
+  if (cached?.url) {
+    img.src = cached.url;
+    img.classList.remove("img-loading", "img-failed");
+    return;
+  }
+  img.classList.add("img-loading");
+  let entry = cached;
+  if (!entry) { entry = { url: null, pending: null }; attachmentImageCache.set(id, entry); }
+  if (!entry.pending) {
+    entry.pending = Promise.resolve(context.readAttachment(id)).then((value) => {
+      const bytes = typeof value === "string" ? value : value?.data;
+      const type = value?.attachment?.mediaType || mediaType;
+      if (typeof bytes !== "string" || !bytes) throw new Error("empty attachment");
+      const url = `data:${type};base64,${bytes}`;
+      entry.url = url;
+      return url;
+    }).catch(() => { attachmentImageCache.delete(id); return null; });
+  }
+  void entry.pending.then((url) => {
+    img.classList.remove("img-loading");
+    if (url) img.src = url; else img.classList.add("img-failed");
+  });
+}
+
 // ---------- user / steering / context ----------
 
 function makeCopyButton(getText) {
@@ -34,12 +78,9 @@ function makeCopyButton(getText) {
   copy.type = "button";
   copy.title = t("copy");
   copy.setAttribute("aria-label", t("copy"));
-  copy.textContent = "⧉";
-  copy.addEventListener("click", () => {
-    navigator.clipboard?.writeText(getText() || "").catch(() => {});
-    copy.textContent = "✓";
-    setTimeout(() => { copy.textContent = "⧉"; }, 1200);
-  });
+  const paint = (done) => copy.replaceChildren(lucideIcon(done ? "check" : "copy", { size: 14 }));
+  paint(false);
+  attachCopyFeedback(copy, getText, { render: paint });
   return copy;
 }
 
@@ -94,12 +135,18 @@ function openChunkedTextDetail({ title, text, className }) {
 
 /// 用户消息正文。超长时只渲染前 FOLD_LIMIT 字符,并给一个"查看全部"入口 ——
 /// 余下的文本不进这棵 DOM,靠弹窗惰性分片渲染。
-function createUserText(text) {
+function createUserText(text, refs = {}) {
   const fold = foldMessageText(text);
-  if (!fold.folded) return el("div", null, text);
+  if (!fold.folded) {
+    const plain = el("div", "msg-user-body");
+    plain.append(projectUserText(text, refs));
+    return plain;
+  }
 
   const wrap = el("div", "msg-user-body");
-  wrap.append(el("span", "msg-user-preview", fold.preview));
+  const preview = el("span", "msg-user-preview");
+  preview.append(projectUserText(fold.preview, refs));
+  wrap.append(preview);
   wrap.append(el("span", "msg-user-ellipsis", "…"));
 
   const more = el("button", "msg-user-more");
@@ -125,31 +172,76 @@ function createUserText(text) {
   return wrap;
 }
 
-export function createUserNode(node) {
+export function createUserNode(node, context = {}) {
   const turn = el("div", "msg-user-turn");
   const bubble = el("div", "msg-user");
-  const images = (node.content ?? []).filter((b) => b?.type === "image" && b.data);
-  if (images.length) {
+  const { text, images, files, rest } = splitUserContent(node.content);
+
+  // 附件行:图片 + 文件卡(web attachmentRow)。
+  if (images.length || files.length) {
     const strip = el("div", "msg-imgs");
     for (const image of images) {
       const img = document.createElement("img");
-      img.src = `data:${image.mediaType || "image/png"};base64,${image.data}`;
       img.alt = image.name || "";
+      applyImageSource(img, image, context);
       strip.append(img);
+    }
+    for (const file of files) {
+      const card = el("span", "file-card");
+      card.title = file.name;
+      const fileIcon = el("span", "file-icon file-type-" + fileTypeKind(file.name));
+      fileIcon.append(lucideIcon(fileTypeIconName(file.name), { size: 16 }));
+      card.append(fileIcon);
+      const content = el("span", "file-content");
+      content.append(el("span", "file-name", file.name));
+      const meta = [
+        fileExtension(file.name).toUpperCase().slice(0, 8),
+        fileSizeText(file.bytes)
+      ].filter(Boolean).join(" ");
+      if (meta) content.append(el("span", "file-meta", meta));
+      card.append(content);
+      strip.append(card);
     }
     bubble.append(strip);
   }
-  const text = blocksToText(node.content);
-  if (text) bubble.append(createUserText(text));
+
+  const refs = {
+    sessionLabels: node.referenceLabels ?? [],
+    slashNames: node.skillNames ?? [],
+    onOpenFile: context.onOpenFile,
+    onOpenSkill: context.onOpenSkill
+  };
+  if (text) bubble.append(createUserText(text, refs));
+  for (const block of rest) bubble.append(createJsonBlock(block, t("message.extraBlock")));
+
+  turn.append(bubble);
+  const summary = referenceSummary(node.referenceLabels);
+  if (summary) turn.append(summary);
+
   const actions = el("div", "msg-actions msg-user-actions");
   actions.append(el("span", "msg-timestamp", fmtTime(node.time)), makeCopyButton(() => text));
-  turn.append(bubble, actions);
+  turn.append(actions);
   return turn;
 }
 
+/// 用户消息里的其余块:与未知 assistant 块同构,原文进弹窗。
+function createJsonBlock(value, label) {
+  const wrap = el("div", "unknown-node");
+  const trigger = el("button", "unknown-summary", label);
+  trigger.type = "button";
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.addEventListener("click", () => openCardDetail({
+    title: label,
+    copyText: safeJson(value),
+    build: () => el("pre", null, safeJson(value))
+  }));
+  wrap.append(trigger);
+  return wrap;
+}
+
 /// steering:插队消息。与普通用户消息使用同一种样式,不再做视觉区分。
-export function createSteeringNode(node) {
-  return createUserNode(node);
+export function createSteeringNode(node, context = {}) {
+  return createUserNode(node, context);
 }
 
 /// context:插件/工具注入的上下文。记录里只留一行入口,全文进弹窗。
@@ -161,7 +253,6 @@ export function createContextNode(node) {
   trigger.type = "button";
   trigger.append(el("span", "context-label", label));
   trigger.append(el("span", "context-preview", text.slice(0, 80)));
-  trigger.insertAdjacentHTML("beforeend", CHEVRON);
   trigger.addEventListener("click", () => openChunkedTextDetail({
     title: label, text, className: "context-body"
   }));
@@ -172,9 +263,9 @@ export function createContextNode(node) {
 // ---------- assistant ----------
 
 /// assistant step 的一行。reasoning 块折叠展示,text 块渲染 markdown。
-export function createAssistantNode(node) {
+export function createAssistantNode(node, context = {}) {
   const turn = el("div", "msg-turn");
-  updateAssistantNode(turn, node);
+  updateAssistantNode(turn, node, context);
   return turn;
 }
 
@@ -184,36 +275,44 @@ export function createAssistantNode(node) {
 /// 这里不只是省 DOM:流式期间每帧都会 replaceChildren + 重新 mdToHtml 整段正文,
 /// 不设上限的话一条几百 KB 的回答会被反复解析重建(总工作量随长度平方增长),
 /// 侧栏在模型打印大文件时直接卡死。折叠让每帧的解析量有上界。
-function createAgentText(text) {
+/// assistant 正文:超长时前 AGENT_FOLD_LIMIT 字符走增量 markdown,余下进"查看全部"弹窗。
+/// 元素跨帧复用,冻结前缀的 DOM(含着色)不会每帧重建。
+function updateAgentText(body, text, mentions = null) {
   const fold = foldMessageText(text, AGENT_FOLD_LIMIT);
-  const body = el("div", "msg-agent");
-  if (!fold.folded) {
-    renderMarkdownInto(body, text);
-    return body;
-  }
   // 截断处可能落在未闭合的代码围栏里,原样渲染会把后面的正文吞进代码块。
   // 补一行收尾围栏,让这一段仍是合法 markdown。
-  renderMarkdownInto(body, closeOpenFence(fold.preview));
-  const more = el("button", "msg-user-more");
-  more.type = "button";
-  more.textContent = t("message.viewAll");
-  more.title = t("message.foldedChars", { n: String(fold.hidden) });
-  more.addEventListener("click", () => {
-    let cancel = null;
-    const dialog = openCardDetail({
-      title: t("message.fullText"),
-      // 全文按分片建节点,且只在点开时构建。
-      build: () => {
-        const pre = el("pre", "msg-full-text");
-        cancel = appendChunked(pre, chunkText(text));
-        return pre;
-      },
-      copyText: () => text
-    });
-    dialog?.addEventListener("close", () => { cancel?.(); cancel = null; }, { once: true });
-  });
-  body.append(more);
-  return body;
+  const preview = fold.folded ? closeOpenFence(fold.preview) : text;
+  renderIncrementalMarkdown(body, preview);
+  decorateMentions(body, mentions);
+
+  let more = body.querySelector(":scope > .msg-user-more");
+  if (fold.folded) {
+    if (!more) {
+      more = el("button", "msg-user-more");
+      more.type = "button";
+      more.textContent = t("message.viewAll");
+      more.addEventListener("click", () => {
+        const full = body.__fullText ?? "";
+        let cancel = null;
+        const dialog = openCardDetail({
+          title: t("message.fullText"),
+          // 全文按分片建节点,且只在点开时构建。
+          build: () => {
+            const pre = el("pre", "msg-full-text");
+            cancel = appendChunked(pre, chunkText(full));
+            return pre;
+          },
+          copyText: () => full
+        });
+        dialog?.addEventListener("close", () => { cancel?.(); cancel = null; }, { once: true });
+      });
+      body.append(more);
+    }
+    body.__fullText = text;
+    more.title = t("message.foldedChars", { n: String(fold.hidden) });
+  } else if (more) {
+    more.remove();
+  }
 }
 
 /// 折叠切点若落在未闭合的 ``` 围栏内,补一行围栏收尾。
@@ -223,28 +322,104 @@ function closeOpenFence(preview) {
   return fences % 2 === 1 ? `${preview}\n\`\`\`` : preview;
 }
 
-export function updateAssistantNode(turn, node) {
-  turn.replaceChildren();
+/// 正文里被行内 code 命名的本轮产出路径 → 可点按钮(web fileMentions / mac
+/// openMention)。精确路径匹配,或恰好唯一一个路径的 basename。
+function decorateMentions(body, mentions) {
+  const paths = mentions?.paths ?? [];
+  const onOpen = mentions?.onOpen;
+  if (!paths.length || typeof onOpen !== "function") {
+    // 词表消失(重试后不再是收尾步)时把遗留的 mention 还原成普通 code。
+    for (const link of body.querySelectorAll(".mention-link")) {
+      const code = document.createElement("code");
+      code.textContent = link.textContent ?? "";
+      link.replaceWith(code);
+    }
+    return;
+  }
+  for (const code of body.querySelectorAll("code")) {
+    if (code.closest("pre")) continue;         // fenced code 不是 mention
+    const value = code.textContent ?? "";
+    const path = resolveMention(value, mentions.paths);
+    if (!path) continue;
+    const btn = el("button", "mention-link", value);
+    btn.type = "button";
+    btn.title = path;
+    btn.setAttribute("aria-label", `${t("reference.file")}: ${path}`);
+    btn.addEventListener("click", () => mentions.onOpen(path));
+    code.replaceWith(btn);
+  }
+}
+
+/// 按 block 下标对账:同一位置、同一类型复用元素;text 块走增量 markdown。
+/// 这样流式每帧只有尾部重解析,text 之外的块也不用重建。
+export function updateAssistantNode(turn, node, context = {}) {
   turn.classList.toggle("interrupted", node.status === AssistantStatus.interrupted);
 
-  for (const block of node.blocks ?? []) {
-    if (!block) continue;
-    if (block.type === "reasoning" && block.text) {
-      turn.append(createReasoningBlock(block.text));
-    } else if (block.type === "text" && block.text) {
-      turn.append(createAgentText(block.text));
-    } else if (block.type === "image" && block.attachment) {
-      const img = document.createElement("img");
-      img.className = "msg-agent-img";
-      const a = block.attachment;
-      if (typeof a === "object" && a.data) img.src = `data:${a.mediaType || "image/png"};base64,${a.data}`;
-      turn.append(img);
+  // 行内 code mention 只给关闭轮的收尾 assistant step(web/Mac 的 closing 规则)。
+  const paths = node.closing && node.status !== AssistantStatus.running
+    ? (context.producedPaths?.(node.turn) ?? [])
+    : [];
+  const mentions = (paths.length && typeof context.onOpenPath === "function")
+    ? { paths, onOpen: (path) => context.onOpenPath(resolveToolPath(path, context.cwd)) }
+    : null;
+
+  const blocks = node.blocks ?? [];
+  const parts = turn.__parts ?? (turn.__parts = []);
+  while (parts.length < blocks.length) parts.push(null);
+  while (parts.length > blocks.length) parts.pop()?.el.remove();
+
+  const ordered = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    // 连续图片合成一组(web renderMessageImages 的 compact 行为)。
+    if (block?.type === "image" && block.attachment) {
+      let j = i + 1;
+      while (j < blocks.length && blocks[j]?.type === "image" && blocks[j].attachment) j += 1;
+      const kind = j - i > 1 ? "imageGroup" : "image";
+      let part = parts[i];
+      if (!part || part.kind !== kind || part.count !== j - i) {
+        part?.el.remove();
+        part = { kind, count: j - i, el: createBlockPart(kind) };
+        parts[i] = part;
+      }
+      updateBlockPart(part, { run: blocks.slice(i, j) }, mentions, context);
+      ordered.push(part.el);
+      for (let k = i + 1; k < j; k += 1) { parts[k]?.el.remove(); parts[k] = null; }
+      i = j - 1;
+      continue;
     }
+    if (!blockVisible(block)) {
+      parts[i]?.el.remove();
+      parts[i] = null;
+      continue;
+    }
+    const kind = blockPartKind(block);
+    let part = parts[i];
+    if (!part || part.kind !== kind) {
+      part?.el.remove();
+      part = { kind, el: createBlockPart(kind) };
+      parts[i] = part;
+    }
+    updateBlockPart(part, block, mentions, context);
+    ordered.push(part.el);
+  }
+
+  // 按目标顺序落位(已存在则移动,不重建,着色 DOM 原地保留)。
+  let cursor = turn.firstElementChild;
+  for (const child of ordered) {
+    if (child === cursor) cursor = cursor.nextElementSibling;
+    else turn.insertBefore(child, cursor);
   }
 
   // 被打断的 step 即使没有内容也要留下"已停止"的痕迹。
-  if (node.status === AssistantStatus.interrupted && !turn.childElementCount) {
-    turn.append(el("div", "msg-interrupted", t("tool.interrupted")));
+  if (node.status === AssistantStatus.interrupted && !ordered.length) {
+    if (!turn.__stopped) {
+      turn.__stopped = el("div", "msg-interrupted", t("tool.interrupted"));
+      turn.append(turn.__stopped);
+    }
+  } else if (turn.__stopped) {
+    turn.__stopped.remove();
+    turn.__stopped = null;
   }
 
   // assistant step **不挂操作行**。对齐 Mac 的 ChatNodeRow:`.assistant` 只渲染
@@ -256,19 +431,104 @@ export function updateAssistantNode(turn, node) {
   // "卡片底下也有 msg-turn" 的来源。
 }
 
-/// 思考块:记录里只留一行"思考"入口,全文进弹窗(对齐 Mac 的 .think 卡)。
-function createReasoningBlock(text) {
+// ---- assistant block 对账 ----
+
+function blockVisible(block) {
+  if (!block) return false;
+  if (block.type === "reasoning") return Boolean(block.text);
+  if (block.type === "text") return Boolean(block.text);
+  if (block.type === "image") return Boolean(block.attachment);
+  // other:仅当承载了未知内容时成行(tool-result 映射过来的 value=null 不成行)。
+  if (block.type === "other") return block.value != null;
+  return false;
+}
+
+function blockPartKind(block) {
+  return block.type;
+}
+
+function createBlockPart(kind) {
+  if (kind === "reasoning") return createReasoningBlock();
+  if (kind === "text") return el("div", "msg-agent");
+  if (kind === "other") return el("div", "unknown-node");
+  if (kind === "imageGroup") return el("div", "msg-img-group");
+  return assistantImage(null);
+}
+
+/// assistant 图片块:内联 base64 或按 attachmentId 读回 + 文件名作 alt。
+function assistantImage(attachment, context = {}) {
+  const img = document.createElement("img");
+  img.className = "msg-agent-img";
+  const a = attachment;
+  img.alt = a?.name || "";
+  applyImageSource(img, a, context);
+  return img;
+}
+
+function updateBlockPart(part, block, mentions, context = {}) {
+  if (part.kind === "reasoning") {
+    updateReasoningBlock(part.el, block.text);
+  } else if (part.kind === "text") {
+    updateAgentText(part.el, block.text, mentions);
+  } else if (part.kind === "other") {
+    updateUnknownBlock(part.el, block.value);
+  } else if (part.kind === "imageGroup") {
+    part.el.replaceChildren(...(block.run ?? []).map((entry) => assistantImage(entry.attachment, context)));
+  } else {
+    // 单张图片也走 { run: [...] } 包装(与 imageGroup 同一条路径),这里取第一个附件。
+    const a = block.attachment ?? block.run?.[0]?.attachment;
+    part.el.alt = a?.name || "";
+    applyImageSource(part.el, a, context);
+  }
+}
+
+/// 未知 assistant 块:保留一行入口,原始 JSON 只在点击时进弹窗(web JsonBlock)。
+function updateUnknownBlock(wrap, value) {
+  const type = value && typeof value === "object" ? (value.type ?? "unknown") : typeof value;
+  const label = t("node.unknownBlock", { type: String(type) });
+  wrap.replaceChildren();
+  const trigger = el("button", "unknown-summary", label);
+  trigger.type = "button";
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.addEventListener("click", () => openCardDetail({
+    title: label,
+    copyText: safeJson(value),
+    build: () => el("pre", null, safeJson(value))
+  }));
+  wrap.append(trigger);
+}
+
+/// 思考块:对齐 Mac 的 ThinkRow —— 图标 + 思考文本的**第一行**作摘要,单行截断;
+/// 完整全文仍只在详情弹窗里(无流式预览,思考就是一张和工具行同构的普通卡行)。
+function createReasoningBlock() {
   const wrap = el("div", "thinking-bubble");
   const header = el("button", "thinking-header");
   header.type = "button";
-  header.append(el("span", "thinking-icon", "✨"), el("span", "thinking-title", t("thinking")));
-  header.insertAdjacentHTML("beforeend",
-    '<svg class="thinking-chevron dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>');
+  const thinkingIcon = el("span", "thinking-icon");
+  thinkingIcon.append(lucideIcon("sparkles", { size: 13 }));
+  header.append(thinkingIcon, el("span", "thinking-title", ""));
+  // 可读名称 = "思考过程" + 摘要,与 Mac 的 accessibilityRowLabel 一致。
   header.addEventListener("click", () => openChunkedTextDetail({
-    title: t("thinking"), text, className: "thinking-body"
+    title: t("thinking"), text: wrap.__text ?? "", className: "thinking-body"
   }));
   wrap.append(header);
   return wrap;
+}
+
+function updateReasoningBlock(wrap, text) {
+  wrap.__text = text;
+  const summary = thinkingSummary(text);
+  wrap.querySelector(".thinking-title").textContent = summary;
+  wrap.querySelector(".thinking-header").setAttribute("aria-label", [t("thinking"), summary].filter(Boolean).join(" "));
+}
+
+/// Mac ThinkRow.summary:取第一行非空白内容,trim 后作为行的摘要;
+/// 整段都是空白时返回空串,行退化为只有图标(标签兜底交给 aria)。
+function thinkingSummary(text) {
+  const line = String(text ?? "").split("\n").map((l) => l.trim()).find(Boolean);
+  // 剥掉 markdown 粗体标记(web ReasoningRow 的 replaceAll('**','')):
+  // 摘要行不解析 markdown,留着 ** 只会露出标记本身。
+  return (line ?? "").replace(/\*\*/g, "");
 }
 
 // ---------- 工具行 ----------
@@ -285,9 +545,12 @@ export function updateToolNode(row, node, context = {}) {
   row.dataset.state = model.state;
   row.replaceChildren();
 
-  // ---- 头部(唯一可见部分:点击才弹出详情)----
-  const header = el("button", "tool-header");
-  header.type = "button";
+  // ---- 头部(点击才弹出详情)----
+  // 用 div+role 而不是 <button>:摘要路径内部要放一个可点的文件链接,
+  // 交互元素不能嵌套在 button 里(Mac 的 ToolRow 也是 glyph+summary 才可点)。
+  const header = el("div", "tool-header");
+  header.setAttribute("role", "button");
+  header.tabIndex = 0;
 
   const icon = el("span", "tool-icon");
   if (model.state === ToolRowState.running) icon.classList.add("running");
@@ -295,18 +558,29 @@ export function updateToolNode(row, node, context = {}) {
   if (model.state === ToolRowState.stopped) icon.classList.add("stopped");
   icon.innerHTML = getToolIconSvg(getToolPresentation(node.name).iconKey);
 
-  const summary = el("span", "tool-label");
-  summary.textContent = model.errorSummary ?? model.summary;
+  const summaryText = model.errorSummary ?? model.summary;
+  let summary;
+  if (model.filePath && typeof context.onOpenPath === "function") {
+    // 路径即交互:相对 cwd 解析后交给宿主打开(Mac 的 Link / web 路径链接)。
+    summary = el("button", "tool-label path tool-path", summaryText);
+    summary.type = "button";
+    summary.title = resolveToolPath(model.filePath, context.cwd);
+    summary.addEventListener("click", (event) => {
+      event.stopPropagation();
+      context.onOpenPath(resolveToolPath(model.filePath, context.cwd));
+    });
+  } else {
+    summary = el("span", "tool-label", summaryText);
+  }
   if (model.state === ToolRowState.error) {
     // 失败的代码执行把失败行渲成警告色(程序跑失败是可恢复的结果,不是应用错误);
     // 其他工具保持错误红。
     summary.classList.add(model.variant === ToolVariant.code ? "warn" : "error");
   }
-  if (model.filePath) summary.classList.add("path");
+  if (model.filePath && !summary.classList.contains("path")) summary.classList.add("path");
 
   header.append(icon, summary);
   if (model.summarySuffix) header.append(el("span", "tool-suffix", model.summarySuffix));
-  header.insertAdjacentHTML("beforeend", CHEVRON);
 
   // ---- 详情入口 ----
   // 正文不再挂进记录流,只在点击时惰性构建;运行中的调用每次打开都取当前
@@ -315,6 +589,11 @@ export function updateToolNode(row, node, context = {}) {
   row.classList.toggle("no-detail", !hasDetail);
   header.setAttribute("aria-disabled", String(!hasDetail));
   header.setAttribute("aria-haspopup", "dialog");
+  header.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    header.click();
+  });
   header.addEventListener("click", () => {
     if (!hasDetail) return;
     // 参数与输出都可能是几 MB(写文件的 args、构建日志的 stdout)。正文里的这两块
@@ -424,10 +703,11 @@ function buildToolBody(node, model, context = {}) {
     }
     // 结果里的图片块直接显示。
     for (const block of node.result.content ?? []) {
-      if (block?.type === "image" && block.data) {
+      if (block?.type === "image" && (block.data || block.attachment)) {
         const img = document.createElement("img");
         img.className = "tool-result-img";
-        img.src = `data:${block.mediaType || "image/png"};base64,${block.data}`;
+        img.alt = block.name || "";
+        applyImageSource(img, block.attachment ?? block, context);
         wrap.append(img);
       }
     }
@@ -460,6 +740,15 @@ function argValue(argsRaw, key) {
   } catch {
     return null;
   }
+}
+
+/// 相对路径按 cwd 解析(绝对路径、~ 开头原样)。对齐 Mac ToolRow 的 Link 解析。
+function resolveToolPath(path, cwd) {
+  const value = String(path ?? "");
+  if (!value) return value;
+  if (/^([a-zA-Z]:[\\/]|\/|~)/.test(value) || !cwd) return value;
+  const separator = String(cwd).includes("\\") ? "\\" : "/";
+  return `${String(cwd).replace(/[\\/]+$/, "")}${separator}${value}`;
 }
 
 function prettyJson(raw) {
@@ -515,14 +804,45 @@ export function createModelRetryNode(node) {
         reason
       });
   wrap.append(el("span", "chip-label", label));
-  if (exhausted && reason) {
-    const more = el("button", "chip-more", reason.split("\n")[0]);
+
+  // 倒计时(web ModelRetryItem):只在等待期内跳动,到 1s 停止。
+  const active = node.retryState === "scheduled" || node.retryState === "started";
+  const delayMs = Number(node.delayMs);
+  if (active && Number.isFinite(delayMs)) {
+    const seconds = el("span", "chip-seconds", "");
+    wrap.append(seconds);
+    const deadline = Date.now() + delayMs;
+    let timer = null;
+    const tick = () => {
+      const remaining = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+      seconds.textContent = ` · ${remaining}s`;
+      if (remaining <= 1 && timer) { clearInterval(timer); timer = null; }
+      return remaining;
+    };
+    if (tick() > 1) timer = setInterval(tick, 250);
+    wrap.dispose = () => { if (timer) clearInterval(timer); timer = null; };
+  }
+
+  // 详情:延迟 + 失败原因(web retryDetails)。耗尽时整行已转错误色。
+  if (delayMs != null || reason) {
+    const more = el("button", "chip-more", t("card.viewDetail"));
     more.type = "button";
     more.setAttribute("aria-haspopup", "dialog");
     more.addEventListener("click", () => openCardDetail({
       title: label,
-      copyText: reason,
-      build: () => el("pre", "command-output-body", reason)
+      copyText: [delayMs != null ? t("node.retryDelay", { ms: String(Math.round(delayMs)) }) : "", reason]
+        .filter(Boolean).join("\n"),
+      build: () => {
+        const body = el("div", "retry-detail");
+        if (delayMs != null) {
+          body.append(el("div", "retry-detail-row", t("node.retryDelay", { ms: String(Math.round(delayMs)) })));
+        }
+        if (reason) {
+          body.append(el("div", "retry-detail-label", t("node.retryFailure")));
+          body.append(el("pre", "command-output-body", reason));
+        }
+        return body;
+      }
     }));
     wrap.append(more);
   }
@@ -534,18 +854,42 @@ export function createTurnErrorNode(node) {
   wrap.setAttribute("role", "alert");
   wrap.append(el("div", "msg-error-title", node.message));
   if (node.code) wrap.append(el("div", "msg-error-code", node.code));
+  // 全文/错误码进详情弹窗,行内保持一眼可读(Mac 的失败 sheet)。
+  const detailText = [node.message, node.code].filter(Boolean).join("\n");
+  const more = el("button", "chip-more", t("card.viewDetail"));
+  more.type = "button";
+  more.setAttribute("aria-haspopup", "dialog");
+  more.addEventListener("click", () => openCardDetail({
+    title: node.message || t("node.unknown", { type: "error" }),
+    copyText: detailText,
+    build: () => el("pre", "command-output-body", detailText)
+  }));
+  wrap.append(more);
   return wrap;
 }
 
 export function createTurnMaxTokensNode() {
   const wrap = el("div", "chip-row maxtokens-chip");
-  wrap.append(el("span", "chip-icon", "⚠"), el("span", "chip-label", t("node.maxTokens")));
+  const alertIcon = el("span", "chip-icon");
+  alertIcon.append(lucideIcon("triangle-alert", { size: 13 }));
+  wrap.append(alertIcon, el("span", "chip-label", t("node.maxTokens")));
+  const more = el("button", "chip-more", t("card.viewDetail"));
+  more.type = "button";
+  more.setAttribute("aria-haspopup", "dialog");
+  more.addEventListener("click", () => openCardDetail({
+    title: t("node.maxTokens"),
+    copyText: t("node.maxTokensHint"),
+    build: () => el("p", "maxtokens-hint", t("node.maxTokensHint"))
+  }));
+  wrap.append(more);
   return wrap;
 }
 
 export function createCommandNode(node) {
   const wrap = el("div", "chip-row command-chip");
-  wrap.append(el("span", "chip-icon", "›"));
+  const prefixIcon = el("span", "chip-icon");
+  prefixIcon.append(lucideIcon("chevron-right", { size: 12 }));
+  wrap.append(prefixIcon);
   const name = t("node.commandRan", { name: node.name ?? "?" });
   wrap.append(el("span", "chip-label", node.args ? `${name} ${node.args}` : name));
   if (node.outcome?.text) {
@@ -568,41 +912,242 @@ export function createCommandNode(node) {
 /// 分叉挂在**页脚**而不是 assistant 消息上,是 Mac 明确的设计:分叉要按 turn/end 的
 /// seq 落点(`data.seq`),而 assistant step 的 seq 落在未闭合的轮次内部,服务端会以
 /// OPEN_TURN 拒绝。所以整个记录里只有这一行能发起分叉。
-export function createTurnTailNode(node, { onFork, isLastTurn = true } = {}) {
+export function createTurnTailNode(node, context = {}) {
+  const { onFork, isLastTurn = true, producedPaths, presentedFiles, onOpenPath, onRevealPath } = context;
+  const produced = typeof producedPaths === "function" ? (producedPaths(node.turn) ?? []) : [];
+  const presented = typeof presentedFiles === "function" ? (presentedFiles(node.turn) ?? []) : [];
+  // 产出/present 的 path 是工作区相对路径;宿主 openWorkspacePath 只按自己的 cwd
+  // 解析(实测相对路径会被 open 到宿主 home),所以这里先按会话 cwd 补成绝对路径。
+  const openPath = (path) => { if (typeof onOpenPath === "function") onOpenPath(resolveToolPath(path, context.cwd)); };
+  const revealPath = (path) => { if (typeof onRevealPath === "function") onRevealPath(resolveToolPath(path, context.cwd)); };
+
   const parts = [];
   if (node.ttftMs != null) parts.push(t("turn.ttft", { ms: String(Math.round(node.ttftMs)) }));
   if (node.decodeTokensPerSec != null) parts.push(t("turn.throughput", { rate: node.decodeTokensPerSec.toFixed(1) }));
   if (node.runMs != null) parts.push(t("turn.runtime", { seconds: (node.runMs / 1000).toFixed(1) }));
   const tokens = node.usage?.outputTokens;
   if (tokens != null) parts.push(t("usage.tokens", { tokens: String(tokens) }));
-  // 只有指标为空、且这一轮也没有可复制/可分叉的收尾消息时,才彻底不占行。
-  if (!parts.length && node.messageId == null) return null;
+  const hasActions = Boolean(parts.length) || node.messageId != null;
+  // 指标、收尾消息、本轮产出三者皆无时,才彻底不占行。
+  if (!hasActions && !produced.length && !presented.length) return null;
 
-  // 对齐 Mac 的 TurnTailIconActions:复制 → 分叉 → 时钟,是**同一行里的一簇**,
-  // 左对齐、不加 spacer(Mac 注释明确写了 "No Spacer ... a single left-aligned
-  // cluster")。整行沿用 msg-actions 的 hover 浮现语义。
-  const row = el("div", "msg-actions turn-tail-actions");
+  const wrap = el("div", "turn-tail-node");
+  // 产出 chips 在收尾正文与图标动作之间(web TurnTail chain / mac ProducedFilesRow)。
+  if (produced.length) wrap.append(buildProducedFiles(produced, openPath));
+  if (presented.length) wrap.append(buildPresentedFiles(presented, openPath, revealPath));
 
-  if (node.messageId != null) {
-    row.append(makeCopyButton(() => node.closingText || ""));
+  if (hasActions) {
+    // 对齐 Mac 的 TurnTailIconActions:复制 → 分叉 → 时钟,是**同一行里的一簇**,
+    // 左对齐、不加 spacer(Mac 注释明确写了 "No Spacer ... a single left-aligned
+    // cluster")。整行沿用 msg-actions 的 hover 浮现语义。
+    const row = el("div", "msg-actions turn-tail-actions");
+    // 交互口径=Mac:最新一轮常显,其余 hover 才浮现。
+    row.classList.toggle("always", isLastTurn);
 
-    // 分叉。Mac 在不可用时**保留按钮**(dimmed 0.4)而不是移除,这样 tooltip
-    // 还能解释为什么不能点——一个凭空消失的按钮没法自我说明。
-    const fork = el("button", "act-btn", "⑂");
-    fork.type = "button";
-    const unavailable = !onFork || !isLastTurn || !Number.isInteger(node.seq);
-    const label = unavailable ? t("fork.unavailable") : t("fork");
-    fork.title = label;
-    fork.setAttribute("aria-label", label);
-    fork.disabled = unavailable;
-    fork.classList.toggle("unavailable", unavailable);
-    if (!unavailable) fork.addEventListener("click", () => onFork(node));
-    row.append(fork);
+    if (node.messageId != null) {
+      row.append(makeCopyButton(() => node.closingText || ""));
+
+      // 分叉。交互口径=Mac:每个已完成轮次都可分叉(不再限定最后一轮);
+      // 不可用时保留按钮(dimmed 0.4)而不是移除,让 tooltip 解释原因。
+      const fork = el("button", "act-btn");
+      fork.append(lucideIcon("git-fork", { size: 14 }));
+      fork.type = "button";
+      const unavailable = !onFork || !Number.isInteger(node.seq);
+      const label = unavailable ? t("fork.unavailable") : t("fork");
+      fork.title = label;
+      fork.setAttribute("aria-label", label);
+      fork.disabled = unavailable;
+      fork.classList.toggle("unavailable", unavailable);
+      if (!unavailable) {
+        fork.addEventListener("click", async () => {
+          // in-flight:禁用并转圈,直到分叉返回(成功会切到新会话,元素随之销毁)。
+          fork.disabled = true;
+          fork.classList.add("busy");
+          try {
+            await onFork(node);
+          } finally {
+            fork.disabled = false;
+            fork.classList.remove("busy");
+          }
+        });
+      }
+      row.append(fork);
+    }
+
+    row.append(el("span", "msg-timestamp", fmtTime(node.time)));
+    if (parts.length) {
+      // 指标改成可点 pill:明细进弹窗(Mac usage/time pill,web TurnTail panels)。
+      const pill = el("button", "turn-tail turn-tail-metrics", parts.join(" · "));
+      pill.type = "button";
+      pill.setAttribute("aria-haspopup", "dialog");
+      pill.addEventListener("click", () => openCardDetail({
+        title: t("turn.metrics"),
+        copyText: parts.join("\n"),
+        build: () => {
+          const body = el("div", "turn-metrics-detail");
+          for (const part of parts) body.append(el("div", "turn-metrics-row", part));
+          return body;
+        }
+      }));
+      row.append(pill);
+    }
+    wrap.append(row);
   }
+  return wrap;
+}
 
-  row.append(el("span", "msg-timestamp", fmtTime(node.time)));
-  if (parts.length) row.append(el("span", "turn-tail", parts.join(" · ")));
+/// 文件类型徽标(web FileTypeIcon 的扩展名回退):无扩展名时退回省略号。
+function fileBadge(path) {
+  const extension = fileExtension(deliverablesBasename(path)).replace(/^\./, "").toUpperCase();
+  return extension ? extension.slice(0, 4) : "·";
+}
+
+/// 本轮产出 chips:最多 6 个(web ProducedFiles SHOWN_LIMIT),余量折成 "+N 文件"。
+/// chip 上是文件名,title 给全路径(重名时的消歧)。
+function buildProducedFiles(paths, onOpen) {
+  const row = el("div", "turn-produces");
+  row.append(el("span", "turn-produces-label", t("turn.produced")));
+  const shown = paths.slice(0, 6);
+  for (const path of shown) {
+    const chip = el("button", "turn-produce-chip");
+    chip.type = "button";
+    chip.title = path;
+    chip.setAttribute("aria-label", t("turn.openFile", { name: path }));
+    const chipIcon = el("span", "turn-produce-icon");
+    chipIcon.append(lucideIcon(linkIconName(path), { size: 13 }));
+    chip.append(chipIcon);
+    chip.append(el("span", "turn-produce-name", deliverablesBasename(path)));
+    if (typeof onOpen === "function") chip.addEventListener("click", () => onOpen(path));
+    row.append(chip);
+  }
+  if (paths.length > shown.length) {
+    row.append(el("span", "turn-produce-more", t("turn.moreFiles", { n: String(paths.length - shown.length) })));
+  }
   return row;
+}
+
+/// "在文件管理器中显示"的平台文案(web presented.finder / presented.explorer)。
+function revealLabel() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  return /win/i.test(platform) ? t("turn.revealInExplorer") : t("turn.revealInFolder");
+}
+
+/// 同一时刻只留一个交付卡菜单;点空白处或 Esc 关闭。
+let presentMenusBound = false;
+function closePresentMenus() {
+  for (const menu of document.querySelectorAll(".turn-present-menu.open")) {
+    menu.classList.remove("open");
+    menu.parentElement?.querySelector(".turn-present-chevron")?.setAttribute("aria-expanded", "false");
+  }
+}
+function bindPresentMenuDismiss() {
+  if (presentMenusBound) return;
+  presentMenusBound = true;
+  document.addEventListener("click", (event) => {
+    if (event.target?.closest?.(".turn-present-actions")) return;
+    closePresentMenus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closePresentMenus();
+  });
+}
+
+/// present 交付卡(web Deliverables / PresentedFileCard,mac Docks 交付卡):
+/// 类型徽标 + 文件名 + 描述 + 拆分动作 —— 主按钮"打开"(默认应用),右侧 chevron
+/// 的菜单给"用默认应用打开 / 在 Finder 中显示"(web PresentedFileCard 的 split)。
+/// 前 4 张直接展示(COLLAPSED_PRESENTED_COUNT),余下折成展开入口。
+/// 窄侧栏恒为单列(web @container max-width 620px)。
+function buildPresentedFiles(files, onOpen, onReveal) {
+  bindPresentMenuDismiss();
+  const wrap = el("div", "turn-presents");
+  wrap.append(el("span", "turn-produces-label", t("turn.presented")));
+  const grid = el("div", "turn-present-grid");
+  grid.dataset.single = files.length === 1 ? "true" : "false";
+  const openFile = (path) => { if (typeof onOpen === "function") onOpen(path); };
+  const revealFile = (path) => { if (typeof onReveal === "function") onReveal(path); };
+  const render = (showAll) => {
+    grid.replaceChildren();
+    const limit = showAll ? files.length : Math.min(4, files.length);
+    for (const file of files.slice(0, limit)) {
+      const card = el("div", "turn-present-card");
+      card.setAttribute("role", "button");
+      card.tabIndex = 0;
+      card.title = file.path;
+      card.setAttribute("aria-label", t("turn.openFile", { name: file.path }));
+      const icon = el("span", "turn-present-icon file-type-" + fileTypeKind(file.path));
+      icon.append(lucideIcon(fileTypeIconName(file.path), { size: 20 }));
+      card.append(icon);
+      const body = el("div", "turn-present-body");
+      body.append(el("span", "turn-present-name", deliverablesBasename(file.path)));
+      // 无描述时退回扩展名,保证第二行始终有信息(web cardDescription 的 metadata 回退)。
+      body.append(el("span", "turn-present-desc",
+        file.description || fileBadge(file.path)));
+      card.append(body);
+      const actions = el("div", "turn-present-actions");
+      const open = el("button", "turn-present-open", t("turn.open"));
+      open.type = "button";
+      open.addEventListener("click", (event) => { event.stopPropagation(); openFile(file.path); });
+      const chevron = el("button", "turn-present-chevron");
+      chevron.type = "button";
+      chevron.setAttribute("aria-haspopup", "menu");
+      chevron.setAttribute("aria-expanded", "false");
+      chevron.setAttribute("aria-label", t("turn.more", { name: file.path }));
+      chevron.append(lucideIcon("chevron-down", { size: 13 }));
+      const menu = el("div", "turn-present-menu");
+      menu.setAttribute("role", "menu");
+      const menuItem = (icon, label, action) => {
+        const item = el("button", "turn-present-menu-item");
+        item.type = "button";
+        item.setAttribute("role", "menuitem");
+        item.append(lucideIcon(icon, { size: 15 }));
+        item.append(el("span", null, label));
+        item.addEventListener("click", (event) => {
+          event.stopPropagation();
+          closePresentMenus();
+          action();
+        });
+        return item;
+      };
+      menu.append(
+        menuItem("arrow-up-right", t("turn.openWithDefault"), () => openFile(file.path)),
+        menuItem("folder-open", revealLabel(), () => revealFile(file.path))
+      );
+      chevron.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const willOpen = !menu.classList.contains("open");
+        closePresentMenus();
+        menu.classList.toggle("open", willOpen);
+        chevron.setAttribute("aria-expanded", String(willOpen));
+      });
+      actions.append(open, chevron, menu);
+      card.append(actions);
+      card.addEventListener("click", () => openFile(file.path));
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openFile(file.path);
+      });
+      grid.append(card);
+    }
+  };
+  render(false);
+  wrap.append(grid);
+  if (files.length > 4) {
+    let expanded = false;
+    const more = el("button", "turn-present-more", t("turn.showAll", { n: String(files.length) }));
+    more.type = "button";
+    more.setAttribute("aria-expanded", "false");
+    more.addEventListener("click", () => {
+      expanded = !expanded;
+      render(expanded);
+      more.textContent = expanded
+        ? t("turn.collapseAll", { n: String(files.length) })
+        : t("turn.showAll", { n: String(files.length) });
+      more.setAttribute("aria-expanded", String(expanded));
+    });
+    wrap.append(more);
+  }
+  return wrap;
 }
 
 /// workflow:记录里只留标题行 + 成员计数,phases/members 全部进弹窗。
@@ -617,7 +1162,6 @@ export function createWorkflowNode(node) {
   header.append(el("span", `workflow-status ${node.status}`, node.status));
   const count = (node.phases ?? []).reduce((sum, phase) => sum + (phase.members?.length ?? 0), 0);
   if (count) header.append(el("span", "workflow-count", String(count)));
-  header.insertAdjacentHTML("beforeend", CHEVRON);
   header.addEventListener("click", () => openCardDetail({
     title: t("node.workflow", { name: node.name }),
     build: () => {
@@ -647,7 +1191,6 @@ export function createUnknownNode(node) {
   const trigger = el("button", "unknown-summary", label);
   trigger.type = "button";
   trigger.setAttribute("aria-haspopup", "dialog");
-  trigger.insertAdjacentHTML("beforeend", CHEVRON);
   trigger.addEventListener("click", () => openCardDetail({
     title: label,
     copyText: safeJson(node.data),
@@ -665,12 +1208,35 @@ function safeJson(value) {
   }
 }
 
+/// Turn process 折叠头:整行可点(button 自带 Enter/Space),chevron + 计数。
+/// 没有可折叠成员时返回 null,不占行。
+export function createTurnProcessNode(node, context = {}) {
+  if (!(node.memberCount > 0)) return null;
+  const button = el("button", "turn-process");
+  button.type = "button";
+  button.dataset.turnProcess = String(node.turn);
+  const labels = [];
+  if (node.toolCallCount > 0) labels.push(t("process.toolCalls", { n: String(node.toolCallCount) }));
+  if (node.messageCount > 0) labels.push(t("process.messages", { n: String(node.messageCount) }));
+  if (node.subagentCount > 0) labels.push(t("process.subagents", { n: String(node.subagentCount) }));
+  const label = labels.length ? labels.join(t("process.separator")) : t("process.thought");
+  const open = Boolean(context.processOpen);
+  button.dataset.open = open ? "true" : "false";
+  button.setAttribute("aria-expanded", String(open));
+  button.title = open ? t("process.collapse") : t("process.expand");
+  const chevron = el("span", "turn-process-chevron");
+    chevron.append(lucideIcon("chevron-right", { size: 14 }));
+    button.append(chevron, el("span", "turn-process-label", label));
+  button.addEventListener("click", () => context.onToggleProcess?.(node.turn));
+  return button;
+}
+
 // ---------- 分发 ----------
 
 export function createNodeElement(node, context) {
   switch (node.kind) {
-    case NodeKind.user: return createUserNode(node);
-    case NodeKind.steering: return createSteeringNode(node);
+    case NodeKind.user: return createUserNode(node, context);
+    case NodeKind.steering: return createSteeringNode(node, context);
     case NodeKind.context: return createContextNode(node);
     case NodeKind.assistant: return createAssistantNode(node, context);
     case NodeKind.toolCall: return createToolNode(node, context);
@@ -679,6 +1245,7 @@ export function createNodeElement(node, context) {
     case NodeKind.turnError: return createTurnErrorNode(node);
     case NodeKind.turnMaxTokens: return createTurnMaxTokensNode(node);
     case NodeKind.command: return createCommandNode(node);
+    case NodeKind.turnProcess: return createTurnProcessNode(node, context);
     case NodeKind.turnTail: return createTurnTailNode(node, context);
     case NodeKind.workflowRun: return createWorkflowNode(node);
     case NodeKind.unknownSurface: return createUnknownNode(node);

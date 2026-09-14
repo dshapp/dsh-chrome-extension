@@ -139,6 +139,15 @@ describe("目标条", () => {
     expect(c.querySelector(".goal-edit-input")).toBeNull();
     expect(c.querySelector(".goal-objective").textContent).toBe("另一个目标");
   });
+
+  it("快捷键 edit():无目标返回 false,有目标直接进入编辑态", () => {
+    const c = mount();
+    const bar = mountGoalBar(c, handlers());
+    expect(bar.edit()).toBe(false);
+    bar.set(goal());
+    expect(bar.edit()).toBe(true);
+    expect(c.querySelector(".goal-edit-input").value).toBe("做完这件事");
+  });
 });
 
 describe("待办面板", () => {
@@ -196,6 +205,16 @@ describe("待办面板", () => {
     c.querySelector(".todo-head").click();
     expect(c.querySelector(".todo-list")).toBeNull();
   });
+
+  it("快捷键 toggle():无待办不可用,有待办可开合", () => {
+    const c = mount();
+    const panel = mountTodoPanel(c);
+    expect(panel.toggle()).toBe(false);
+    panel.set(todos);
+    const expanded = Boolean(c.querySelector(".todo-list"));
+    expect(panel.toggle()).toBe(true);
+    expect(Boolean(c.querySelector(".todo-list"))).toBe(!expanded);
+  });
 });
 
 describe("上下文与统计", () => {
@@ -241,20 +260,18 @@ describe("上下文与统计", () => {
     expect(statsText({ turns: 0, steps: 0 }, null)).toBe("");
   });
 
-  it("高占用给出预警与压缩入口", () => {
+  it("高占用给出预警,浮层里没有压缩按钮", () => {
     const { trigger, menu } = mountStats();
-    const onCompact = vi.fn();
-    const bar = mountStatsBar(trigger, menu, { onCompact });
+    const bar = mountStatsBar(trigger, menu, {});
     bar.set({ contextPressure: { projectedTokens: 950, contextWindow: 1000 }, sessionStats: null, tokenUsage: null });
     expect(menu.querySelector(".context-meter").classList.contains("critical")).toBe(true);
     expect(trigger.classList.contains("critical")).toBe(true);
-    menu.querySelector(".context-compact").click();
-    expect(onCompact).toHaveBeenCalled();
+    expect(menu.querySelector(".context-compact")).toBeNull();
   });
 
-  it("低占用不显示压缩入口", () => {
+  it("低占用同样没有压缩按钮", () => {
     const { trigger, menu } = mountStats();
-    mountStatsBar(trigger, menu, { onCompact: vi.fn() }).set({
+    mountStatsBar(trigger, menu, {}).set({
       contextPressure: { projectedTokens: 100, contextWindow: 1000 }, sessionStats: null, tokenUsage: null
     });
     expect(menu.querySelector(".context-compact")).toBeNull();
@@ -285,7 +302,7 @@ describe("上下文与统计", () => {
     expect(trigger.querySelector(".stats-ring").style.getPropertyValue("--stats-pct")).toBe("0%");
     expect(trigger.textContent.trim()).toBe("");
     const keys = [...menu.querySelectorAll(".stats-row-value")].map((n) => n.dataset.key);
-    expect(keys).toEqual(["turns", "llm", "tool", "ttft", "tps", "input", "cache", "output"]);
+    expect(keys).toEqual(["stats-dialog", "turns", "llm", "tool", "ttft", "tps", "usage-dialog", "cache", "input", "cacheRead", "output"]);
     const byKey = (k) => menu.querySelector(`.stats-row-value[data-key="${k}"]`).textContent;
     expect(byKey("cache")).toBe("80%");   // 800 / (200+800+0)
     expect(byKey("tps")).toContain("200"); // 600 tok / 3s
@@ -372,5 +389,30 @@ describe("预设展示名", () => {
     expect(presetDisplayName(null)).toBeNull();
     expect(presetMenuLabel(null)).toBe("");
     expect(presetDisplayName({ id: "x" })).toBe("x");
+  });
+});
+
+describe("轨迹入口", () => {
+  it("有会话时即使没有统计也留下药丸,并给出查看轨迹", () => {
+    const { trigger, menu } = mountStats();
+    const onOpenTrajectory = vi.fn();
+    mountStatsBar(trigger, menu, { onOpenTrajectory }).set({
+      contextPressure: null, sessionStats: null, tokenUsage: null, trajectoryEntry: true
+    });
+    expect(trigger.hidden).toBe(false);
+    const link = menu.querySelector(".stats-trajectory-link");
+    expect(link).toBeTruthy();
+    expect(link.textContent).toBe("View Trajectory");
+    link.click();
+    expect(onOpenTrajectory).toHaveBeenCalledTimes(1);
+  });
+
+  it("没有会话时不显示轨迹入口", () => {
+    const { trigger, menu } = mountStats();
+    mountStatsBar(trigger, menu, { onOpenTrajectory: vi.fn() }).set({
+      contextPressure: null, sessionStats: null, tokenUsage: null
+    });
+    expect(trigger.hidden).toBe(true);
+    expect(menu.querySelector(".stats-trajectory-link")).toBeFalsy();
   });
 });

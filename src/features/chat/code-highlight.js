@@ -57,6 +57,42 @@ function resolveLanguage(hljs, raw) {
  * @param {{streaming?: boolean}} options streaming 为 true 时跳过最后一个代码块 ——
  *        它可能还没流完,着色结果会随每个字符跳变。
  */
+/// 单个块的着色。未知语言标记 skipped,免得每帧重试一个永远不会成功的块。
+function highlightOne(hljs, code) {
+  const language = resolveLanguage(hljs, code.parentElement?.dataset.language);
+  if (!language) { code.dataset.highlighted = "skipped"; return; }
+  try {
+    const text = code.textContent ?? "";
+    const { value } = hljs.highlight(text, { language, ignoreIllegals: true });
+    code.innerHTML = value;
+    code.dataset.highlighted = language;
+  } catch {
+    // 单个块着色失败不影响其余块,也不影响这条消息的其他内容。
+    code.dataset.highlighted = "failed";
+  }
+}
+
+/// 视口门控(web CodeBlock 的 lazy highlight):长记录里几十个代码块,
+/// 只在滚到附近时才着色,避免首帧把整篇扫一遍。观察器按容器缓存。
+const VIEW_MARGIN = "200px 0px";
+
+function ensureObserver(root, hljs) {
+  if (root.__hlObserver) return root.__hlObserver;
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      delete entry.target.dataset.hlObserved;
+      const code = entry.target.matches?.("pre")
+        ? entry.target.querySelector("code")
+        : entry.target;
+      if (code && !code.dataset.highlighted) highlightOne(hljs, code);
+    }
+  }, { rootMargin: VIEW_MARGIN });
+  root.__hlObserver = observer;
+  return observer;
+}
+
 export async function highlightCodeBlocks(root, { streaming = false } = {}) {
   if (!root?.querySelectorAll) return;
   const all = [...root.querySelectorAll("pre[data-language] > code")];
@@ -67,20 +103,23 @@ export async function highlightCodeBlocks(root, { streaming = false } = {}) {
   const hljs = await loadHljs();
   if (!hljs) return;
 
+  // 真浏览器里走视口门控;jsdom/离屏容器没有 IntersectionObserver 时立即着色。
+  if (typeof IntersectionObserver === "function" && root.isConnected) {
+    const observer = ensureObserver(root, hljs);
+    for (const code of pending) {
+      // 还在流的时候,最后一个块很可能没收尾 —— 留到收尾那一帧再观察。
+      if (streaming && code === all[all.length - 1]) continue;
+      const target = code.parentElement ?? code;
+      if (target.dataset.hlObserved) continue;
+      target.dataset.hlObserved = "1";
+      observer.observe(target);
+    }
+    return;
+  }
+
   for (const code of pending) {
     // 还在流的时候,最后一个块很可能没收尾 —— 留到收尾那一帧再着色。
     if (streaming && code === all[all.length - 1]) continue;
-    const language = resolveLanguage(hljs, code.parentElement?.dataset.language);
-    // 未知语言:标记为已处理,免得每帧重试一个永远不会成功的块。
-    if (!language) { code.dataset.highlighted = "skipped"; continue; }
-    try {
-      const text = code.textContent ?? "";
-      const { value } = hljs.highlight(text, { language, ignoreIllegals: true });
-      code.innerHTML = value;
-      code.dataset.highlighted = language;
-    } catch {
-      // 单个块着色失败不影响其余块,也不影响这条消息的其他内容。
-      code.dataset.highlighted = "failed";
-    }
+    highlightOne(hljs, code);
   }
 }

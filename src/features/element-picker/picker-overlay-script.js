@@ -322,7 +322,8 @@ export function elementPickerPageScript(options) {
       font: "500 14px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       cursor: "pointer",
     });
-    close.textContent = "×";
+    // 这段脚本会被序列化注入页面,不能 import;内联 lucide x 的原始路径。
+    close.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
     close.addEventListener("click", cancelClose);
 
     head.appendChild(title);

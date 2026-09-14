@@ -1,12 +1,13 @@
-// 侧栏拖放:把图片拖到侧栏任意位置即加进附件区。
+// 侧栏拖放:把文件拖到侧栏任意位置即加进附件区 —— 图片走 base64 内联,
+// 非图片走 session/uploadFileBinary 真上传(见 attachments.js)。
 //
-// 这一层只认 DOM 与 DataTransfer,不认识附件的内部结构 —— 图片交给 onFiles,
-// 其余交给 onRejected,校验/上限/预览全由 attachments 那边复用粘贴的同一条路。
+// 这一层只认 DOM 与 DataTransfer,不认识附件的内部结构 —— 文件交给 onFiles,
+// 文件夹交给 onRejected,校验/上传/预览全由 attachments 那边复用粘贴的同一条路。
 //
-// ⚠️ 为什么只收图片:浏览器**刻意不暴露**拖入文件的真实路径。File 没有 .path
+// ⚠️ 为什么非图片能收:浏览器**刻意不暴露**拖入文件的真实路径。File 没有 .path
 // (那是 Electron 的私有补丁),webkitGetAsEntry().fullPath 是沙箱虚拟路径,
-// file input 的 value 规范强制为 "C:\\fakepath\\…"。所以拖一个 .pdf 进来无法
-// 变成宿主能打开的绝对路径,只能提示用户改用 '@' 引用工作区文件。
+// file input 的 value 规范强制为 "C:\\fakepath\\…"。所以靠路径打不开 .pdf,
+// 但把文件字节真传给宿主(上传换 receiptId),agent 拿 receipt 就能读,不再依赖路径。
 
 /// 拖的是文件吗?
 ///
@@ -84,9 +85,10 @@ export function mountDropZone(root, { overlay, onFiles, onRejected, isEnabled = 
     hide();
     if (!isEnabled()) return;
     const { images, others, opaque } = partitionDropped(event.dataTransfer);
-    if (images.length) onFiles(images);
-    // 非图片与文件夹合并成一次提示,拖 10 个 pdf 不该刷 10 条 toast。
-    if (others.length || opaque) onRejected();
+    // 非图片文件现在走 session/uploadFileBinary 真上传,和图片同一条 onFiles 路;
+    // 文件夹仍提示一次,拖 10 个文件夹不该刷 10 条 toast。
+    if (images.length || others.length) onFiles([...images, ...others]);
+    if (opaque) onRejected();
   }
 
   function onKeyDown(event) {

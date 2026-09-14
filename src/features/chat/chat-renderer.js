@@ -4,7 +4,8 @@
 // **任意位置**插入行(迟到的 tool/result、被抹掉的重试 step、turnTail 回填)。
 // 按索引比对遇到首个差异就要截断重建,那会把整段记录重画;按 id 对账则只动真正变了的行。
 import { t } from "../../shared/i18n.js";
-import { nodeId, NodeKind, isNodeRunning } from "../sessions/chat-nodes.js";
+import { nodeId, NodeKind, isNodeRunning, nodeTurn } from "../sessions/chat-nodes.js";
+import { isProcessMember } from "../sessions/turn-process.js";
 import { createNodeElement, updateNodeElement } from "./node-views.js";
 import { closeCardDetail } from "./card-detail.js";
 import { toolRowModel } from "./tool-row-model.js";
@@ -15,6 +16,10 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
   let typingEl = null;
   let typingTimer = null;
   let typingStartTs = 0;
+  // Turn process 展开态(turn 集合)与当前渲染用的折叠规格。
+  // 默认收起;同一会话内切换后保持,换会话 reset 时清空。
+  const openProcessTurns = new Set();
+  let processSpecs = new Map();
 
   function context() {
     return { onFork, ...(getContext?.() ?? {}) };
@@ -23,6 +28,10 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
   function render(nodes) {
     const next = new Map();
     const ctx = context();
+    processSpecs = new Map();
+    for (const node of nodes) {
+      if (node.kind === NodeKind.turnProcess) processSpecs.set(node.turn, node);
+    }
 
     // 分叉只允许落在**最后一轮**的 turnTail 上(更早的轮次分叉会切掉后续记录)。
     // 这个判断取自整份列表,不是单个节点的属性,所以要在这里算,并显式带进
@@ -45,8 +54,21 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
       // turnTail 的分叉可用性依赖"我是不是最后一轮"——这不是节点自身的数据,
       // 节点引用不变它也可能翻转,所以单独比对,变了就强制重建这一行。
       const isLastTurn = node.kind === NodeKind.turnTail ? id === lastTailId : true;
-      const tailFlipped = previous != null && previous.isLastTurn !== isLastTurn;
-      const nodeCtx = node.kind === NodeKind.turnTail ? { ...ctx, isLastTurn } : ctx;
+      // 产出/present 词表是节点之外的数据:revision 变了也要重建这一行,否则迟到的
+      // present/落定结果落在页脚上时不会补画。
+      const deliverablesRev = node.kind === NodeKind.turnTail ? (ctx.deliverablesRevision ?? null) : null;
+      const tailFlipped = previous != null
+        && (previous.isLastTurn !== isLastTurn || previous.deliverablesRev !== deliverablesRev);
+      let nodeCtx = node.kind === NodeKind.turnTail
+        ? { ...ctx, isLastTurn, deliverablesRevision: deliverablesRev }
+        : ctx;
+      if (node.kind === NodeKind.turnProcess) {
+        nodeCtx = {
+          ...ctx,
+          processOpen: openProcessTurns.has(node.turn),
+          onToggleProcess: toggleTurnProcess
+        };
+      }
 
       if (previous) {
         element = previous.element;
@@ -76,7 +98,9 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
         if (cursor && cursor.parentNode !== container) cursor = null;
         container.insertBefore(element, cursor);
       }
-      next.set(id, { element, node, isLastTurn });
+      // turn rail 的滚动定位与阅读位置上报依赖 nodeId → 元素,这里显式挂上。
+      element.dataset.nodeId = id;
+      next.set(id, { element, node, isLastTurn, deliverablesRev });
     }
 
     // 目标里没有的行删掉(重试抹除、历史重载)。
@@ -87,11 +111,40 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
       }
     }
     rendered = next;
+    applyProcessVisibility();
 
     // indicator 始终贴底。
     if (typingEl && typingEl.parentNode === container && typingEl !== container.lastElementChild) {
       container.append(typingEl);
     }
+  }
+
+  // ---- turn process 折叠 ----
+
+  /// 折叠头是成员行的开关;成员行用 hidden 隐藏(保留在 DOM,便于后续查找)。
+  function applyProcessVisibility() {
+    for (const entry of rendered.values()) {
+      const node = entry.node;
+      const turn = nodeTurn(node);
+      const spec = turn == null ? undefined : processSpecs.get(turn);
+      const member = spec ? isProcessMember(node, spec) : false;
+      entry.element.hidden = member ? !openProcessTurns.has(turn) : false;
+    }
+  }
+
+  function toggleTurnProcess(turn) {
+    if (openProcessTurns.has(turn)) openProcessTurns.delete(turn);
+    else openProcessTurns.add(turn);
+    const open = openProcessTurns.has(turn);
+    for (const entry of rendered.values()) {
+      const node = entry.node;
+      if (node.kind === NodeKind.turnProcess && node.turn === turn) {
+        entry.element.dataset.open = open ? "true" : "false";
+        entry.element.setAttribute("aria-expanded", String(open));
+        entry.element.title = open ? t("process.collapse") : t("process.expand");
+      }
+    }
+    applyProcessVisibility();
   }
 
   // ---- 等待指示 ----
@@ -148,11 +201,18 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
     closeCardDetail();
     for (const entry of rendered.values()) entry.element.dispose?.();
     rendered = new Map();
+    openProcessTurns.clear();
+    processSpecs = new Map();
     container.replaceChildren();
     setTyping(false);
   }
 
-  return { render, setTyping, setThinking, reset, get count() { return rendered.size; } };
+  return {
+    render, setTyping, setThinking, reset,
+    get count() { return rendered.size; },
+    /// turn rail 用:按 nodeId 取当前渲染的元素,滚过去/上报阅读位置。
+    elementById(id) { return rendered.get(id)?.element ?? null; }
+  };
 }
 
 /// 从快照派生"agent 正在做什么"的细分文案。

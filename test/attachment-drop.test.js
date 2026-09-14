@@ -128,19 +128,19 @@ describe("drop 的分流", () => {
     expect(onRejected).not.toHaveBeenCalled();
   });
 
-  it("非图片只提示,不进附件", () => {
+  it("非图片文件也交给 onFiles 上传", () => {
     mount();
     fire(root, "drop", dt({ files: [pdf()] }));
-    expect(onFiles).not.toHaveBeenCalled();
-    expect(onRejected).toHaveBeenCalledTimes(1);
+    expect(onFiles).toHaveBeenCalledTimes(1);
+    expect(onFiles.mock.calls[0][0].map((f) => f.name)).toEqual(["a.pdf"]);
+    expect(onRejected).not.toHaveBeenCalled();
   });
 
-  it("混着拖:图片照收,同时提示一次", () => {
+  it("混着拖:图片与非图片一起交给 onFiles", () => {
     mount();
     fire(root, "drop", dt({ files: [img(), pdf(), pdf("b.pdf")] }));
-    expect(onFiles.mock.calls[0][0].map((f) => f.name)).toEqual(["a.png"]);
-    // 拖 10 个 pdf 不该刷 10 条 toast。
-    expect(onRejected).toHaveBeenCalledTimes(1);
+    expect(onFiles.mock.calls[0][0].map((f) => f.name)).toEqual(["a.png", "a.pdf", "b.pdf"]);
+    expect(onRejected).not.toHaveBeenCalled();
   });
 
   it("文件夹:提示一次", () => {

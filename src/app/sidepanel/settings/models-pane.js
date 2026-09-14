@@ -9,6 +9,7 @@ import {
 } from "./settings-ui.js";
 import { providerKeyState, addableProviders, deriveKeyRef } from "../../../features/settings/settings-service.js";
 import { openProviderEditor } from "./provider-editor-sheet.js";
+import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import { openCustomProvider, protocolChoices } from "./custom-provider-sheet.js";
 
 const KEY_STATE_TEXT = {
@@ -39,9 +40,9 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     const label = escapeHtml(entry.entry.displayName || entry.entry.provider)
       + (entry.entry.declared === true ? tag(t("prov.customTag")) : "");
     const trailing = (entry.removable
-      ? iconButton({ id: `prov-del-${entry.entry.provider}`, glyph: "🗑", title: t("prov.remove"), kind: "danger" })
+      ? iconButton({ id: `prov-del-${entry.entry.provider}`, icon: "trash-2", title: t("prov.remove"), kind: "danger" })
       : "")
-      + iconButton({ id: `prov-edit-${entry.entry.provider}`, glyph: "›", title: entry.entry.displayName });
+      + iconButton({ id: `prov-edit-${entry.entry.provider}`, icon: "chevron-right", title: entry.entry.displayName });
     return row({
       label,
       hint: statusLine(t(KEY_STATE_TEXT[keyState]), KEY_STATE_KIND[keyState]),
@@ -77,7 +78,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     const canDeclare = state?.writable && state.namespaces.has("llm-pi-ai")
       && protocolChoices(state.namespaces.get("llm-pi-ai")?.schema).length > 0;
     const tags = `<button class="set-chip" type="button" id="prov-add-custom"${canDeclare ? "" : " disabled"}>`
-      + `＋ ${escapeHtml(t("prov.addCustom"))}</button>`
+      + `${lucideIconSvg("plus", { size: 13 })} ${escapeHtml(t("prov.addCustom"))}</button>`
       + candidates.map((entry) => (
         `<button class="set-chip" type="button" data-add-provider="${escapeHtml(entry.provider)}"`
         + `${state?.writable ? "" : " disabled"}>${escapeHtml(entry.displayName || entry.provider)}</button>`

@@ -29,7 +29,7 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
       label,
       hint: hint + `<div class="set-mono">${escapeHtml(preset.id)}</div>`,
       control: isBroken ? "" : iconButton({
-        id: `pset-view-${preset.id}`, glyph: "⌕", title: t("pset.view")
+        id: `pset-view-${preset.id}`, icon: "search", title: t("pset.view")
       }),
       id: `pset-row-${preset.id}`
     });

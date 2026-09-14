@@ -2,7 +2,7 @@
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
 import { t } from "../../shared/i18n.js";
-import { createChatRenderer, agentStatusLabel, isThinking } from "../../features/chat/index.js";
+import { createChatRenderer, agentStatusLabel, isThinking, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
 } from "../../features/interactions/index.js";
@@ -11,28 +11,35 @@ import { mountHistoryDrawer } from "./sidepanel-overlays.js";
 import { mountSettings } from "./settings/settings-root.js";
 import { mountWorkspaceMenu } from "./workspace-menu.js";
 import { createComposerMenus } from "./composer-menus.js";
-import { createComposerDock } from "./composer-dock.js";
+import { createComposerDock, isFullAccessOption } from "./composer-dock.js";
+import { createShortcutDispatcher } from "./shortcut-bindings.js";
+import { formatPageContext } from "../../features/page-context/page-context-format.js";
 import { mountTriggerMenu } from "./trigger-menu.js";
-import { projectDraft, reconcileEdit, reconcileDraft, renderChipMirror } from "./composer-chips.js";
+import { projectDraft, reconcileEdit, reconcileDraft, renderChipMirror, insertReference } from "./composer-chips.js";
 import { collectElements } from "./sidepanel-elements.js";
 import { mountAttachmentControls } from "./composer-attachments.js";
 import { createSessionShortcutController, getSessionShortcutLabels } from "../../features/sessions/session-shortcuts.js";
-import { mountGoalBar, mountTodoPanel, mountStatsBar } from "../../features/docks/session-docks.js";
+import { mountGoalBar, mountTodoPanel, mountStatsBar, activeGoal } from "../../features/docks/session-docks.js";
+import { mountTrajectoryPane } from "../../features/trajectory/index.js";
+import { mountJobList } from "../../features/docks/job-list.js";
 import { mountSubagentCatalog } from "../../features/subagents/subagent-catalog-view.js";
 import { mountGitEntry } from "./git-entry.js";
+import { applyStaticLabels } from "./static-labels.js";
+import { lucideIcon, lucideIconSvg } from "../../features/chat/file-icons.js";
 import { createHostProxyClient } from "../../platform/dsh/host-proxy-client.js";
 import { createGitService } from "../../features/host-proxy/git-service.js";
 import { createGitSummaryReader } from "../../features/host-proxy/git-summary.js";
 import { createElementPicker } from "../../features/element-picker/element-picker.js";
 import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../../features/element-picker/element-picker-shortcut.js";
 import { createPageContext } from "../../features/page-context/page-context.js";
-import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER } from "../../features/prompt-queue/index.js";
+import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER, steerChordLabel } from "../../features/prompt-queue/index.js";
 
 export function createSidepanelApp(root, deps) {
   const elements = collectElements(root);
   let sending = false;
   let historyDrawer = null;
   let workspaceMenu = null;
+  let settingsView = null;
   // 每会话草稿:切走时保存未发送文本,切回时恢复。
   const drafts = new Map();
   /// 草稿的唯一写入口 —— 顺带把「有没有未发送文字」同步给列表 store,
@@ -51,7 +58,25 @@ export function createSidepanelApp(root, deps) {
 
   const chatRenderer = createChatRenderer(elements.msgList, {
     onFork: handleFork,
-    getContext: () => ({ cwd: state.cwd, home: state.hostHome })
+    getContext: () => {
+      const snap = deps.sessions.getRuntimeSnapshot();
+      return {
+        cwd: state.cwd,
+        home: state.hostHome,
+        // 本轮产出词表与 present 交付清单(web ui-deliverables / mac TurnDeliverables)。
+        producedPaths: (turn) => snap?.producedPathsByTurn?.get?.(turn) ?? [],
+        presentedFiles: (turn) => snap?.presentedByTurn?.get?.(turn) ?? [],
+        deliverablesRevision: snap?.deliverablesRevision ?? null,
+        // 行内 mention / 产出 chip / 交付卡点击:侧栏是扩展页,file: 打不开,
+        // 统一走宿主 openPath。打开失败不再静默吞:宿主对不存在的路径会回错,
+        // 用户看到 toast 才知道"点了没反应"是路径问题而不是按钮坏了。
+        onOpenPath: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
+        onOpenFile: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
+        onRevealPath: (path) => { void deps.workspaces.revealPath(path).catch((error) => showToast(format(error))); },
+        // 历史图片只有 attachmentId,按需回读字节(web historical-images)。
+        readAttachment: (attachmentId) => deps.sessions.readAttachment?.(snap?.sessionId, attachmentId) ?? null
+      };
+    }
   });
 
   // 乐观等待位:sendMessage 提交后到 server 回出 turn/start 之间有网络/模型启动延迟,
@@ -64,6 +89,8 @@ export function createSidepanelApp(root, deps) {
     running: false,
     permissions: null,
     currentModel: null,
+    // 最近一次由本端选中的推理档(投影不直接给"当前档",用它做步进的起点)。
+    currentReasoningEffort: null,
     models: [],
     cwd: null,
     hostHome: null,
@@ -73,6 +100,105 @@ export function createSidepanelApp(root, deps) {
     // 子代理会话:队列与当前轮都不归本端管,插队不可用。
     subagent: null
   };
+  // ---- 会话 turn 轨道 ----
+  // 轨道条目、当前阅读轮次、正在分页加载的轮次。active 在首个快照落到最后一轮,
+  // 点击跳转/分页后再随快照推进。
+  let turnRailItems = [];
+  let activeTurn = null;
+  let busyTurn = null;
+  // 只要读者没手动点过刻度,active 就自动跟随最新轮;点击后锁定,再发送时恢复跟随。
+  let activeTurnFollowsLatest = true;
+
+  // scrollToTurn 的平滑滚动会路过中间各轮;锁一小段时间,避免路过时把 active
+  // 改成中途的轮次,等动画停在目标轮后由点击时写入的值接管。
+  let railLockUntil = 0;
+
+  function scrollToTurn(anchorRow, turn) {
+    const el = chatRenderer.elementById(anchorRow);
+    if (el) el.scrollIntoView({ block: "start", behavior: "smooth" });
+    activeTurn = turn;
+    activeTurnFollowsLatest = false;
+    railLockUntil = Date.now() + 700;
+    turnRail.set(turnRailItems, activeTurn, busyTurn);
+  }
+
+  /// 交互口径=Mac/web:active 刻度随阅读位置滚动,不再只在点击时更新。
+  function syncActiveTurnToScroll() {
+    if (Date.now() < railLockUntil) return;
+    const hostTop = elements.messages.getBoundingClientRect().top;
+    const candidate = resolveActiveTurn(turnRailItems, hostTop, (anchorRow) => {
+      const el = chatRenderer.elementById(anchorRow);
+      return el ? el.getBoundingClientRect().top : null;
+    });
+    if (candidate == null || candidate === activeTurn) return;
+    activeTurn = candidate;
+    activeTurnFollowsLatest = false;
+    turnRail.set(turnRailItems, activeTurn, busyTurn);
+  }
+
+  async function jumpToUnloaded(item) {
+    // 跳转到一个未加载的轮次=离开当前阅读位置,跟随随之释放。
+    tailFollow.release();
+    clearTimeout(stopConfirmTimer);
+    stopConfirmTimer = null;
+    busyTurn = item.turn;
+    turnRail.set(turnRailItems, activeTurn, busyTurn);
+    try {
+      await deps.sessions.loadThrough(state.sessionId, item.seq);
+    } finally {
+      busyTurn = null;
+    }
+    // 分页后 store 已重折:直接从快照找该轮的锚点行再滚过去。
+    const snap = deps.sessions.getRuntimeSnapshot();
+    const entry = (snap?.turnRail ?? []).find((i) => i.turn === item.turn);
+    if (entry?.anchorRow) scrollToTurn(entry.anchorRow, item.turn);
+    else turnRail.set(turnRailItems, activeTurn, null);
+  }
+
+  const turnRail = mountTurnRail(elements.turnRail, {
+    onNavigate: (item) => {
+      if (item.anchorRow) scrollToTurn(item.anchorRow, item.turn);
+      else if (item.seq != null) void jumpToUnloaded(item);
+    }
+  });
+
+  // ---- 会话内查找(⌘F) ----
+  const findBar = mountFindBar({
+    bar: elements.findBar,
+    input: elements.findInput,
+    count: elements.findCount,
+    prev: elements.findPrev,
+    next: elements.findNext,
+    close: elements.findClose
+  }, { getRoot: () => elements.msgList });
+  elements.findInput.placeholder = t("find.placeholder");
+  elements.findInput.setAttribute("aria-label", t("find.placeholder"));
+  elements.findPrev.setAttribute("aria-label", t("find.previous"));
+  elements.findNext.setAttribute("aria-label", t("find.next"));
+  elements.findClose.setAttribute("aria-label", t("find.close"));
+  document.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") return;
+    // 本处理器只认"纯" ⌘F(会话内查找)。带 Shift/Alt 的 F 是另一条命令
+    // (findInSession = ⇧⌘F),不能在这里被 preventDefault 吞掉。
+    if (event.shiftKey || event.altKey) return;
+    // 设置视图是全屏覆盖,不在会话内,不抢它的 ⌘F。
+    // 它没有 hidden 属性(靠 CSS 显隐),所以用"是否有布局盒"判断可见性。
+    if (elements.viewSettings?.getClientRects().length) return;
+    event.preventDefault();
+    // 轨迹页打开时 ⌘F 进轨迹搜索(对齐 Mac trajectorySearchFocusEpoch)。
+    if (trajectory.isOpen()) {
+      trajectory.focusSearch();
+      return;
+    }
+    findBar.open();
+  });
+
+  // ---- 尾部跟随 ----
+  // 发送即锁尾,直到轮次真正结束或读者自己向上滚(对齐 mac TranscriptTailFollow)。
+  const tailFollow = createTailFollow();
+  let stopConfirmTimer = null;
+  // stop 熬过这段静默(没有新快照)才确认回答结束;期间任何内容修订都证伪它。
+  const STOP_CONFIRM_MS = 400;
 
   // ---- 帧分发 ----
   deps.onFrame((frame, stream) => {
@@ -123,7 +249,16 @@ export function createSidepanelApp(root, deps) {
     if (state.cwd && state.cwd !== previousCwd) refreshGitEntry();
     state.subagent = snapshot.subagent ?? null;
 
+    // 查找标记包住的是真实文本节点,重建前先还原,避免与增量 markdown 打架。
+    if (findBar.isOpen()) findBar.detach();
     chatRenderer.render(snapshot.nodes);
+    if (findBar.isOpen()) findBar.refresh();
+    // turn 轨道:随快照更新条目;active 在首个快照落到最后一轮,当前 active 消失时回退。
+    turnRailItems = snapshot.turnRail ?? [];
+    if (activeTurn == null || !turnRailItems.some((i) => i.turn === activeTurn) || activeTurnFollowsLatest) {
+      activeTurn = turnRailItems.at(-1)?.turn ?? null;
+    }
+    turnRail.set(turnRailItems, activeTurn, busyTurn);
     const statusLabel = agentStatusLabel(snapshot, { awaitingTurnStart });
     // 空会话 + 加载失败:空态提示比一片空白更能说明"这不是在加载"。
     chatRenderer.setTyping(statusLabel != null, statusLabel);
@@ -136,7 +271,9 @@ export function createSidepanelApp(root, deps) {
     todoPanel.set(snapshot.todos);
     // 当前模式名由 dock 从 roster 解析(出厂预设走本地化文案,如 code → PTC 模式),
     // 显示在统计浮层顶部。
-    statsBar.set({ ...snapshot, presetName: dock.currentPresetName() });
+    syncDocks(snapshot);
+    // 轨迹页打开时随每个快照重画;未变脏时视图内部按缓存 identity 直接返回。
+    if (trajectory.isOpen()) trajectory.render();
     subagentCatalog.refresh();
     // 图片限制以宿主投影为准,composer 据此在本地就把超限文件挡下。
     deps.attachments.setLimits?.(snapshot.imageLimits);
@@ -144,7 +281,11 @@ export function createSidepanelApp(root, deps) {
     // 占位符与可用性统一在这里裁决(子代理只读 > 计划模式 > 默认)。
     applyComposerAvailability(snapshot);
     if (snapshot.permissions) dock.renderPermMenu(snapshot.permissions);
+    // 尾部跟随:仍在产出的修订先证伪 pending stop;running 只上膛不释放;跟随中重钉。
+    tailFollow.transcriptChanged();
+    tailFollow.runningChanged(snapshot.running);
     autoScroll();
+    scheduleStopConfirm();
     historyDrawer?.setActive(state.sessionId, snapshot.title);
     updateSendState(snapshot.running);
   }
@@ -201,11 +342,16 @@ export function createSidepanelApp(root, deps) {
   function applyComposerAvailability(snapshot) {
     const readOnly = Boolean(snapshot.subagent && snapshot.subagent.readOnly);
     elements.input.disabled = readOnly;
+    // 整队插话提示优先于计划占位符:running 普通会话确有排队行时,提示该手势(web 顺序)。
+    const queuedSome = (snapshot.queue ?? []).some((item) => (item.placement ?? "queued") === "queued");
+    const steerHint = Boolean(snapshot.running && !snapshot.subagent && queuedSome);
     elements.input.placeholder = readOnly
       ? t("subagent.readOnly")
-      : snapshot.planMode === true
-        ? t("composer.placeholderPlan")
-        : t("input.placeholder");
+      : steerHint
+        ? t("composer.placeholderSteerQueue", { chord: steerChordLabel(isMac) })
+        : snapshot.planMode === true
+          ? t("composer.placeholderPlan")
+          : t("input.placeholder");
     if (readOnly) elements.send.disabled = true;
   }
 
@@ -235,6 +381,27 @@ export function createSidepanelApp(root, deps) {
       const code = error?.code;
       if (code === "steer-unavailable" || code === "queue-item-not-found") return;
       showToast(format(error));
+    }
+  }
+
+  /// 空草稿 + 插队手势(⌥⌘↩):把仍排队的消息按 FIFO 逐条插进当前轮(web steerQueue)。
+  /// 复用队列面板的单条 steer 动作;agent 已取走该条 / 停止接受插队时静默收敛,
+  /// 其余失败只提示一次(与 macapp steerWholeQueue 一致)。
+  async function steerWholeQueue() {
+    if (!state.running || state.subagent) return;
+    const items = deps.sessions.getRuntimeSnapshot?.().queue ?? [];
+    const queued = items.filter(
+      (item) => (item.placement ?? "queued") === "queued" && !String(item.id ?? "").startsWith("pending:")
+    );
+    for (const item of queued) {
+      try {
+        await deps.sessions.updateQueue(state.sessionId, item.id, { kind: "steer" });
+      } catch (error) {
+        const code = error?.code;
+        if (code === "steer-unavailable" || code === "queue-item-not-found") return;
+        showToast(format(error));
+        return;
+      }
     }
   }
 
@@ -269,17 +436,17 @@ export function createSidepanelApp(root, deps) {
     if (state.running) {
       if (hasInput) {
         elements.send.className = "state-queue";
-        elements.send.textContent = "＋";
+        elements.send.innerHTML = lucideIconSvg("plus", { size: 16 });
         elements.send.title = t("queue.send");
       } else {
         elements.send.className = "state-stop";
-        elements.send.textContent = "■";
+        elements.send.innerHTML = lucideIconSvg("square", { size: 14 });
         elements.send.title = t("stop");
       }
       elements.send.disabled = false;
     } else {
       elements.send.className = "state-idle";
-      elements.send.textContent = "↑";
+      elements.send.innerHTML = lucideIconSvg("arrow-up", { size: 16 });
       elements.send.title = t("send");
       elements.send.disabled = !connected || !hasInput;
     }
@@ -328,7 +495,11 @@ export function createSidepanelApp(root, deps) {
     // 注:picker 提交不会撞上这条 —— 停止态的前提是 picked 为空(见 updateSendState),
     // 而提交路径必然带着至少一个元素,按钮那时是 state-queue。
     if (elements.send.className === "state-stop" && gesture !== "modifier") return stopRun();
-    if (!text && !attachments.length && !pickedElements.length) return;
+    if (!text && !attachments.length && !pickedElements.length) {
+      // 空草稿 + 插队手势 = 整队插话(web steerQueue);普通回车/点击发送无内容则什么都不做。
+      if (gesture === "modifier") steerWholeQueue();
+      return;
+    }
     // 子代理会话的队列不归本端管,没有可插的当前轮。
     const steeringAvailable = !state.subagent;
     const mode = resolveSubmitMode(state.running, gesture, steeringAvailable, busyEnter);
@@ -339,6 +510,9 @@ export function createSidepanelApp(root, deps) {
       return;
     }
     sending = true;
+    // 新的一轮开始了:turn 轨道回到"跟随最新",读者上滚/点刻度的锁定随之解除。
+    activeTurnFollowsLatest = true;
+    activeTurn = null;
     const sentOccurrences = occurrences;
     setInputText("");
     setDraft(state.sessionId, "");
@@ -346,6 +520,8 @@ export function createSidepanelApp(root, deps) {
     updateSendState();
     awaitingTurnStart = true;
     chatRenderer.setTyping(true, t("statusPreparing"));
+    // 发送即锁尾:从这一刻起转录钉在最新内容,直到轮次结束或读者自己上滚。
+    tailFollow.didSubmit();
     try {
       const content = [];
       // 选取的元素(指哪个,语义化 XML)拼在最前面,后接 [指令] 分隔用户原话。
@@ -372,6 +548,8 @@ export function createSidepanelApp(root, deps) {
       picker.clear();
     } catch (error) {
       awaitingTurnStart = false;
+      // 没发出去就没有回答可跟;释放,别让阅读位置被一段不存在的内容钉住。
+      tailFollow.release();
       chatRenderer.setTyping(false);
       showToast(format(error));
       // 回填的是原始草稿(带占位符)+ 原胶囊,不是展开后的文本,
@@ -414,16 +592,41 @@ export function createSidepanelApp(root, deps) {
     onClear: () => deps.goals.clear(state.sessionId, currentGoal())
   });
   const todoPanel = mountTodoPanel(elements.todoPanel);
+
+  // ---- 轨迹页(对话列内切换,composer 保留)----
+  // 与 Mac ConversationRoot 一致:轨迹替换对话列,ComposerDock 仍钉在下方。
+  // 开合只是本次点击的即时状态,不落盘、不跨会话:每次打开会话都从对话开始,
+  // 只有从统计浮层的入口点进来才进入轨迹模式。
+  try { localStorage.removeItem("dsh.trajectory.open"); } catch { /* 清掉旧版本残留 */ }
+  const trajectory = mountTrajectoryPane({
+    pane: elements.trajectoryPane,
+    ledger: elements.trajectoryLedger,
+    getTrajectory: () => deps.sessions.store.getTrajectory(),
+    hasMore: () => Boolean(state.sessionId) && deps.sessions.hasMoreHistory?.(state.sessionId) === true,
+    onLoadEarlier: () => (state.sessionId ? deps.sessions.loadEarlier(state.sessionId) : Promise.resolve())
+  });
+  function openTrajectory() {
+    if (!state.sessionId) return;
+    trajectory.open();
+    syncDocks(deps.sessions.getRuntimeSnapshot());
+  }
+
   const statsBar = mountStatsBar(elements.statsBtn, elements.statsMenu, {
-    // 上下文吃紧时把"压缩"放在手边,省得用户去翻斜杠命令。
-    onCompact: async () => {
-      if (!state.sessionId) return;
-      try { await deps.commands.execute(state.sessionId, "/compact"); }
-      catch (error) { showToast(format(error)); }
-    }
+    onOpenTrajectory: openTrajectory
   });
   function currentGoal() {
     return deps.sessions.getRuntimeSnapshot().goal;
+  }
+
+  // 后台任务入口(header chip + 明细 popover,对齐 Mac/web JobListAction)。
+  const jobList = mountJobList(elements.jobsBtn, elements.jobsMenu);
+
+  /// 上下文统计药丸 + 后台任务 chip 一起刷新。两者数据同源(runtime snapshot),
+  /// 分开调用会让一条快照在两处渲染出不同时刻的状态。
+  function syncDocks(snapshot) {
+    // 有会话就有轨迹可看;没有会话时入口连药丸一起隐藏。
+    statsBar.set({ ...snapshot, presetName: dock.currentPresetName(), trajectoryEntry: Boolean(state.sessionId) });
+    jobList.set(snapshot?.jobs);
   }
 
   // 子代理目录入口(header chip + 树形 popover,对齐 Mac SubagentCatalogAction)。
@@ -513,7 +716,7 @@ export function createSidepanelApp(root, deps) {
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "picked-element-remove";
-      remove.textContent = "×";
+      remove.append(lucideIcon("x", { size: 13 }));
       remove.setAttribute("aria-label", t("picker.remove"));
       remove.addEventListener("click", () => picker.remove(index));
       // hover 联动页面高亮,让用户确认"这一条对应的是哪个元素"。
@@ -663,16 +866,38 @@ export function createSidepanelApp(root, deps) {
     }
   });
   elements.send.addEventListener("click", () => sendMessage({ gesture: "enter" }));
+  // 转录滚动:只有读者自己把视口向上移才释放尾部跟随;程序性 pin 在 settle 窗口内被折扣。
+  elements.messages.addEventListener("scroll", () => {
+    tailFollow.viewportChanged(elements.messages.scrollTop);
+    syncActiveTurnToScroll();
+  }, { passive: true });
 
   function autoResizeInput() {
     elements.input.style.height = "auto";
     elements.input.style.height = `${Math.min(elements.input.scrollHeight, 160)}px`;
   }
 
-  function autoScroll() {
+  /// 钉到底部并发起一次 pin:settle 窗口内的 offset 移动是视图自己的,不计入释放判定。
+  function scrollToBottom() {
     const scroller = elements.messages;
-    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
-    if (nearBottom) scroller.scrollTop = scroller.scrollHeight;
+    scroller.scrollTop = scroller.scrollHeight;
+    tailFollow.beginPin();
+  }
+
+  /// 跟随中每帧重钉;未跟随时什么都不做(读者在自由阅读)。
+  function autoScroll() {
+    if (tailFollow.isFollowing) scrollToBottom();
+  }
+
+  /// 一次 stop 若熬过静默窗口就被确认,跟随随之释放。
+  function scheduleStopConfirm() {
+    clearTimeout(stopConfirmTimer);
+    stopConfirmTimer = null;
+    if (!tailFollow.isStopPending) return;
+    stopConfirmTimer = setTimeout(() => {
+      stopConfirmTimer = null;
+      tailFollow.confirmStop();
+    }, STOP_CONFIRM_MS);
   }
 
   // toast 的隐藏是延时的:重复调用必须先撤掉上一次的定时器,否则旧 timer
@@ -685,7 +910,7 @@ export function createSidepanelApp(root, deps) {
     clearTimeout(toastTimer);
     clearTimeout(toastLeaveTimer);
 
-    const icons = { error: "!", success: "✓", info: "i" };
+    const icons = { error: "circle-alert", success: "check", info: "info" };
     const kind = icons[type] ? type : "error";
     const host = elements.toast;
     host.textContent = "";
@@ -697,7 +922,7 @@ export function createSidepanelApp(root, deps) {
     const icon = document.createElement("span");
     icon.className = "toast-icon";
     icon.setAttribute("aria-hidden", "true");
-    icon.textContent = icons[kind];
+    icon.append(lucideIcon(icons[kind], { size: 14 }));
 
     const text = document.createElement("span");
     text.className = "toast-text";
@@ -768,8 +993,18 @@ export function createSidepanelApp(root, deps) {
     // 附件没有像文字草稿那样按 sessionId 持久化。切换时若继续保留，会把上一
     // 会话选择的图片静默带到下一会话；读取中的占位也必须一并作废。
     if (previousSessionId !== sessionId) deps.attachments.clear();
+    // 跟随属于被离开的内容:切会话即释放。
+    tailFollow.release();
+    clearTimeout(stopConfirmTimer);
+    stopConfirmTimer = null;
     awaitingTurnStart = false;
+    // 轨迹模式是一次点击的即时状态:打开任何会话都回到对话列。
+    trajectory.close();
     chatRenderer.reset();
+    turnRail.reset();
+    turnRailItems = [];
+    activeTurn = null;
+    busyTurn = null;
     // 切会话必须拆掉旧交互卡:它的 document 级键盘监听会一直活着。
     takeoverCard?.dispose?.();
     takeoverCard?.remove();
@@ -797,6 +1032,8 @@ export function createSidepanelApp(root, deps) {
       // 会话的实时帧会全部被 onRuntimeChange 丢弃，页面永久卡在空白加载态。
       if (token === openSessionToken) {
         state.sessionId = previousSessionId;
+        // 没有可回退的会话时轨迹页无内容可看,直接收起。
+        if (!previousSessionId) trajectory.close();
         const previousSnapshot = deps.sessions.getRuntimeSnapshot();
         if (previousSessionId && previousSnapshot?.sessionId === previousSessionId) {
           applySnapshot(previousSnapshot);
@@ -816,6 +1053,9 @@ export function createSidepanelApp(root, deps) {
     // true,后续 notifyRuntime 全被「if (renderScheduled) return」吞掉,聊天记录永远不渲染。
     // applySnapshot 内含 chatRenderer.render + emptyHint + setActive 等完整刷新。
     applySnapshot(deps.sessions.getRuntimeSnapshot());
+    // 打开会话先落到底部;若该轮仍在跑,进入跟随(打开一个正在流式的会话就是想看它)。
+    if (deps.sessions.getRuntimeSnapshot()?.running) tailFollow.didSubmit();
+    scrollToBottom();
 
     const summary = deps.sessions.listStore.get().find((item) => item.sessionId === sessionId);
     if (summary?.cwd) {
@@ -837,7 +1077,7 @@ export function createSidepanelApp(root, deps) {
     // roster 是异步拉的,会落在本次渲染之后 —— 拿到后补画一次统计浮层,
     // 否则当前模式名要等下一帧才出现。
     dock.refreshPresetMenu().then(() => {
-      statsBar.set({ ...deps.sessions.getRuntimeSnapshot(), presetName: dock.currentPresetName() });
+      syncDocks(deps.sessions.getRuntimeSnapshot());
     });
     refreshSlashSources();
     return sessionId;
@@ -854,7 +1094,11 @@ export function createSidepanelApp(root, deps) {
     const previousSessionId = state.sessionId;
     state.sessionId = childId;
     if (previousSessionId !== childId) deps.attachments.clear();
+    tailFollow.release();
+    clearTimeout(stopConfirmTimer);
+    stopConfirmTimer = null;
     awaitingTurnStart = false;
+    trajectory.close();
     chatRenderer.reset();
     takeoverCard?.dispose?.();
     takeoverCard?.remove();
@@ -882,6 +1126,7 @@ export function createSidepanelApp(root, deps) {
     if (token !== openSessionToken) return;
 
     applySnapshot(deps.sessions.getRuntimeSnapshot());
+    scrollToBottom();
     subagentCatalog.refresh();
 
     const summary = deps.sessions.listStore.get().find((item) => item.sessionId === childId);
@@ -899,9 +1144,279 @@ export function createSidepanelApp(root, deps) {
 
     dock.refreshModelMenu();
     dock.refreshPresetMenu().then(() => {
-      statsBar.set({ ...deps.sessions.getRuntimeSnapshot(), presetName: dock.currentPresetName() });
+      syncDocks(deps.sessions.getRuntimeSnapshot());
     });
     refreshSlashSources();
+  }
+
+  // ---- 全局快捷键 ----
+  // 命令表声明键位,这里把命令 id 落到动作上。返回值语义:true=已处理;
+  // false=当前不可用,别消费这个键(让 Escape 之类继续去做它本来的事)。
+  function showPopover(menu) {
+    if (!menu || typeof menu.showPopover !== "function") return false;
+    try {
+      if (!menu.matches(":popover-open")) menu.showPopover();
+      return true;
+    } catch { return false; }
+  }
+  function togglePopover(menu) {
+    if (!menu || typeof menu.showPopover !== "function") return false;
+    try {
+      if (menu.matches(":popover-open")) menu.hidePopover();
+      else menu.showPopover();
+      return true;
+    } catch { return false; }
+  }
+  function stepSession(delta) {
+    const list = sessionsInActiveWorkspace(deps.sessions.listStore.get());
+    if (!list.length) return false;
+    const idx = list.findIndex((item) => item.sessionId === state.sessionId);
+    const next = idx === -1 ? (delta > 0 ? 0 : list.length - 1)
+      : (idx + delta + list.length) % list.length;
+    const target = list[next]?.sessionId;
+    if (!target || target === state.sessionId) return false;
+    void openSession(target).catch((error) => showToast(format(error)));
+    return true;
+  }
+  function clearDraftShortcut() {
+    if (elements.composer.hidden) return false;
+    if (!elements.input.value && !occurrences.length) return false;
+    setInputText("");
+    autoResizeInput();
+    updateSendState();
+    setDraft(state.sessionId, "");
+    elements.input.focus();
+    return true;
+  }
+  function removeLastAttachmentShortcut() {
+    const list = deps.attachments.visible ?? deps.attachments.all ?? deps.attachments.pending ?? [];
+    if (!list.length) return false;
+    deps.attachments.remove(list.length - 1);
+    return true;
+  }
+  function lastResponseText() {
+    const nodes = deps.sessions.getRuntimeSnapshot?.()?.nodes ?? [];
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
+      if (node?.kind !== "assistant") continue;
+      const text = (node.blocks ?? [])
+        .filter((b) => b && b.type === "text" && b.text)
+        .map((b) => b.text).join("\n\n").trim();
+      if (text) return text;
+    }
+    return "";
+  }
+  function stepModel(delta) {
+    const current = state.currentModel;
+    const entries = state.models ?? [];
+    if (!state.sessionId || !current || !entries.length) return false;
+    const idx = entries.findIndex((m) => m.provider === current.provider && m.model === current.model);
+    const base = idx === -1 ? (delta > 0 ? -1 : entries.length) : idx;
+    const entry = entries[Math.min(entries.length - 1, Math.max(0, base + delta))];
+    if (!entry || (entry.provider === current.provider && entry.model === current.model)) return false;
+    state.currentModel = { provider: entry.provider, model: entry.model };
+    if (elements.modelLabel) elements.modelLabel.textContent = entry.label;
+    void deps.sessions.selectModel(state.sessionId, entry.provider, entry.model)
+      .catch((error) => showToast(format(error)));
+    return true;
+  }
+  function stepEffort(delta) {
+    if (!state.sessionId || !state.currentModel) return false;
+    const sessionId = state.sessionId;
+    const current = { ...state.currentModel };
+    void (async () => {
+      const sessionModels = await deps.sessions.models(sessionId);
+      if (state.sessionId !== sessionId) return;
+      const efforts = (sessionModels.reasoningEfforts ?? sessionModels.current?.reasoningEfforts ?? [])
+        .map((e) => (typeof e === "string" ? e : e?.id)).filter(Boolean);
+      if (efforts.length < 2) return;
+      const cur = state.currentReasoningEffort ?? sessionModels.current?.reasoningEffort ?? null;
+      const at = cur == null ? -1 : efforts.indexOf(cur);
+      const base = at === -1 ? (delta > 0 ? -1 : efforts.length) : at;
+      const next = efforts[Math.min(efforts.length - 1, Math.max(0, base + delta))];
+      if (!next || next === cur) return;
+      state.currentReasoningEffort = next;
+      await deps.sessions.selectModel(sessionId, current.provider, current.model, next);
+      void dock.refreshModelMenu();
+    })().catch((error) => showToast(format(error)));
+    return true;
+  }
+  async function applyPermission(value) {
+    if (!state.sessionId) return;
+    if (isFullAccessOption(value) && !(await dock.confirmFullAccess())) return;
+    try {
+      const execution = await deps.commands.execute(state.sessionId, `/permission ${value}`);
+      if (execution?.result?.kind === "error") showToast(execution.result.text || t("command.failed"));
+    } catch (error) { showToast(format(error)); }
+  }
+  function togglePageContextShortcut() {
+    if (!state.sessionId) return false;
+    const label = t("pageCtx.current");
+    const draft = elements.input.value;
+    const existing = occurrences.find((o) => o.label === label);
+    if (existing) {
+      const removeStart = existing.offset;
+      const removeEnd = existing.offset + existing.length;
+      let end = removeEnd;
+      if (draft[end] === " ") end += 1;
+      const removed = end - removeStart;
+      const text = draft.slice(0, removeStart) + draft.slice(end);
+      const next = occurrences
+        .filter((o) => o !== existing)
+        .map((o) => (o.offset >= removeEnd ? { ...o, offset: o.offset - removed } : o));
+      setInputText(text, next);
+      autoResizeInput();
+      updateSendState();
+      setDraft(state.sessionId, text);
+      return true;
+    }
+    if (elements.composer.hidden) return false;
+    const caret = elements.input.selectionStart ?? draft.length;
+    void (async () => {
+      const capture = await pageContext.captureCurrentTab();
+      const text = formatPageContext(capture);
+      if (!text) { showToast(t("pageCtx.unavailable")); return; }
+      const next = insertReference(elements.input.value, occurrences, { start: caret, end: caret }, { label, text });
+      setInputText(next.text, next.occurrences);
+      elements.input.focus();
+      elements.input.setSelectionRange(next.caret, next.caret);
+      autoResizeInput();
+      updateSendState();
+      setDraft(state.sessionId, next.text);
+    })();
+    return true;
+  }
+  function forkSessionShortcut() {
+    if (!state.sessionId) return false;
+    const sessionId = state.sessionId;
+    void (async () => {
+      try { await openSession(await deps.sessions.fork(sessionId)); }
+      catch (error) { showToast(format(error)); }
+    })();
+    return true;
+  }
+  function renameSessionShortcut() {
+    if (!state.sessionId) return false;
+    const name = window.prompt(t("session.renamePrompt"));
+    if (name && name.trim()) {
+      void deps.sessions.rename(state.sessionId, name).catch((error) => showToast(format(error)));
+    }
+    return true;
+  }
+  function archiveSessionShortcut() {
+    if (!state.sessionId) return false;
+    const sessionId = state.sessionId;
+    void (async () => {
+      try {
+        await deps.sessions.archive(sessionId);
+        await deps.sessions.refreshList().catch(() => {});
+        const rest = sessionsInActiveWorkspace(deps.sessions.listStore.get())
+          .map((item) => item.sessionId).filter((id) => id !== sessionId);
+        if (rest.length) await openSession(rest[0]);
+        else await newSession();
+      } catch (error) { showToast(format(error)); }
+    })();
+    return true;
+  }
+  function copyLastResponseShortcut() {
+    const text = lastResponseText();
+    if (!text) return false;
+    const pending = navigator.clipboard?.writeText(text);
+    if (pending?.then) pending.then(() => showToast(t("copied"))).catch(() => {});
+    else showToast(t("copied"));
+    return true;
+  }
+  function goalTogglePauseShortcut() {
+    const goal = activeGoal(currentGoal());
+    if (!goal || !state.sessionId) return false;
+    const action = goal.phase === "paused" ? deps.goals.resume : deps.goals.pause;
+    void Promise.resolve(action(state.sessionId, goal)).catch((error) => showToast(format(error)));
+    return true;
+  }
+  function goalClearShortcut() {
+    const goal = activeGoal(currentGoal());
+    if (!goal || !state.sessionId) return false;
+    void Promise.resolve(deps.goals.clear(state.sessionId, goal)).catch((error) => showToast(format(error)));
+    return true;
+  }
+  function goalNewShortcut() {
+    if (!state.sessionId) return false;
+    const objective = window.prompt(t("goal.objective"));
+    if (objective && objective.trim()) {
+      void Promise.resolve(deps.goals.create(state.sessionId, objective.trim()))
+        .catch((error) => showToast(format(error)));
+    }
+    return true;
+  }
+  function shortcutHandlers() {
+    return {
+      findInSession: () => {
+        if (!historyDrawer) return false;
+        historyDrawer.show();
+        return true;
+      },
+      previousSession: () => stepSession(-1),
+      nextSession: () => stepSession(1),
+      renameSession: renameSessionShortcut,
+      forkSession: forkSessionShortcut,
+      archiveSession: archiveSessionShortcut,
+      copyLastResponse: copyLastResponseShortcut,
+      stopGenerating: () => {
+        if (!state.running) return false;
+        void stopRun();
+        return true;
+      },
+      focusComposer: () => {
+        if (elements.composer.hidden || elements.input.disabled) return false;
+        elements.input.focus();
+        return true;
+      },
+      clearDraft: clearDraftShortcut,
+      removeLastAttachment: removeLastAttachmentShortcut,
+      choosePermission: () => (elements.permBtn.hidden ? false : showPopover(elements.permMenu)),
+      permissionReadOnly: () => {
+        if (!state.sessionId) return false;
+        void applyPermission("read-only");
+        return true;
+      },
+      permissionWorkspaceWrite: () => {
+        if (!state.sessionId) return false;
+        void applyPermission("workspace-write");
+        return true;
+      },
+      permissionFullAccess: () => {
+        if (!state.sessionId) return false;
+        void applyPermission("danger-full-access");
+        return true;
+      },
+      chooseModel: () => (elements.modelBtn.hidden ? false : showPopover(elements.modelMenu)),
+      previousModel: () => stepModel(-1),
+      nextModel: () => stepModel(1),
+      increaseEffort: () => stepEffort(1),
+      decreaseEffort: () => stepEffort(-1),
+      chooseAgentPreset: () => (elements.presetBtn.hidden ? false : showPopover(elements.presetMenu)),
+      exitPlanMode: () => {
+        if (!state.sessionId) return false;
+        if (deps.sessions.getRuntimeSnapshot?.()?.planMode !== true) return false;
+        void dock.exitPlanMode();
+        return true;
+      },
+      showSubagents: () => (elements.subagentCatalogBtn.hidden ? false : togglePopover(elements.subagentCatalogMenu)),
+      contextUsage: () => (elements.statsBtn.hidden ? false : showPopover(elements.statsMenu)),
+      compactContext: () => {
+        if (!state.sessionId) return false;
+        void deps.commands.execute(state.sessionId, "/compact").catch((error) => showToast(format(error)));
+        return true;
+      },
+      newGoal: goalNewShortcut,
+      editGoal: () => goalBar.edit(),
+      toggleGoalPause: goalTogglePauseShortcut,
+      clearGoal: goalClearShortcut,
+      toggleTodoPanel: () => todoPanel.toggle(),
+      openSettings: () => (settingsView ? (settingsView.show(), true) : false),
+      keyboardShortcuts: () => (settingsView ? (settingsView.show("shortcuts"), true) : false),
+      togglePageContext: togglePageContextShortcut
+    };
   }
 
   // ---- 快捷键 ----
@@ -930,12 +1445,40 @@ export function createSidepanelApp(root, deps) {
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) controller.reset();
     });
+    // 命令表其余命令的统一分派(见 shortcut-bindings.js)。bubble 阶段注册在
+    // 上面的就地处理器之后:它们已经 preventDefault/stopPropagation 的键到不了这里。
+    const dispatcher = createShortcutDispatcher({
+      platform,
+      handlers: shortcutHandlers(),
+      isSettingsOpen: () => Boolean(elements.viewSettings?.getClientRects().length)
+    });
+    document.addEventListener("keydown", dispatcher.handleKeyDown);
     return shortcutLabels;
   }
 
   // ---- 启动 ----
+  /// 语言切换后重画:静态 DOM、底栏、设置页与当前快照都要按新语言重渲染。
+  function relabel() {
+    applyStaticLabels(root);
+    elements.input.placeholder = t("input.placeholder");
+    updateSendState();
+    renderPickerButton();
+    renderPickedChip();
+    settingsView?.relabel();
+    trajectory.relabel();
+    const snapshot = deps.sessions.getRuntimeSnapshot();
+    if (snapshot) {
+      applySnapshot(snapshot);
+      syncDocks(snapshot);
+    }
+    dock.refreshModelMenu();
+    void dock.refreshPresetMenu();
+    historyDrawer?.refresh?.();
+  }
+
   async function start() {
     setStreamState(deps.DshStreamState.CONNECTING);
+    applyStaticLabels(root);
     elements.input.placeholder = t("input.placeholder");
     updateSendState(false);
     const shortcutLabels = setupShortcuts();
@@ -954,8 +1497,9 @@ export function createSidepanelApp(root, deps) {
       showToast
     });
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
-    mountSettings(
-      { ...deps, showToast, onBusyEnterChange: setBusyEnter },
+    settingsView = mountSettings(
+      // 语言切换要重画整个界面(静态标签 + 各 pane),所以把 app 的 relabel 交给设置页。
+      { ...deps, showToast, onBusyEnterChange: setBusyEnter, onLanguageChange: relabel },
       // 设置页改完提供方/模型目录后,当场重画底栏模型菜单 ——
       // 用户关掉设置页就能在对话框里看到新模型,不必切会话。
       { onModelsChanged: () => { dock.refreshModelMenu(); } }
@@ -1040,5 +1584,5 @@ export function createSidepanelApp(root, deps) {
     else await newSession();
   }
 
-  return Object.freeze({ start, openSession, newSession, sendMessage, stopRun, state });
+  return Object.freeze({ start, openSession, newSession, sendMessage, stopRun, relabel, state });
 }

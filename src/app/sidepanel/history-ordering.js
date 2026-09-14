@@ -11,6 +11,7 @@ import { SessionOrderBy } from "../../features/sessions/session-list-store.js";
 import { mountHistoryDrag } from "../../features/sessions/history-drag.js";
 import { resolveReorder } from "../../features/sessions/sidebar-reorder.js";
 import { renderMenuItems } from "./menu-items.js";
+import { lucideIconSvg } from "../../features/chat/file-icons.js";
 
 const ORDER_KEY = "dsh_history_order_by";
 
@@ -54,15 +55,9 @@ export function mountHistoryOrdering({
   const triggerLabel = document.createElement("span");
   triggerLabel.id = "history-order-label";
   // lucide: arrow-up-down —— 表达"换个顺序",比漏斗(筛选)更准确。
-  trigger.insertAdjacentHTML("afterbegin",
-    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-    + 'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-    + '<path d="m21 16-4 4-4-4"/><path d="M17 20V4"/><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/></svg>');
+  trigger.insertAdjacentHTML("afterbegin", lucideIconSvg("arrow-up-down", { size: 13 }));
   trigger.append(triggerLabel);
-  trigger.insertAdjacentHTML("beforeend",
-    '<svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-    + 'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-    + '<path d="m6 9 6 6 6-6"/></svg>');
+  trigger.insertAdjacentHTML("beforeend", lucideIconSvg("chevron-down", { size: 12, className: "dropdown-chevron" }));
 
   const menu = document.createElement("div");
   menu.id = "history-order-menu";

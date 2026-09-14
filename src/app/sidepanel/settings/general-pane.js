@@ -206,6 +206,8 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
       const lang = event.target.value;
       // 先切本地语言让界面立刻响应,再把偏好写回宿主(命名空间缺席时只切本地)。
       deps.setLang(lang);
+      // 让整个界面(静态标签、底栏、其他 pane)都跟着切,而不是只刷新当前 pane。
+      deps.onLanguageChange?.();
       if (snapshot.namespaces.has("locale")) await writeField("locale", "preference", lang);
       else await refresh();
     });

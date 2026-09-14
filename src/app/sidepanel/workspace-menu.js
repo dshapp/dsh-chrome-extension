@@ -125,7 +125,7 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
         // 不属于这份可排序的名单。
         draggable: true
       })),
-      { id: ADD_ID, label: t("workspace.add") }
+      { id: ADD_ID, label: t("workspace.add"), icon: "plus" }
     ];
     renderMenuItems(elements.workspaceMenu, entries, {
       selectedId: selectedId ?? (tempSelected ? TEMP_ID : ALL_ID),

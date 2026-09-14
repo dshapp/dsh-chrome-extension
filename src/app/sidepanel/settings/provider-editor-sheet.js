@@ -71,7 +71,7 @@ export function openProviderEditor({
       + textInput({ id: `cat-ctx-${index}`, value: catalogRow.contextWindow, placeholder: t("cat.auto") })
       + textInput({ id: `cat-max-${index}`, value: catalogRow.maxTokens, placeholder: t("cat.auto") })
       + `<label class="cat-check"><input type="checkbox" id="cat-img-${index}"${catalogRow.supportsImage ? " checked" : ""} /></label>`
-      + iconButton({ id: `cat-del-${index}`, glyph: "✕", title: t("cat.remove") })
+      + iconButton({ id: `cat-del-${index}`, icon: "x", title: t("cat.remove") })
       + `</div>`).join("");
     const failure = catalogFailure();
     return header + body

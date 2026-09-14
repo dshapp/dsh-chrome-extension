@@ -273,17 +273,13 @@ describe("应用接线冒烟", () => {
     expect(document.querySelector(".todo-current").textContent).toBe("甲");
   });
 
-  it("上下文吃紧时给出压缩入口并走 /compact", async () => {
+  it("上下文吃紧时浮层里也不出现压缩按钮", () => {
     mountDom();
     const { deps, snapshot, emit } = stubDeps();
     const app = createSidepanelApp(document, deps);
     app.state.sessionId = "s1";
     emit({ ...snapshot, contextPressure: { projectedTokens: 960, contextWindow: 1000 } });
-    const compact = document.querySelector(".context-compact");
-    expect(compact).toBeTruthy();
-    compact.click();
-    await Promise.resolve();
-    expect(deps.commands.execute).toHaveBeenCalledWith("s1", "/compact");
+    expect(document.querySelector(".context-compact")).toBeNull();
   });
 
   it("imageLimits 投影下发给附件盘", () => {

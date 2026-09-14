@@ -14,6 +14,8 @@
 export const SessionAwaitingKind = Object.freeze({
   /// 某个工具调用正在等待用户批准。
   approval: "approval",
+  /// agent 请求审阅它的计划(web `plan-review`)。
+  planReview: "planReview",
   /// agent 提了问题,正在等用户回答。
   question: "question"
 });

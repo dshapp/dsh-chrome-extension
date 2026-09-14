@@ -16,6 +16,7 @@ export const NodeKind = Object.freeze({
   turnError: "turnError",
   turnMaxTokens: "turnMaxTokens",
   command: "command",
+  turnProcess: "turnProcess",
   turnTail: "turnTail",
   workflowRun: "workflowRun",
   unknownSurface: "unknownSurface"
@@ -61,6 +62,7 @@ export function nodeId(node) {
     case NodeKind.turnError: return `err-${node.turn}`;
     case NodeKind.turnMaxTokens: return `mt-${node.turn}`;
     case NodeKind.command: return `cmd-${node.commandId}`;
+    case NodeKind.turnProcess: return `tp-${node.turn}`;
     case NodeKind.turnTail: return `ttl-${node.turn}`;
     case NodeKind.workflowRun: return `wf-${node.runId}`;
     case NodeKind.unknownSurface: return `unk-${node.seq}`;
@@ -74,6 +76,8 @@ export function anchorSeq(node) {
     case NodeKind.assistant: return node.firstVisibleSeq ?? node.startSeq;
     case NodeKind.toolCall: return node.startSeq;
     case NodeKind.turnMaxTokens: return node.seq + 0.05;
+    // 对齐 web CHAT_SYNTHETIC_SEQ_OFFSETS.processControl = -0.1:折叠头排在首个成员之前。
+    case NodeKind.turnProcess: return node.seq - 0.1;
     case NodeKind.turnTail: return node.seq + 0.1;
     case NodeKind.workflowRun: return node.anchorSeq;
     default: return node.seq;
@@ -94,6 +98,7 @@ export function nodeTurn(node) {
     case NodeKind.toolCall:
     case NodeKind.turnError:
     case NodeKind.turnMaxTokens:
+    case NodeKind.turnProcess:
     case NodeKind.turnTail:
       return node.turn;
     default:
@@ -205,6 +210,11 @@ export function turnMaxTokensNode({ seq, time, turn, step }) {
 
 export function commandNode({ commandId, seq, time }) {
   return { kind: NodeKind.command, commandId, seq, time, name: null, args: null, outcome: null };
+}
+
+/// Turn 折叠头(web turn-process / mac TurnProcessRow)。
+export function turnProcessNode(spec) {
+  return { kind: NodeKind.turnProcess, ...spec };
 }
 
 export function turnTailNode({ turn, seq, time }) {

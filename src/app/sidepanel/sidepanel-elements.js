@@ -13,6 +13,7 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   "input-mirror",
   // 停靠区与 agent 预设
   "goal-bar-slot", "todo-panel", "stats-btn", "stats-menu", "preset-btn", "preset-label", "preset-menu",
+  "jobs-btn", "jobs-menu",
   // 子代理目录:header chip + 树形 popover
   "subagent-catalog-btn", "subagent-catalog-menu",
   "git-entry-btn", "git-entry-menu",
@@ -22,7 +23,11 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   "element-picker-btn", "picked-elements-chip", "picked-elements-label",
   "picked-elements-menu", "picked-elements-clear",
   // 拖放落点覆盖层
-  "drop-overlay", "drop-overlay-hint"];
+  "drop-overlay", "drop-overlay-hint", "turn-rail",
+  // 会话内查找(⌘F)
+  "find-bar", "find-input", "find-count", "find-prev", "find-next", "find-close",
+  // 轨迹页(对话列内切换)
+  "trajectory-pane", "trajectory-ledger"];
 
 export function collectElements(root) {
   const byId = new Map(IDS.map((id) => [id, root.querySelector(`#${id}`)]));
@@ -70,6 +75,8 @@ export function collectElements(root) {
     todoPanel: byId.get("todo-panel"),
     statsBtn: byId.get("stats-btn"),
     statsMenu: byId.get("stats-menu"),
+    jobsBtn: byId.get("jobs-btn"),
+    jobsMenu: byId.get("jobs-menu"),
     heroWorkspace: byId.get("hero-workspace"),
     heroWorkspaceLabel: byId.get("hero-workspace-label"),
     presetBtn: byId.get("preset-btn"),
@@ -85,6 +92,16 @@ export function collectElements(root) {
     pickedMenu: byId.get("picked-elements-menu"),
     pickedClear: byId.get("picked-elements-clear"),
     dropOverlay: byId.get("drop-overlay"),
-    dropOverlayHint: byId.get("drop-overlay-hint")
+    dropOverlayHint: byId.get("drop-overlay-hint"),
+    turnRail: byId.get("turn-rail"),
+    viewSettings: byId.get("view-settings"),
+    findBar: byId.get("find-bar"),
+    findInput: byId.get("find-input"),
+    findCount: byId.get("find-count"),
+    findPrev: byId.get("find-prev"),
+    findNext: byId.get("find-next"),
+    findClose: byId.get("find-close"),
+    trajectoryPane: byId.get("trajectory-pane"),
+    trajectoryLedger: byId.get("trajectory-ledger")
   };
 }

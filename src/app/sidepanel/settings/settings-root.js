@@ -205,7 +205,10 @@ export function mountSettings(deps, { onModelsChanged } = {}) {
     tabBar.querySelector(`[data-tab="${next}"]`)?.focus();
   });
 
-  function open() {
+  /// tab 可选:快捷键"打开设置"不带,键盘快捷键命令直接落到 shortcuts 页。
+  /// 点击入口传进来的是 MouseEvent,不是 TABS 里的串,会自然忽略。
+  function open(tab) {
+    if (TABS.includes(tab)) activeTab = tab;
     view.classList.add("open");
     // 每次打开都重拉当前 pane:设置可能被其他客户端(Mac 端、编辑器)改过。
     loaded.clear();

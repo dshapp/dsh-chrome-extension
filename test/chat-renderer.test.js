@@ -4,10 +4,10 @@ import { createChatRenderer, agentStatusLabel, isThinking } from "../src/feature
 import { getToolPresentation, normalizeToolName, isCommandLikeToolName } from "../src/features/chat/tool-presentation.js";
 import {
   userNode, steeringNode, assistantNode, toolCallNode, toolResult, turnErrorNode,
-  compactionNode, modelRetryNode, commandNode, turnTailNode, workflowRunNode,
+  compactionNode, modelRetryNode, commandNode, turnProcessNode, turnTailNode, turnMaxTokensNode, workflowRunNode,
   unknownSurfaceNode, AssistantStatus
 } from "../src/features/sessions/chat-nodes.js";
-import { setLang } from "../src/shared/i18n.js";
+import { setLang, t } from "../src/shared/i18n.js";
 import { _resetCardDetail } from "../src/features/chat/card-detail.js";
 
 /// 卡片详情弹窗是全局单例:每个用例前重置,避免上一条的正文渗进来。
@@ -67,11 +67,65 @@ describe("节点渲染", () => {
     expect(c.querySelector(".msg-user-actions .act-btn")).toBeTruthy();
   });
 
+  it("历史图片按 attachmentId 读回,不会出现 base64,undefined", async () => {
+    const c = mount();
+    const asked = [];
+    const r = createChatRenderer(c, {
+      getContext: () => ({
+        readAttachment: (id) => { asked.push(id); return Promise.resolve({ attachment: { mediaType: "image/webp" }, data: "QkJC" }); }
+      })
+    });
+    r.render([userNode({
+      seq: 1, time: 1, messageId: "m1",
+      content: [
+        text("看图"),
+        { type: "image", attachment: { attachmentId: "sha256:x", mediaType: "image/webp", name: "p.png" } }
+      ]
+    })]);
+    const img = c.querySelector(".msg-imgs img");
+    expect(img.src).not.toContain("undefined");
+    expect(img.alt).toBe("p.png");
+    expect(asked).toEqual(["sha256:x"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(img.src).toBe("data:image/webp;base64,QkJC");
+    expect(img.classList.contains("img-loading")).toBe(false);
+  });
+
+  it("assistant 图片块也支持 attachmentId 读回", async () => {
+    const c = mount();
+    const r = createChatRenderer(c, {
+      getContext: () => ({ readAttachment: () => Promise.resolve({ attachment: { mediaType: "image/png" }, data: "QUFB" }) })
+    });
+    r.render([assistantWith([{ type: "image", attachment: { attachmentId: "a1", name: "shot.png" } }])]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(c.querySelector(".msg-agent-img").src).toBe("data:image/png;base64,QUFB");
+  });
+
+  it("user 消息渲染文件卡、引用 chip 与引用摘要", () => {
+    const c = mount();
+    const opened = [];
+    const r = createChatRenderer(c, { getContext: () => ({ onOpenFile: (p) => opened.push(p) }) });
+    r.render([Object.assign(userNode({
+      seq: 1, time: 1, messageId: "u1",
+      content: [
+        { type: "text", text: "看 @src/a.ts" },
+        { type: "file", attachment: { name: "doc.pdf", bytes: 2048, attachmentId: "f1" } }
+      ]
+    }), { referenceLabels: ["Notes"] })]);
+    expect(c.querySelector(".file-card .file-name").textContent).toBe("doc.pdf");
+    expect(c.querySelector(".file-meta").textContent).toContain("PDF");
+    expect(c.querySelector(".msg-reference-summary").textContent).toContain("Notes");
+    const chip = c.querySelector('button[data-ref-chip="file"]');
+    expect(chip.textContent).toContain("a.ts");
+    chip.click();
+    expect(opened).toEqual(["src/a.ts"]);
+  });
+
   it("assistant 文本渲染 markdown 与代码块工具栏", () => {
     const c = mount();
     createChatRenderer(c).render([assistantWith([text("# 标题\n\n\`\`\`js\nlet a=1\n\`\`\`")])]);
-    // mdToHtml 刻意把 # 降级到 h3,避免与侧栏标题层级冲突。
-    expect(c.querySelector(".msg-agent h3")).toBeTruthy();
+    // h1/h2 保留语义层级;尺寸由 .msg-agent h1…h6 限定,不会溢到侧栏标题。
+    expect(c.querySelector(".msg-agent h1")).toBeTruthy();
     expect(c.querySelector(".code-block .code-copy-btn")).toBeTruthy();
   });
 
@@ -180,7 +234,7 @@ describe("工具行", () => {
     createChatRenderer(c).render([call({ name: "exit_plan_mode", argsRaw: JSON.stringify({ plan: "# 计划\n做事" }) })]);
     expect(c.querySelector(".plan-inline")).toBeNull();
     c.querySelector(".tool-header").click();
-    expect(detailBody().querySelector(".plan-inline h3")).toBeTruthy();
+    expect(detailBody().querySelector(".plan-inline h1")).toBeTruthy();
   });
 });
 
@@ -191,6 +245,39 @@ describe("其他节点", () => {
     const err = c.querySelector(".msg-error");
     expect(err.getAttribute("role")).toBe("alert");
     expect(err.textContent).toContain("炸了");
+  });
+
+  it("连续图片合成为一组,单图仍是独立 img", () => {
+    const c = mount();
+    const r = createChatRenderer(c);
+    const img = (data) => ({ type: "image", attachment: { data, mediaType: "image/png", name: `${data}.png` } });
+    r.render([assistantWith([img("A"), img("B")])]);
+    const group = c.querySelector(".msg-img-group");
+    expect(group).toBeTruthy();
+    expect(group.querySelectorAll("img")).toHaveLength(2);
+    r.render([assistantWith([img("A")])]);
+    expect(c.querySelector(".msg-img-group")).toBeNull();
+    expect(c.querySelectorAll(".msg-agent-img")).toHaveLength(1);
+  });
+
+  it("工具行路径可点,按 cwd 解析且不触发详情", () => {
+    const c = mount();
+    const opened = [];
+    const r = createChatRenderer(c, {
+      getContext: () => ({ cwd: "/work", onOpenPath: (p) => opened.push(p) })
+    });
+    const tool = toolCallNode({
+      callId: "c1", name: "read", argsRaw: JSON.stringify({ file_path: "src/a.ts" }),
+      turn: 1, step: 0, startSeq: 1, time: 1
+    });
+    tool.result = { seq: 2, time: 2, content: [], isError: false, error: null, meta: null, resultView: null };
+    r.render([tool]);
+    const path = c.querySelector(".tool-path");
+    expect(path).toBeTruthy();
+    expect(path.title).toBe("/work/src/a.ts");
+    path.click();
+    expect(opened).toEqual(["/work/src/a.ts"]);
+    expect(detail()).toBeNull();
   });
 
   it("compaction 显示隐去 token 数", () => {
@@ -215,8 +302,34 @@ describe("其他节点", () => {
       { retryState: "started", retry: 3, maxRetries: 3, failureMessage: "quota exhausted\n详情第二行" })]);
     const chip = c.querySelector(".retry-chip");
     expect(chip.classList.contains("exhausted")).toBe(true);
-    // started 态标签不含 reason,由详情入口携带首行
-    expect(chip.querySelector(".chip-more").textContent).toBe("quota exhausted");
+    // started 态标签不含 reason,详情弹窗承载完整失败原因与延迟
+    const more = chip.querySelector(".chip-more");
+    expect(more.textContent).toBe("Details");
+    more.click();
+    expect(detailBody().textContent).toContain("quota exhausted");
+    expect(detailBody().textContent).toContain("详情第二行");
+  });
+
+  it("retry 等待期内显示倒计时", () => {
+    const c = mount();
+    createChatRenderer(c).render([Object.assign(modelRetryNode({ retryId: "r", seq: 1, time: 1 }),
+      { retryState: "scheduled", retry: 1, maxRetries: 3, delayMs: 3000, failureMessage: "429" })]);
+    expect(c.querySelector(".retry-chip .chip-seconds").textContent).toContain("s");
+  });
+
+  it("turnError 详情弹窗含完整文案与错误码", () => {
+    const c = mount();
+    createChatRenderer(c).render([turnErrorNode({ seq: 1, time: 1, turn: 1, message: "炸了", code: "E1" })]);
+    c.querySelector(".msg-error .chip-more").click();
+    expect(detailBody().textContent).toContain("炸了");
+    expect(detailBody().textContent).toContain("E1");
+  });
+
+  it("maxTokens 提供 hint 详情", () => {
+    const c = mount();
+    createChatRenderer(c).render([turnMaxTokensNode({ seq: 1, time: 1, turn: 1 })]);
+    c.querySelector(".maxtokens-chip .chip-more").click();
+    expect(detailBody().textContent).toContain("output token cap");
   });
 
   it("retry ∞ 模式(maxRetries 为 null)永不进入耗尽态", () => {
@@ -245,8 +358,10 @@ describe("其他节点", () => {
     const row = c.querySelector(".turn-tail-actions");
     expect(row.classList.contains("msg-actions")).toBe(true);
     expect(row.querySelector(".interaction-spacer")).toBeNull();
-    expect([...row.children].map((n) => n.className))
+    expect([...row.children].map((n) => n.className.split(" ")[0]))
       .toEqual(["msg-timestamp", "turn-tail"]);
+    // 最新一轮常显(Mac 口径)。
+    expect(row.classList.contains("always")).toBe(true);
   });
 
   it("turnTail 带收尾消息时给出复制 + 分叉,顺序为 复制→分叉→时钟", () => {
@@ -260,27 +375,176 @@ describe("其他节点", () => {
     expect([...row.children].map((n) => n.className.split(" ")[0]))
       .toEqual(["act-btn", "act-btn", "msg-timestamp", "turn-tail"]);
     // 分叉按 turn/end 的 seq 落点(assistant step 的 seq 会被服务端以 OPEN_TURN 拒绝)。
-    const fork = [...row.querySelectorAll(".act-btn")].find((b) => b.textContent === "⑂");
+    const fork = [...row.querySelectorAll(".act-btn")].find((b) => b.title === t("fork"));
     expect(fork.disabled).toBe(false);
     fork.click();
     expect(forked).toHaveLength(1);
     expect(forked[0].seq).toBe(9);
   });
 
-  it("非最后一轮的 turnTail 分叉保留按钮但失效", () => {
+  it("每个完成轮次的 turnTail 都可分叉;只有最新一轮常显", () => {
     const c = mount();
     const r = createChatRenderer(c, { onFork: () => {} });
     const t1 = Object.assign(turnTailNode({ turn: 1, seq: 9, time: 1 }), { messageId: "m1", closingText: "a" });
     r.render([t1]);
-    const forkOf = (i) => [...c.querySelectorAll(".turn-tail-actions")[i].querySelectorAll(".act-btn")]
-      .find((b) => b.textContent === "⑂");
+    const rowOf = (i) => c.querySelectorAll(".turn-tail-actions")[i];
+    const forkOf = (i) => [...rowOf(i).querySelectorAll(".act-btn")].find((b) => b.title === t("fork"));
     expect(forkOf(0).disabled).toBe(false);
-    // 新一轮到来后,旧页脚必须失效——节点引用没变,靠 isLastTurn 翻转触发重建。
+    expect(rowOf(0).classList.contains("always")).toBe(true);
+    // 交互口径=Mac:旧轮次依然可分叉,只是动作行改为 hover 浮现。
     const t2 = Object.assign(turnTailNode({ turn: 2, seq: 20, time: 2 }), { messageId: "m2", closingText: "b" });
     r.render([t1, t2]);
-    expect(forkOf(0).disabled).toBe(true);
-    expect(forkOf(0).classList.contains("unavailable")).toBe(true);
+    expect(forkOf(0).disabled).toBe(false);
+    expect(rowOf(0).classList.contains("always")).toBe(false);
     expect(forkOf(1).disabled).toBe(false);
+    expect(rowOf(1).classList.contains("always")).toBe(true);
+  });
+
+  it("turnTail 渲染本轮产出 chips 与 present 交付卡,点击走 openPath", () => {
+    const c = mount();
+    const opened = [];
+    const r = createChatRenderer(c, {
+      getContext: () => ({
+        producedPaths: (turn) => (turn === 1 ? ["out/a.txt", "out/b.txt"] : []),
+        presentedFiles: (turn) => (turn === 1
+          ? [{ seq: 5, index: 0, path: "reports/x.md", description: "报告" }]
+          : []),
+        onOpenPath: (p) => opened.push(p)
+      })
+    });
+    const tail = Object.assign(turnTailNode({ turn: 1, seq: 9, time: 1 }),
+      { ttftMs: 250, messageId: "m1", closingText: "hi" });
+    r.render([tail]);
+    expect(c.querySelectorAll(".turn-produce-chip")).toHaveLength(2);
+    expect(c.querySelector(".turn-produce-chip").textContent).toContain("a.txt");
+    expect(c.querySelector(".turn-produce-chip .turn-produce-name").textContent).toBe("a.txt");
+    c.querySelector(".turn-produce-chip").click();
+    expect(opened).toEqual(["out/a.txt"]);
+    const present = c.querySelector(".turn-present-card");
+    expect(present.querySelector(".turn-present-name").textContent).toBe("x.md");
+    // lucide 线稿:图标盒里是 svg,不再用扩展名文字。
+    expect(present.querySelector(".turn-present-icon svg")).toBeTruthy();
+    expect(present.querySelector(".turn-present-icon").classList.contains("file-type-markdown")).toBe(true);
+    expect(present.querySelector(".turn-present-desc").textContent).toBe("报告");
+    present.click();
+    expect(opened).toEqual(["out/a.txt", "reports/x.md"]);
+    c.querySelector(".turn-present-open").click();
+    expect(opened).toEqual(["out/a.txt", "reports/x.md", "reports/x.md"]);
+    // 产出在图标动作行之前(web TurnTail chain / mac ProducedFilesRow)。
+    const wrap = c.querySelector(".turn-tail-node");
+    expect([...wrap.children].map((n) => n.className.split(" ")[0]))
+      .toEqual(["turn-produces", "turn-presents", "msg-actions"]);
+  });
+
+  it("交付卡按会话 cwd 解析相对路径;菜单区分默认应用打开与在 Finder 中显示", () => {
+    const c = mount();
+    const opened = [];
+    const revealed = [];
+    const r = createChatRenderer(c, {
+      getContext: () => ({
+        cwd: "/work",
+        presentedFiles: () => [{ seq: 5, index: 0, path: "reports/x.md", description: "报告" }],
+        onOpenPath: (p) => opened.push(p),
+        onRevealPath: (p) => revealed.push(p)
+      })
+    });
+    r.render([Object.assign(turnTailNode({ turn: 1, seq: 9, time: 1 }),
+      { messageId: "m1", closingText: "hi" })]);
+    // 卡片整体点击 = 默认应用打开;相对路径必须先按 cwd 补绝对,
+    // 否则宿主会把 open 到自己的工作目录(实测)。
+    c.querySelector(".turn-present-card").click();
+    expect(opened).toEqual(["/work/reports/x.md"]);
+    const chevron = c.querySelector(".turn-present-chevron");
+    expect(chevron.querySelector("svg")).toBeTruthy();
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+    chevron.click();
+    expect(chevron.getAttribute("aria-expanded")).toBe("true");
+    expect(c.querySelector(".turn-present-menu").classList.contains("open")).toBe(true);
+    const items = c.querySelectorAll(".turn-present-menu-item");
+    expect([...items].map((n) => n.textContent)).toEqual([
+      t("turn.openWithDefault"), t("turn.revealInFolder")
+    ]);
+    items[0].click();
+    expect(opened).toEqual(["/work/reports/x.md", "/work/reports/x.md"]);
+    items[1].click();
+    expect(revealed).toEqual(["/work/reports/x.md"]);
+    expect(c.querySelector(".turn-present-menu").classList.contains("open")).toBe(false);
+  });
+
+  it("收尾 assistant 的行内 code 产出路径可点;非收尾不装饰", () => {
+    const c = mount();
+    const opened = [];
+    const r = createChatRenderer(c, {
+      getContext: () => ({
+        producedPaths: () => ["out/a.txt"],
+        onOpenPath: (p) => opened.push(p)
+      })
+    });
+    const closing = assistantWith([text("done \`a.txt\`")], { closing: true, messageId: "m1" });
+    r.render([closing]);
+    const btn = c.querySelector(".mention-link");
+    expect(btn).toBeTruthy();
+    btn.click();
+    expect(opened).toEqual(["out/a.txt"]);
+    // 非 closing:同一路径保持普通 code。
+    r.render([assistantWith([text("done \`a.txt\`")], { closing: false, messageId: "m1" })]);
+    expect(c.querySelector(".mention-link")).toBeNull();
+    expect(c.querySelector(".msg-agent code")).toBeTruthy();
+  });
+
+  it("同一 assistant 流式追加复用 text 元素与冻结前缀", () => {
+    const c = mount();
+    const r = createChatRenderer(c);
+    r.render([assistantWith([text("para one\n\npara two\n\npara three")], { status: AssistantStatus.running })]);
+    const body = c.querySelector(".msg-agent");
+    const head = body.querySelector(".md-head");
+    r.render([assistantWith([text("para one\n\npara two\n\npara three four")], { status: AssistantStatus.running })]);
+    expect(c.querySelector(".msg-agent")).toBe(body);
+    expect(c.querySelector(".md-head")).toBe(head);
+    expect(c.querySelector(".md-tail").textContent).toContain("three four");
+  });
+
+  it("turnProcess 折叠头默认收起,点击展开成员,独立行不受影响", () => {
+    const c = mount();
+    const r = createChatRenderer(c);
+    const process = Object.assign(turnProcessNode({
+      turn: 1, seq: 10, controlAnchorSeq: 10, processStartSeq: 9,
+      answerAnchorSeq: 13, answerStep: 1, inlineReasoning: true,
+      messageCount: 0, toolCallCount: 1, subagentCount: 0, memberCount: 2
+    }), {});
+    const step0 = Object.assign(assistantWith([text("hmm")], { closing: false, messageId: "m0" }), { firstVisibleSeq: 10 });
+    const call = toolCallNode({ callId: "c1", name: "read", argsRaw: "{}", turn: 1, step: 0, startSeq: 11, time: 1 });
+    const answer = Object.assign(assistantWith([text("final")], { closing: true, messageId: "m1" }), { firstVisibleSeq: 13, step: 1 });
+    const user = userNode({ seq: 8, time: 1, messageId: "u1", content: [{ type: "text", text: "ask" }] });
+    r.render([user, process, step0, call, answer]);
+
+    const head = c.querySelector(".turn-process");
+    expect(head.textContent).toContain("1 tool calls");
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(c.querySelector('[data-node-id="a-1:0"]').hidden).toBe(true);
+    expect(c.querySelector('[data-node-id="t-c1"]').hidden).toBe(true);
+    // 答案与用户消息不折叠。
+    expect(c.querySelector('[data-node-id="a-1:1"]').hidden).toBe(false);
+    expect(c.querySelector('[data-node-id="u-u1"]').hidden).toBe(false);
+
+    head.click();
+    expect(head.getAttribute("aria-expanded")).toBe("true");
+    expect(c.querySelector('[data-node-id="a-1:0"]').hidden).toBe(false);
+    expect(c.querySelector('[data-node-id="t-c1"]').hidden).toBe(false);
+
+    head.click();
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(c.querySelector('[data-node-id="t-c1"]').hidden).toBe(true);
+  });
+
+  it("未知 assistant 块渲染成 JSON 入口,点击看原文", () => {
+    const c = mount();
+    createChatRenderer(c).render([assistantWith([{ type: "other", value: { type: "video", url: "https://e.com/v" } }])]);
+    const summary = c.querySelector(".unknown-summary");
+    expect(summary.textContent).toContain("video");
+    expect(c.querySelector(".msg-agent pre")).toBeNull();
+    summary.click();
+    expect(detailBody().textContent).toContain("https://e.com/v");
   });
 
   it("workflow 按 phase 渲染成员", () => {

@@ -75,6 +75,10 @@ export function createDshConnection(options) {
       await ensureStarted();
       return api.call(method, payload, timeoutMs);
     },
+    async uploadFile(sessionId, file, name) {
+      await ensureStarted();
+      return api.uploadFile(sessionId, file, name);
+    },
     async settleRemoteEvent(clientId, eventId, outcome) {
       await ensureStarted();
       return api.settleRemoteEvent(clientId, eventId, outcome);

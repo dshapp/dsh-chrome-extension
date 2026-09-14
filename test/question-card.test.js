@@ -236,7 +236,7 @@ describe("计划审阅卡", () => {
 
   it("渲染计划 markdown", () => {
     const card = build(vi.fn());
-    expect(card.querySelector(".plan-body h3")).toBeTruthy();
+    expect(card.querySelector(".plan-body h1")).toBeTruthy();
     card.dispose();
   });
 

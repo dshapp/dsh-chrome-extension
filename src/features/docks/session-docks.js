@@ -2,6 +2,7 @@
 // 对齐 macos/.../Components/Conversation/Docks.swift(GoalBar / TodoPanel / StatsLine)。
 // 全部读已有的 projections,不新增下行通道。
 import { t } from "../../shared/i18n.js";
+import { lucideIcon } from "../chat/file-icons.js";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -10,11 +11,12 @@ function el(tag, className, text) {
   return node;
 }
 
-function iconBtn(className, label, glyph) {
-  const b = el("button", className, glyph);
+function iconBtn(className, label, iconName) {
+  const b = el("button", className);
   b.type = "button";
   b.title = label;
   b.setAttribute("aria-label", label);
+  b.append(lucideIcon(iconName, { size: 14 }));
   return b;
 }
 
@@ -50,7 +52,9 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
     if (!goal) { editing = false; return; }
 
     const bar = el("div", `goal-bar phase-${goal.phase}`);
-    bar.append(el("span", "goal-glyph", "◎"));
+    const goalIcon = el("span", "goal-glyph");
+    goalIcon.append(lucideIcon("target", { size: 14 }));
+    bar.append(goalIcon);
     bar.append(el("span", "goal-label", goalPhaseLabel(goal.phase)));
 
     if (editing) {
@@ -78,10 +82,10 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
         if (e.key === "Enter") { e.preventDefault(); commit(); }
         else if (e.key === "Escape") { e.preventDefault(); editing = false; error = null; render(); }
       });
-      const save = iconBtn("goal-btn", t("goal.save"), "✓");
+      const save = iconBtn("goal-btn", t("goal.save"), "check");
       save.disabled = pending;
       save.addEventListener("click", commit);
-      const cancel = iconBtn("goal-btn", t("goal.cancel"), "×");
+      const cancel = iconBtn("goal-btn", t("goal.cancel"), "x");
       cancel.disabled = pending;
       cancel.addEventListener("click", () => { editing = false; error = null; render(); });
       bar.append(input, save, cancel);
@@ -95,20 +99,20 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
       bar.append(spacer);
 
       if (goal.phase === "paused") {
-        const resume = iconBtn("goal-btn", t("goal.resume"), "▶");
+        const resume = iconBtn("goal-btn", t("goal.resume"), "play");
         resume.disabled = pending;
         resume.addEventListener("click", () => run(onResume));
         bar.append(resume);
       } else {
-        const pause = iconBtn("goal-btn", t("goal.pause"), "⏸");
+        const pause = iconBtn("goal-btn", t("goal.pause"), "pause");
         pause.disabled = pending;
         pause.addEventListener("click", () => run(onPause));
         bar.append(pause);
       }
-      const edit = iconBtn("goal-btn", t("goal.edit"), "✎");
+      const edit = iconBtn("goal-btn", t("goal.edit"), "pencil");
       edit.disabled = pending;
       edit.addEventListener("click", () => { editing = true; error = null; render(); });
-      const clear = iconBtn("goal-btn", t("goal.clear"), "🗑");
+      const clear = iconBtn("goal-btn", t("goal.clear"), "trash-2");
       clear.disabled = pending;
       clear.addEventListener("click", () => run(onClear));
       bar.append(edit, clear);
@@ -132,6 +136,14 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
       if ((goal?.id ?? null) !== (current?.id ?? null)) { editing = false; error = null; }
       current = goal;
       render();
+    },
+    /// 快捷键:直接在条上进入编辑态。没有生效目标时返回 false(不消费按键)。
+    edit() {
+      if (!activeGoal(current)) return false;
+      editing = true;
+      error = null;
+      render();
+      return true;
     }
   };
 }
@@ -165,7 +177,7 @@ export function mountTodoPanel(container) {
     head.setAttribute("aria-expanded", String(expanded));
     const glyph = el("span", "todo-glyph");
     // lucide: list-checks(对应 Mac 的 SF Symbol "checklist")
-    glyph.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>';
+    glyph.append(lucideIcon("list-checks", { size: 14 }));
     head.append(glyph);
 
     // 分状态计数,顺序与配色对齐 Mac 的 progressLabel:已完成(绿)→ 待处理(warn)
@@ -183,8 +195,10 @@ export function mountTodoPanel(container) {
 
     // 标题就是正在做的那条:折叠着也知道 agent 在忙什么(Mac headerTitle)。
     head.append(el("span", "todo-current", active[0]?.content ?? t("todo.title")));
-    // Mac 的 chevron:展开时朝下,折叠时朝上。
-    head.append(el("span", "todo-chevron", expanded ? "⌃" : "⌄"));
+    // Mac 的 chevron:展开时朝下,折叠时朝上(lucide)。
+    const chevron = el("span", "todo-chevron");
+    chevron.append(lucideIcon(expanded ? "chevron-up" : "chevron-down", { size: 14 }));
+    head.append(chevron);
     head.addEventListener("click", () => { expanded = !expanded; render(); });
     container.append(head);
 
@@ -207,6 +221,13 @@ export function mountTodoPanel(container) {
       // 首次出现待办时自动展开一次,之后尊重用户的折叠选择。
       if (changed && todos.length && !expanded && todos.length <= 8) expanded = true;
       render();
+    },
+    /// 快捷键:展开/收起。没有待办时返回 false(不消费按键)。
+    toggle() {
+      if (!todos.length) return false;
+      expanded = !expanded;
+      render();
+      return true;
     }
   };
 }
@@ -300,32 +321,61 @@ export function formatStatsTokens(n) {
 }
 /// 统计明细的行数据(纯函数,便于单测)。popover 有纵向空间,
 /// 所以不再把所有分组挤成一行,而是拆成"标签 / 值"的键值行。
+/// 对齐 web StatsPills:会话统计与 token 用量两个对话框折叠进同一个浮层,
+/// 各带一个 section 标题；token 用量拆成计费输入四个互斥桶 + 输出。
 export function statsRows(stats, usage) {
   const rows = [];
+  // —— 会话统计分组(web StatsPills session statistics 对话框)——
   if (stats && stats.steps > 0) {
+    rows.push({ section: true, key: "stats-dialog", label: t("stats.dialogTitle"), value: "" });
     rows.push({ key: "turns", label: t("stats.turnsLabel"), value: `${stats.turns} ${t("stats.turn")} · ${stats.steps} ${t("stats.step")}` });
-    if (stats.llmMs > 0) rows.push({ key: "llm", label: "LLM", value: formatDuration(stats.llmMs) });
-    if (stats.toolMs > 0) rows.push({ key: "tool", label: t("stats.tool"), value: formatDuration(stats.toolMs) });
+    if (stats.llmMs > 0) rows.push({ key: "llm", label: "LLM", value: formatStatsDuration(stats.llmMs) });
+    if (stats.toolMs > 0) rows.push({ key: "tool", label: t("stats.tool"), value: formatStatsDuration(stats.toolMs) });
     if (stats.ttftSteps > 0 && stats.ttftMs > 0) {
-      rows.push({ key: "ttft", label: t("stats.ttft"), value: formatDuration(stats.ttftMs / stats.ttftSteps) });
+      rows.push({ key: "ttft", label: t("stats.ttft"), value: formatStatsDuration(stats.ttftMs / stats.ttftSteps) });
     }
     if (stats.decodeMs > 0 && stats.decodeTokens > 0) {
       rows.push({ key: "tps", label: t("stats.speed"), value: `${Math.round(stats.decodeTokens / (stats.decodeMs / 1000))} ${t("stats.tps")}` });
     }
   }
+  // —— token 用量分组(web StatsPills token usage 对话框)——
   if (usage) {
     // 计费输入 = 未缓存 + 缓存读 + 缓存写(三个互斥的 prompt 侧桶)。
-    const billed = (usage.uncachedInputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
+    const uncached = usage.uncachedInputTokens ?? 0;
+    const cacheRead = usage.cacheReadTokens ?? 0;
+    const cacheWrite = usage.cacheWriteTokens ?? 0;
     const output = usage.outputTokens ?? 0;
-    if (billed > 0) {
-      rows.push({ key: "input", label: t("stats.input"), value: `${formatTokens(billed)} tok` });
-      const cacheRead = usage.cacheReadTokens ?? 0;
-      // 缓存命中率只在有计费输入时才有意义(分母就是 billed)。
-      rows.push({ key: "cache", label: t("stats.cache"), value: `${Math.round(Math.min(100, Math.max(0, cacheRead / billed * 100)))}%` });
+    const billed = uncached + cacheRead + cacheWrite;
+    if (billed > 0 || output > 0) {
+      rows.push({ section: true, key: "usage-dialog", label: t("stats.usageTitle"), value: formatStatsTokens(billed + output) });
+      if (billed > 0) {
+        rows.push({ key: "cache", label: t("stats.cache"), value: `${sessionCacheHitPercent(cacheRead, billed)}%` });
+      }
+      rows.push({ key: "input", label: t("stats.input"), value: `${formatStatsTokens(uncached)} tok` });
+      rows.push({ key: "cacheRead", label: t("stats.cacheRead"), value: `${formatStatsTokens(cacheRead)} tok` });
+      if (cacheWrite !== 0) {
+        rows.push({ key: "cacheWrite", label: t("stats.cacheWrite"), value: `${formatStatsTokens(cacheWrite)} tok` });
+      }
+      rows.push({ key: "output", label: t("stats.output"), value: `${formatStatsTokens(output)} tok` });
     }
-    if (output > 0) rows.push({ key: "output", label: t("stats.output"), value: `${formatTokens(output)} tok` });
   }
   return rows;
+}
+
+/// 缓存命中占比,对齐 web formatCacheHitPercent:整数百分比优先,
+/// 一个会读成 100 的部分命中会多保留小数位保持诚实(99.9、99.99…)。
+export function sessionCacheHitPercent(cacheRead, billed) {
+  if (!Number.isFinite(billed) || billed <= 0) return null;
+  if (cacheRead >= billed) return "100";
+  const ratio = cacheRead / billed * 100;
+  for (let places = 0; places <= 6; places += 1) {
+    const scale = 10 ** places;
+    const rounded = Math.round(ratio * scale) / scale;
+    if (rounded < 100) {
+      return places === 0 ? String(Math.round(rounded)) : rounded.toFixed(places);
+    }
+  }
+  return "99.9";
 }
 
 /// 图例用的紧凑 token 数,对齐 Mac 的 ContextBreakdownPanel.formatTokens:
@@ -361,30 +411,18 @@ export function contextSegments(ratio, breakdown) {
   ].filter((part) => part.fraction > 0);
 }
 
-/// 后台任务状态 → 人读文案。对齐 Mac BackgroundJobPresentation.statusLabel。
-function jobStatusLabel(status) {
-  switch (status) {
-    case "running": return t("jobs.running");
-    case "stopping": return t("jobs.stopping");
-    case "completed": return t("jobs.completed");
-    case "killed": return t("jobs.killed");
-    case "failed": return t("jobs.failed");
-    default: return String(status ?? "");
-  }
-}
-
-/// 上下文 + 统计 + 后台任务:底栏一颗药丸(上下文占比),点击弹出详情 popover。
-/// 对齐 Mac 的 JobListAction —— 触发钮只给一个最小摘要,明细都在浮层里。
-export function mountStatsBar(trigger, menu, { onCompact } = {}) {
+/// 上下文 + 统计:底栏一颗药丸(上下文占比),点击弹出详情 popover。
+/// 后台任务不在这颗药丸里 —— 它走 header 的 JobListAction chip(见 job-list.js),
+/// 位置与 web/mac 一致。
+export function mountStatsBar(trigger, menu, { onOpenTrajectory } = {}) {
   const ring = trigger.querySelector(".stats-ring");
 
   return {
-    set({ contextPressure, sessionStats, tokenUsage, contextBreakdown, presetName, jobs }) {
+    set({ contextPressure, sessionStats, tokenUsage, contextBreakdown, presetName, trajectoryEntry = false }) {
       const ratio = contextRatio(contextPressure);
       const rows = statsRows(sessionStats, tokenUsage);
-      const jobList = Array.isArray(jobs) ? jobs : [];
-      // 上下文、统计、后台任务都没有时整颗药丸消失,底栏不留空位。
-      trigger.hidden = ratio == null && rows.length === 0 && jobList.length === 0;
+      // 上下文、统计都没有时整颗药丸消失,底栏不留空位;有轨迹入口时它必须留下。
+      trigger.hidden = ratio == null && rows.length === 0 && !(trajectoryEntry && onOpenTrajectory);
       if (trigger.hidden) {
         menu.replaceChildren();
         menu.hidePopover?.();
@@ -447,13 +485,6 @@ export function mountStatsBar(trigger, menu, { onCompact } = {}) {
           }
           wrap.append(legend);
         }
-        // 高占用才把"压缩上下文"放在手边,低占用不打扰。
-        if (ratio >= 0.75 && onCompact) {
-          const compact = el("button", "context-compact", t("context.compact"));
-          compact.type = "button";
-          compact.addEventListener("click", () => { menu.hidePopover?.(); onCompact(); });
-          wrap.append(compact);
-        }
         menu.append(wrap);
       }
       // 没有上下文读数时上面那段不会渲染,预设名在这里补一个落点。
@@ -461,28 +492,21 @@ export function mountStatsBar(trigger, menu, { onCompact } = {}) {
       if (rows.length) {
         const list = el("dl", "stats-rows");
         for (const row of rows) {
-          const dt = el("dt", "stats-row-label", row.label);
-          const dd = el("dd", "stats-row-value", row.value);
+          const section = row.section === true;
+          const dt = el("dt", section ? "stats-row-label stats-section" : "stats-row-label", row.label);
+          const dd = el("dd", section ? "stats-row-value stats-section" : "stats-row-value", row.value);
           dd.dataset.key = row.key;
           list.append(dt, dd);
         }
         menu.append(list);
       }
-      // ── 后台任务(对齐 Mac JobListAction 的明细列表)──
-      if (jobList.length) {
-        const section = el("div", "stats-jobs");
-        section.append(el("div", "stats-menu-title", t("jobs.title")));
-        for (const job of jobList) {
-          const row = el("div", "stats-job-row");
-          const live = job.status === "running" || job.status === "stopping";
-          row.classList.toggle("live", live);
-          row.append(el("span", "stats-job-label", job.label || job.kind || job.id || ""));
-          const status = el("span", "stats-job-status status-" + (job.status ?? "unknown"));
-          status.textContent = jobStatusLabel(job.status);
-          row.append(status);
-          section.append(row);
-        }
-        menu.append(section);
+      // 轨迹入口:与 Mac 一样挂在统计浮层底部(context popover 里)。
+      if (trajectoryEntry && onOpenTrajectory) {
+        const link = el("button", "stats-trajectory-link", t("trajectory.open"));
+        link.type = "button";
+        link.setAttribute("aria-label", t("trajectory.open"));
+        link.addEventListener("click", () => { menu.hidePopover?.(); onOpenTrajectory(); });
+        menu.append(link);
       }
     }
   };

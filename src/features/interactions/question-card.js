@@ -6,6 +6,7 @@
 // 状态机是纯的(interaction-flow.js),这里只负责把它画出来。
 import { t } from "../../shared/i18n.js";
 import { getToolIconSvg } from "../chat/tool-presentation.js";
+import { lucideIcon } from "../chat/file-icons.js";
 import {
   createQuestionFlow, flowCurrent, flowDraft, flowIsFirst, flowIsLast,
   flowChooseSettling, flowSetCustom, flowSkip, flowContinue, flowPrevious,
@@ -31,7 +32,8 @@ export function createQuestionCard(question, { onRespond }) {
   icon.innerHTML = getToolIconSvg("askQuestion");
   const heading = el("h3", "question-card-heading");
   const progress = el("span", "question-progress");
-  const close = el("button", "question-close", "×");
+  const close = el("button", "question-close");
+  close.append(lucideIcon("x", { size: 14 }));
   close.type = "button";
   close.setAttribute("aria-label", t("question.close"));
   close.addEventListener("click", cancel);
@@ -126,7 +128,9 @@ export function createQuestionCard(question, { onRespond }) {
       }
       copy.append(title);
       if (option.description) copy.append(el("span", "question-option-desc", option.description));
-      button.append(copy, el("span", "question-option-arrow", item.multiSelect ? "" : "→"));
+      const arrow = el("span", "question-option-arrow");
+      if (!item.multiSelect) arrow.append(lucideIcon("arrow-right", { size: 13 }));
+      button.append(copy, arrow);
       button.addEventListener("click", () => choose(option.label));
       options.append(button);
     });
@@ -148,7 +152,8 @@ export function createQuestionCard(question, { onRespond }) {
     });
     // 包一层单元格,左侧补一个 ✎ 号与选项行的圆号栏对齐(纯装饰,不参与取值)。
     const customCell = el("div", "question-custom-cell");
-    const pencil = el("span", "question-custom-key", "✎");
+    const pencil = el("span", "question-custom-key");
+    pencil.append(lucideIcon("pencil", { size: 12 }));
     pencil.setAttribute("aria-hidden", "true");
     customCell.append(pencil, custom);
     row.append(customCell);

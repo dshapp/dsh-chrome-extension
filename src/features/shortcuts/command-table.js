@@ -24,8 +24,10 @@ export const SECTIONS = ["session", "composer", "agent", "goal", "view", "page"]
 /// 命令表。chord 为 null 表示该平台故意不给和弦(只能点按钮到达)。
 ///
 /// mac 侧把 ⌃⌘ 当结构化/低频档、⌥⌘ 当"就地切换"档,和 Mac 端语言一致。
-/// win 侧高频项走单 Alt+字母(好按且 Chrome 不占,Windows 用户对 Alt 有
-/// "应用菜单"心智),次高频退到 Alt+Shift+字母。
+/// win 侧高频项仍走单 Alt+字母(好按,且 Chrome 只独占了 Alt+D/F/E/Home),
+/// 但两类别碰:Alt+F/Alt+E 是 Chrome 主菜单、Alt+Shift 是 Windows 输入法
+/// 切换(装了中英双输入法几乎必绑)。所以次高频改用 Ctrl+Shift,方向键/符号
+/// 档用 Ctrl+Alt(AltGr 对方向键与标点不产字符,不会变字符输入)。
 export const COMMANDS = [
   // ---- 会话 ----
   {
@@ -46,11 +48,11 @@ export const COMMANDS = [
   },
   {
     id: "previousSession", section: "session", titleKey: "sc.previousSession",
-    mac: chord("arrowleft", MOD.primary | MOD.control), win: chord("arrowleft", MOD.alt | MOD.shift)
+    mac: chord("arrowleft", MOD.primary | MOD.control), win: chord("arrowleft", MOD.primary | MOD.alt)
   },
   {
     id: "nextSession", section: "session", titleKey: "sc.nextSession",
-    mac: chord("arrowright", MOD.primary | MOD.control), win: chord("arrowright", MOD.alt | MOD.shift)
+    mac: chord("arrowright", MOD.primary | MOD.control), win: chord("arrowright", MOD.primary | MOD.alt)
   },
   {
     id: "renameSession", section: "session", titleKey: "sc.renameSession",
@@ -66,7 +68,7 @@ export const COMMANDS = [
   },
   {
     id: "findInSession", section: "session", titleKey: "sc.findInSession",
-    mac: chord("f", MOD.primary | MOD.alt), win: chord("f", MOD.alt)
+    mac: chord("f", MOD.primary | MOD.shift), win: chord("f", MOD.primary | MOD.shift)
   },
   {
     id: "copyLastResponse", section: "session", titleKey: "sc.copyLastResponse",
@@ -88,11 +90,11 @@ export const COMMANDS = [
   },
   {
     id: "focusComposer", section: "composer", titleKey: "sc.focusComposer",
-    mac: chord("l", MOD.primary | MOD.control), win: chord("l", MOD.alt | MOD.shift)
+    mac: chord("l", MOD.primary | MOD.control), win: chord("l", MOD.primary | MOD.shift)
   },
   {
     id: "clearDraft", section: "composer", titleKey: "sc.clearDraft",
-    mac: chord("backspace", MOD.primary | MOD.alt), win: chord("backspace", MOD.alt | MOD.shift)
+    mac: chord("backspace", MOD.primary | MOD.alt), win: chord("backspace", MOD.primary | MOD.shift)
   },
   {
     id: "removeLastAttachment", section: "composer", titleKey: "sc.removeLastAttachment",
@@ -103,7 +105,7 @@ export const COMMANDS = [
   // ---- 智能体 ----
   {
     id: "choosePermission", section: "agent", titleKey: "sc.choosePermission",
-    mac: chord("p", MOD.primary | MOD.alt), win: chord("p", MOD.alt)
+    mac: chord("p", MOD.primary | MOD.shift), win: chord("p", MOD.alt)
   },
   {
     id: "permissionReadOnly", section: "agent", titleKey: "sc.permissionReadOnly",
@@ -131,11 +133,11 @@ export const COMMANDS = [
   },
   {
     id: "increaseEffort", section: "agent", titleKey: "sc.increaseEffort",
-    mac: chord("arrowup", MOD.primary | MOD.alt), win: chord("arrowup", MOD.alt | MOD.shift)
+    mac: chord("arrowup", MOD.primary | MOD.alt | MOD.shift), win: chord("arrowup", MOD.primary | MOD.alt)
   },
   {
     id: "decreaseEffort", section: "agent", titleKey: "sc.decreaseEffort",
-    mac: chord("arrowdown", MOD.primary | MOD.alt), win: chord("arrowdown", MOD.alt | MOD.shift)
+    mac: chord("arrowdown", MOD.primary | MOD.alt | MOD.shift), win: chord("arrowdown", MOD.primary | MOD.alt)
   },
   {
     id: "chooseAgentPreset", section: "agent", titleKey: "sc.chooseAgentPreset",
@@ -143,7 +145,7 @@ export const COMMANDS = [
   },
   {
     id: "exitPlanMode", section: "agent", titleKey: "sc.exitPlanMode",
-    mac: chord("p", MOD.primary | MOD.control), win: chord("p", MOD.alt | MOD.shift)
+    mac: chord("p", MOD.primary | MOD.control), win: chord("p", MOD.primary | MOD.shift)
   },
   {
     id: "showSubagents", section: "agent", titleKey: "sc.showSubagents",
@@ -165,11 +167,11 @@ export const COMMANDS = [
   },
   {
     id: "editGoal", section: "goal", titleKey: "sc.editGoal",
-    mac: chord("e", MOD.primary | MOD.control), win: chord("e", MOD.alt)
+    mac: chord("e", MOD.primary | MOD.control), win: chord("e", MOD.primary | MOD.shift)
   },
   {
     id: "toggleGoalPause", section: "goal", titleKey: "sc.toggleGoalPause",
-    mac: chord("g", MOD.primary | MOD.alt), win: chord("g", MOD.alt | MOD.shift)
+    mac: chord("g", MOD.primary | MOD.alt), win: chord("g", MOD.primary | MOD.alt)
   },
   {
     id: "clearGoal", section: "goal", titleKey: "sc.clearGoal",
@@ -183,7 +185,7 @@ export const COMMANDS = [
   },
   {
     id: "openSettings", section: "view", titleKey: "sc.openSettings",
-    mac: chord(",", MOD.primary | MOD.control), win: chord(",", MOD.alt | MOD.shift)
+    mac: chord(",", MOD.primary | MOD.control), win: chord(",", MOD.primary | MOD.shift)
   },
   {
     id: "keyboardShortcuts", section: "view", titleKey: "sc.keyboardShortcuts",
@@ -197,7 +199,7 @@ export const COMMANDS = [
   },
   {
     id: "togglePageContext", section: "page", titleKey: "sc.togglePageContext",
-    mac: chord(".", MOD.primary | MOD.alt), win: chord(".", MOD.alt | MOD.shift)
+    mac: chord(".", MOD.primary | MOD.alt), win: chord(".", MOD.primary | MOD.shift)
   }
 ];
 

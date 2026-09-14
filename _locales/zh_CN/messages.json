@@ -1,0 +1,8 @@
+{
+  "extDescription": {
+    "message": "让 DeepSeek Harness 智能体通过本地 MCP daemon 驱动此浏览器,并在侧边栏提供 DSH AI 对话。"
+  },
+  "openSidepanel": {
+    "message": "打开 DSH AI 侧栏"
+  }
+}

@@ -52,7 +52,19 @@ export function createSidepanelDependencies(options = {}) {
     goals: options.goals || createGoalService(connection),
     // '@' 浮层的额外候选来源(可插拔契约,见 trigger-menu.js 的 extraSources)。
     mentionSources: options.mentionSources || [],
-    attachments: options.attachments || createAttachmentTray(),
+    attachments: options.attachments || createAttachmentTray({
+      // 非图片文件走 session/uploadFileBinary 真上传。上传需要当前会话 id,
+      // 拿不到时抛 attach.noSession,由 addFile 的上层转 toast。
+      uploadFile: async (file) => {
+        const sessionId = sessions.currentSessionId;
+        if (!sessionId) {
+          const error = new Error("attach.noSession");
+          error.i18nKey = "attach.noSession";
+          throw error;
+        }
+        return connection.uploadFile(sessionId, file);
+      }
+    }),
     // 通知点击的交接:worker 写 pending sessionId,侧栏领取后切会话。
     pendingSessionOpen: options.pendingSessionOpen || createPendingSessionOpen(),
     DshStreamState,

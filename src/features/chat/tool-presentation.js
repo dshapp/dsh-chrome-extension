@@ -1,8 +1,8 @@
 // 工具名称 → 视觉语义(图标/分类)。图标全部取自 Lucide(https://github.com/lucide-icons/lucide,ISC),
-// 使用官方 24×24 网格的原始路径几何,未做改画;仅把 stroke-width 从 2 调到 1.7 以适配 14–16px 的渲染尺寸。
+// 使用官方 24×24 网格的原始路径几何与默认 stroke-width=2,未做改画。
 // 因为 Lucide 已在同一网格上做过统一的光学对齐,这里不再叠加自定义包围盒校准。仅用于 UI,不参与协议。
 
-const LUCIDE_STROKE = 1.7;
+const LUCIDE_STROKE = 2;
 // key → [lucide 图标名, 路径体]。保留 lucide 名字便于日后核对上游。
 const LUCIDE_ICONS = Object.freeze({
   globe: ["globe", '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>'],

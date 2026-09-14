@@ -1,5 +1,6 @@
-/* 工具调用行 */
-.tool-row { align-self: flex-start; width: 100%; margin-block: 0.25rem; }
+/* 工具调用行。外边距清零:间距由 #msg-list 的 rowSpacing(2px)统一供给,
+   一串工具卡/思考行才会像 Mac 端那样紧排。 */
+.tool-row { align-self: flex-start; width: 100%; }
 .tool-header {
   display: flex;
   align-items: center;
@@ -44,18 +45,18 @@
 }
 .tool-label.done { color: var(--text-faint); }
 .tool-label.error { color: var(--danger); }
-.dropdown-chevron { width: 12px; height: 12px; flex-shrink: 0; }
-.tool-chevron { color: var(--text-dim); transition: transform .15s; }
-.tool-label.done + .tool-chevron { color: var(--text-faint); }
-.tool-label.error + .tool-chevron { color: var(--danger); }
-/* 详情已改为弹窗承载:记录流里不再有 .tool-body,箭头也不再旋转 */
-/* 无详情内容:隐藏箭头,行不可点开 */
-.tool-row.no-detail .tool-chevron { display: none; }
+/* 可点路径:reset 成与 .tool-label 同构的内联按钮,热区只覆盖文字本身。 */
+.tool-label.tool-path {
+  border: 0; background: none; padding: 0; margin: 0;
+  font: inherit; font-size: 0.8125rem; text-align: start; cursor: pointer;
+}
+.tool-label.tool-path:hover { color: var(--accent); }
+/* 无详情内容:行不可点开 */
 .tool-row.no-detail .tool-header { cursor: default; }
 .tool-row.no-detail .tool-header:hover { background: none; }
 
 /* 连续工具调用:第一项保持单行,第二项出现后升级为两级折叠组。 */
-.tool-group { align-self: flex-start; width: 100%; margin-block: 0.25rem; }
+.tool-group { align-self: flex-start; width: 100%; }
 .tool-group-header {
   display: flex;
   align-items: center;
@@ -125,8 +126,9 @@
 .tool-group[data-state="error"] .tool-group-icon { color: var(--danger); }
 .tool-group[data-state="running"] .tool-group-icon { animation: tool-icon-pulse 1.4s ease-in-out infinite; }
 
-/* 思考气泡:记录里只有入口行,全文在详情弹窗 */
-.thinking-bubble { align-self: flex-start; width: 100%; margin-block: 0.25rem; }
+/* 思考气泡:记录里只有入口行,全文在详情弹窗。作为 step 内部块,
+   与正文的间距由 .msg-turn > * + * 的 blockSpacing(8px)供给。 */
+.thinking-bubble { align-self: flex-start; width: 100%; }
 .thinking-header {
   display: flex;
   align-items: center;
@@ -145,8 +147,16 @@
 }
 .thinking-header:hover { background: var(--bg-raised); }
 .thinking-icon { font-size: 12px; flex-shrink: 0; opacity: 0.7; }
-.thinking-title { font-size: 0.8125rem; color: var(--text-dim); }
-.thinking-chevron { color: var(--text-faint); margin-left: auto; }
+/* 摘要行 = 思考文本的第一行:单行截断,metadata 色(对齐 Mac 的 labelTertiary) */
+.thinking-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--text-faint);
+}
 /* 正文只在弹窗里出现,不再自带滚动条(弹窗有统一的那一条) */
 .thinking-body {
   /* 分片渲染要求它是 <pre>(见 openChunkedTextDetail);<pre> 默认等宽字体并带

@@ -8,8 +8,10 @@ import { t } from "../../shared/i18n.js";
 
 export function mountAttachmentControls({ elements, deps, showToast, formatError = (error) => error?.message ?? String(error), onChange, root = document.body }) {
   function render() {
-    renderAttachmentTray(elements.previewStrip, deps.attachments.pending, {
-      onRemove: (index) => deps.attachments.remove(index)
+    // visible 含失败/上传中的文件项与已读入图片;pending(已就绪)只供发送层。
+    renderAttachmentTray(elements.previewStrip, deps.attachments.visible ?? deps.attachments.all ?? deps.attachments.pending, {
+      onRemove: (index) => deps.attachments.remove(index),
+      onRetry: (index) => { void deps.attachments.retry?.(index); }
     });
     onChange();
   }
@@ -43,7 +45,7 @@ export function mountAttachmentControls({ elements, deps, showToast, formatError
   const dropZone = mountDropZone(root, {
     overlay: elements.dropOverlay,
     onFiles: (files) => { void addFiles(files); },
-    onRejected: () => showToast(t("attach.dropNeedsImage")),
+    onRejected: () => showToast(t("attach.dropFolder")),
     // 输入框禁用(会话未就绪/被交互卡接管)时不收,与发送键的禁用态一致。
     isEnabled: () => !elements.input.disabled
   });

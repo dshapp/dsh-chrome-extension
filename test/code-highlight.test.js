@@ -74,6 +74,31 @@ describe("代码块着色", () => {
     await expect(highlightCodeBlocks(mount("普通段落"))).resolves.toBeUndefined();
   });
 
+  it("视口门控:未进入视口不着色,进入后才着色", async () => {
+    const observed = [];
+    const callbacks = [];
+    class FakeIO {
+      constructor(cb) { this.cb = cb; callbacks.push(cb); }
+      observe(target) { observed.push(target); }
+      unobserve() {}
+      disconnect() {}
+    }
+    const previous = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = FakeIO;
+    try {
+      const root = mount("```javascript\nconst a = 1;\n```");
+      await highlightCodeBlocks(root);
+      const code = codes(root)[0];
+      expect(code.dataset.highlighted).toBeUndefined();
+      expect(observed).toHaveLength(1);
+      // 模拟该块滚入视口。
+      callbacks[0]([{ isIntersecting: true, target: observed[0] }]);
+      expect(code.dataset.highlighted).toBe("javascript");
+    } finally {
+      globalThis.IntersectionObserver = previous;
+    }
+  });
+
   it("着色不改变代码的可读文本(复制按钮仍拿到原文)", async () => {
     const source = "const a = 1;";
     const root = mount(`\`\`\`javascript\n${source}\n\`\`\``);
