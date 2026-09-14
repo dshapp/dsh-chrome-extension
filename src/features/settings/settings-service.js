@@ -21,6 +21,25 @@ export function jsonPathExists(root, path) {
   return jsonValueAt(path, root) !== undefined;
 }
 
+/// 两个草稿对象之间的最小 set/unset 路径操作(对齐 web ProviderEditor.pathOps):
+/// 只命名 after 里出现过的键,值相同的键不发 op,消失的键发 unset。
+/// basePath 是这段子树在命名空间里的设置路径。
+export function profilePathOps(basePath, before, after) {
+  const isPlainObject = (value) =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  const previous = isPlainObject(before) ? before : {};
+  const next = isPlainObject(after) ? after : {};
+  const ops = [];
+  for (const [key, value] of Object.entries(next)) {
+    if (JSON.stringify(previous[key]) === JSON.stringify(value)) continue;
+    ops.push({ op: "set", path: [...basePath, key], value });
+  }
+  for (const key of Object.keys(previous)) {
+    if (!(key in next)) ops.push({ op: "unset", path: [...basePath, key] });
+  }
+  return ops;
+}
+
 /// 由 provider 路由 id 推导凭证引用名。对齐 Mac deriveKeyRef。
 export function deriveKeyRef(provider) {
   return `${String(provider ?? "").replace(/[^a-zA-Z0-9]+/g, "_").toUpperCase()}_API_KEY`;
@@ -69,6 +88,51 @@ export function formatCapacitySpelling(tokens) {
   return String(tokens);
 }
 
+/// 把一条已存模型对象摊成编辑器行。原始对象存在 raw 里,编辑器只拥有
+/// id / 名称 / 两个容量字段,其余(description、compat、inputModalities、
+/// reasoning 等)原样带着走 —— 整表重写时不能把它们丢掉。对齐 web 的
+/// DeepSeekModelDraft 与 ModelListEditor。
+export function catalogRowFromModel(model) {
+  const raw = typeof model === "object" && model !== null && !Array.isArray(model) ? model : {};
+  return {
+    raw: { ...raw },
+    modelId: typeof raw.id === "string" ? raw.id : "",
+    name: typeof raw.name === "string" ? raw.name : "",
+    contextWindow: formatCapacitySpelling(typeof raw.contextWindow === "number" ? raw.contextWindow : null),
+    maxTokens: formatCapacitySpelling(typeof raw.maxTokens === "number" ? raw.maxTokens : null)
+  };
+}
+
+/// 一组已存模型 → 编辑器行。
+export function catalogRowsFromModels(models) {
+  return (Array.isArray(models) ? models : []).map(catalogRowFromModel);
+}
+
+/// 从 profile 的 models 数组还原编辑器行。
+export function hydrateCatalogRows(settingsPath, namespaceValue) {
+  const profile = jsonValueAt(settingsPath, namespaceValue);
+  return catalogRowsFromModels(profile?.models);
+}
+
+/// 一行草稿折回模型对象:清空的字段要真正离开对象(交回适配器默认),
+/// 其余未知字段从 raw 原样保留。
+export function catalogRowToModel(row) {
+  const entry = { ...(row.raw ?? {}) };
+  // 就地赋值而不是先删后加:已有的键保持原来的位置,键序不变 —— 否则
+  // 一行没动过的目录在 JSON.stringify 比较里也会显得"脏了"。
+  const apply = (key, value) => {
+    if (value === undefined || value === null || value === "") delete entry[key];
+    else entry[key] = value;
+  };
+  apply("id", String(row.modelId ?? "").trim());
+  apply("name", String(row.name ?? "").trim());
+  const context = parseCapacitySpelling(row.contextWindow);
+  apply("contextWindow", context != null ? context : undefined);
+  const maxTokens = parseCapacitySpelling(row.maxTokens);
+  apply("maxTokens", maxTokens != null ? maxTokens : undefined);
+  return entry;
+}
+
 /// 模型目录逐行校验,返回首个错误 {kind, index}(index 为 0 基)。
 export function validateCatalogRows(rows) {
   const seen = new Set();
@@ -77,8 +141,6 @@ export function validateCatalogRows(rows) {
     if (!id) return { kind: "idRequired", index };
     if (seen.has(id)) return { kind: "duplicate", index };
     seen.add(id);
-    const name = String(row.name ?? "");
-    if (name !== name.trim()) return { kind: "nameInvalid", index };
     const contextWindow = parseCapacitySpelling(row.contextWindow);
     if (String(row.contextWindow ?? "").trim()
       && (!Number.isInteger(contextWindow) || contextWindow <= 0)) {
@@ -94,22 +156,13 @@ export function validateCatalogRows(rows) {
 }
 
 /// 模型目录写回 op;rows 全空且已存目录时是 unset(回到适配器自带列表),
-/// 全空且本来就没存过则不产生 op。对齐 Mac modelCatalogOp。
+/// 全空且本来就没存过则不产生 op。
 export function modelCatalogOp(rows, settingsPath, savedCatalogPresent) {
   const path = [...settingsPath, "models"];
   const entries = [];
   for (const row of rows) {
-    const id = String(row.modelId ?? "").trim();
-    if (!id) continue;
-    const entry = { id };
-    const name = String(row.name ?? "").trim();
-    if (name) entry.name = name;
-    const context = parseCapacitySpelling(row.contextWindow);
-    if (context != null) entry.contextWindow = context;
-    const maxTokens = parseCapacitySpelling(row.maxTokens);
-    if (maxTokens != null) entry.maxTokens = maxTokens;
-    if (row.supportsImage) entry.input = ["text", "image"];
-    entries.push(entry);
+    if (!String(row.modelId ?? "").trim()) continue;
+    entries.push(catalogRowToModel(row));
   }
   if (!entries.length) {
     return savedCatalogPresent ? { op: "unset", path } : null;
@@ -117,32 +170,24 @@ export function modelCatalogOp(rows, settingsPath, savedCatalogPresent) {
   return { op: "set", path, value: entries };
 }
 
+/// 容量文本的等价归一(空值 / 无法识别都算空),用于脏值比较。
+function normalizedCapacityText(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return "";
+  return formatCapacitySpelling(parseCapacitySpelling(trimmed));
+}
+
 /// 编辑器里的行是否与已存目录完全一致 —— 一致则 Save 不该可点。
-/// 归一化用户可以随手改而语义不变的部分:首尾空白、容量拼写。
+/// 只比编辑器真正拥有的字段;raw 里的未知字段不参与比较。
 export function modelCatalogMatchesSaved(rows, saved) {
   if (rows.length !== saved.length) return false;
   return rows.every((row, index) => {
     const stored = saved[index];
-    return String(row.modelId ?? "").trim() === (stored.modelId ?? "")
-      && String(row.name ?? "").trim() === (stored.name ?? "")
-      && formatCapacitySpelling(parseCapacitySpelling(row.contextWindow)) === (stored.contextWindow ?? "")
-      && formatCapacitySpelling(parseCapacitySpelling(row.maxTokens)) === (stored.maxTokens ?? "")
-      && Boolean(row.supportsImage) === Boolean(stored.supportsImage);
+    return String(row.modelId ?? "").trim() === String(stored.modelId ?? "").trim()
+      && String(row.name ?? "").trim() === String(stored.name ?? "").trim()
+      && normalizedCapacityText(row.contextWindow) === normalizedCapacityText(stored.contextWindow)
+      && normalizedCapacityText(row.maxTokens) === normalizedCapacityText(stored.maxTokens);
   });
-}
-
-/// 从已存 profile 还原编辑器行。
-export function hydrateCatalogRows(settingsPath, namespaceValue) {
-  const profile = jsonValueAt(settingsPath, namespaceValue);
-  const models = Array.isArray(profile?.models) ? profile.models : [];
-  return models.map((model) => ({
-    modelId: String(model?.id ?? ""),
-    name: String(model?.name ?? ""),
-    contextWindow: formatCapacitySpelling(model?.contextWindow ?? null),
-    maxTokens: formatCapacitySpelling(model?.maxTokens ?? null),
-    supportsImage: Array.isArray(model?.input) && model.input.includes("image"),
-    existing: true
-  }));
 }
 
 /// 「获取可用模型」是否有钥匙可用:编辑器里刚填的、该提供方压根不需要、
@@ -335,27 +380,6 @@ export function createSettingsService(connection) {
         hasDocument: settingsResult?.hasDocument === true,
         credentialError
       };
-    },
-
-    /// 保存一次编辑:profile 路径 op 先落,再落至多一次凭证写入 —— 密钥必须
-    /// 晚于命名它的 profile,否则一个还没有 apiKeyEnv 的提供方会静默丢钥匙。
-    async saveProvider(row, ops, apiKey) {
-      const key = String(apiKey ?? "").trim();
-      const failure = apiKeyFailure(apiKey);
-      if (failure) throw new Error(failure === "blank" ? "keyBlank" : "keyFormat");
-      const keyLocked = row.credential?.configured === true && row.credential?.writable === false;
-      if (key && keyLocked) throw new Error("keyLocked");
-      const settingsOps = [...ops];
-      const ref = row.apiKeyEnv ?? deriveKeyRef(row.entry.provider);
-      if (key && row.apiKeyEnv == null) {
-        settingsOps.push({ op: "set", path: [...row.entry.settingsPath, "apiKeyEnv"], value: ref });
-      }
-      let view = null;
-      if (settingsOps.length) {
-        view = await this.mutate(row.entry.settingsNs, settingsOps, row.expectedRevision);
-      }
-      if (key) await this.setCredential(ref, key);
-      return view;
     },
 
     /// 删除用户自有 profile:凭证先走,两步都幂等。

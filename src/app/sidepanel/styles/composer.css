@@ -1369,6 +1369,49 @@
 .cat-check { display: flex; justify-content: center; }
 .cat-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 11px; }
 
+/* 提供方编辑器:折叠的「自定义设置」。 */
+.set-details { border-top: 1px solid var(--border-soft); }
+.set-details > summary {
+  padding: 9px 11px; cursor: pointer; font-size: 12.5px; color: var(--text);
+  list-style: none; display: flex; align-items: center; gap: 6px;
+}
+.set-details > summary::-webkit-details-marker { display: none; }
+.set-details > summary::before { content: "▸"; color: var(--text-faint); font-size: 10px; }
+.set-details[open] > summary::before { content: "▾"; }
+.set-details-body {
+  border-top: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--border-soft) 45%, transparent);
+}
+
+/* 模型目录:两列(id / 名称)+ 行内容量折叠 + 候选勾选面板。 */
+.mle-head { display: flex; align-items: center; gap: 8px; padding: 9px 11px; }
+.mle-heading { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; }
+.mle-title { font-size: 12.5px; font-weight: 600; }
+.mle-meta { font-size: 11px; color: var(--text-faint); }
+.mle-row {
+  display: grid; grid-template-columns: 1.6fr 1.2fr auto auto;
+  gap: 5px; align-items: center; padding: 5px 11px;
+}
+.mle-row .set-input { font-size: 11.5px; padding: 4px 6px; }
+.mle-advanced { display: flex; gap: 8px; padding: 2px 11px 7px; }
+.mle-field { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.mle-field-label { font-size: 10.5px; color: var(--text-faint); }
+.mle-empty { padding: 6px 11px; }
+.mle-picker {
+  margin: 6px 11px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-input); padding: 8px;
+}
+.mle-picker-head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.mle-picker-head .set-input { flex: 1; }
+.mle-candidates { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.mle-candidate {
+  display: flex; align-items: center; gap: 7px; font-size: 12px;
+  padding: 3px 4px; border-radius: 6px; cursor: pointer;
+}
+.mle-candidate:hover { background: var(--border-soft); }
+.mle-candidate-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+.mle-picker-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+
 /* 设置页内的模态:提供方编辑器 / 自定义提供方 / 预设查看 / 删除确认。 */
 #settings-sheet {
   /* 视口居中:top-layer 的 <dialog> 靠 inset:0 + margin:auto 在两个轴上都居中。

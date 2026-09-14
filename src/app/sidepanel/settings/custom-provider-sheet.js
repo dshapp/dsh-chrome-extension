@@ -1,100 +1,178 @@
-// 自定义提供方弹窗。对齐 macos/.../Settings/SettingsRoot.swift CustomProviderSheet。
+// 自定义提供方弹窗。对齐 web 的 CustomProviderCard:
 //
-// 字段分组照 Mac 侧调整后的顺序:标识(路由/显示名)→ 连接(地址 → 密钥 → 协议)
-// → 模型(模型 ID / 拉取列表)。密钥挨着地址,是因为这两个字段就是自动拉取等的
-// 那一对;协议有可用默认值,放最后作为可选调整。
+// - 路由 id 在被"选择",所以地址还不存在:一个 mutate 把整份 profile 写在
+//   providers.<route> 下,密钥随后单独经 credentials/set 落在 profile 记录的引用上;
+// - 路由 id 必须匹配小写标识、且不与已有路由重名;地址必须是 http(s) URL;
+//   至少一个模型 —— 这些闸门在提交前就报错,而不是写下去让宿主拒绝;
+// - profile 落盘后字段冻结,重试只补密钥(那条 mutate 的 revision 已被自己顶掉,
+//   再发一次只会得到 settings/conflict);
+// - 密钥留空是合法的:该路由走提供方原生认证(getenv / ADC)。
 import { t } from "../../../shared/i18n.js";
 import {
   section, stackedRow, select, textInput, button, notice, escapeHtml
 } from "./settings-ui.js";
-import { deriveKeyRef, autoFetchEndpointKey, shouldAutoFetchModels } from "../../../features/settings/settings-service.js";
+import {
+  deriveKeyRef, apiKeyFailure, jsonValueAt
+} from "../../../features/settings/settings-service.js";
+import { createModelCatalogEditor } from "./model-list-editor.js";
 
 const ROUTE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const NS = "llm-pi-ai";
 
-/// 地址或密钥改动后,等这么久没有新输入才真正发请求。两个字段都是逐字符
-/// 输入/粘贴的,不防抖就是每敲一个字符打一次网关。
-const AUTO_FETCH_DELAY_MS = 600;
+const KEY_FAILURE_TEXT = { blank: "prov.keyBlank", illegalCharacters: "prov.keyFormatInvalid" };
 
-/// 从 schema 里取自定义提供方支持的 api 协议列表。宿主用 ref 图表达联合类型,
-/// 所以走一遍 refs 找 const 字面量。
+/// 从 schema 里取自定义提供方支持的 api 协议列表。宿主序列化的是 schemastery
+/// 的 ref 图({ uid, refs }),必须沿 providers.<任意路由>.api 走到那个 union 节点,
+/// 而不是把所有 const 字面量捞出来按前缀筛 —— 提供方路由 id(如
+/// `azure-openai-responses`)也是 const,会被错当成协议发给宿主,写入被拒。
 export function protocolChoices(schema) {
-  const refs = schema?.refs;
-  if (!refs || typeof refs !== "object") return [];
-  const values = new Set();
-  for (const node of Object.values(refs)) {
-    if (node?.type === "const" && typeof node.value === "string") values.add(node.value);
+  if (!schema || typeof schema !== "object") return [];
+  const refs = schema.refs && typeof schema.refs === "object" ? schema.refs : {};
+  const resolve = (node) => (typeof node === "number" ? refs[String(node)] : node);
+  let node = resolve(schema.uid);
+  for (const key of ["providers", "__probe__", "api"]) {
+    if (!node || typeof node !== "object") return [];
+    if (node.type === "object") node = resolve(node.dict?.[key]);
+    else if (node.type === "dict" || node.type === "array") node = resolve(node.inner);
+    else return [];
   }
-  // const 池里混着 provider 名等其它字面量,挑出常见协议名。
-  return [...values].filter((value) => /^(openai|anthropic|google|bedrock|azure)/i.test(value));
+  if (!node || node.type !== "union" || !Array.isArray(node.list)) return [];
+  return node.list
+    .map((entry) => resolve(entry))
+    .map((entry) => entry?.value)
+    .filter((value) => typeof value === "string" && value.length > 0);
+}
+
+function isHttpUrl(value) {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/// 已在 llm-pi-ai 下声明的路由 id:目录行 + 用户/基线层的 providers 键。
+export function declaredRoutes(state) {
+  const taken = new Set();
+  for (const row of state?.rows ?? []) {
+    if (row.entry.settingsNs === NS) taken.add(row.entry.provider);
+  }
+  const namespace = state?.namespaces?.get(NS);
+  for (const source of [namespace?.user, namespace?.base]) {
+    const providers = jsonValueAt(["providers"], source);
+    if (providers && typeof providers === "object") for (const key of Object.keys(providers)) taken.add(key);
+  }
+  return [...taken];
 }
 
 export function openCustomProvider({ state, sheet, deps, settingsService, translateSaveError, onDone }) {
-  const protocols = protocolChoices(state?.namespaces.get("llm-pi-ai")?.schema);
-  const draft = {
-    routeId: "", displayName: "", baseURL: "", modelId: "", apiKey: "",
-    api: protocols[0] ?? ""
-  };
+  const namespace = state?.namespaces.get(NS);
+  const protocols = protocolChoices(namespace?.schema);
+  const taken = declaredRoutes(state);
+  const openedAt = namespace?.revision;
+
+
+  const draft = { routeId: "", displayName: "", baseURL: "", api: protocols[0] ?? "", apiKey: "" };
   let saving = false;
   let profileCommitted = false;
   let message = null;
-  // 拉取到的模型列表。非空时模型 ID 只以下拉框出现 —— 文本框是「网关不支持列
-  // 目录」时的手动兜底,两者同时在场会变成两个绑定同一个值的「模型 ID」字段。
-  let discoveredModels = [];
-  let discovery = null;
-  let fetching = false;
-  /// 已尝试过的 endpoint(地址+密钥)。在 await 之前就写入,所以失败也不会
-  /// 自动重试同一组,避免密钥打错时循环打网关。
-  let fetchedFrom = null;
-  let autoFetchTimer = null;
 
-  const routeValid = () => ROUTE_ID_PATTERN.test(draft.routeId);
-  const canSave = () => (profileCommitted
-    ? Boolean(draft.apiKey) && !saving
-    : routeValid() && Boolean(draft.baseURL) && Boolean(draft.modelId) && Boolean(draft.api) && !saving);
-  const canFetch = () => Boolean(String(draft.baseURL).trim()) && Boolean(draft.apiKey) && !fetching;
-
-  function modelsBody() {
-    // 拉到列表后只留下拉框;拉取按钮也一并收起 —— 已经有列表了,重拉的入口
-    // 是改地址或密钥。
-    if (discoveredModels.length) {
-      return stackedRow({
-        label: escapeHtml(t("custom.modelPick")),
-        control: select({
-          id: "cst-model-pick",
-          options: discoveredModels.map((id) => ({ value: id, label: id, selected: id === draft.modelId })),
-          disabled: profileCommitted
-        })
-      }) + (discovery ? `<div class="set-row-hint">${escapeHtml(discovery)}</div>` : "");
+  const editor = createModelCatalogEditor({
+    allowFetch: true,
+    discover: (request) => settingsService.discoverModels(request),
+    formatErrorDetails: (error) => deps.formatErrorDetails(error),
+    requestRender: (mode) => { if (mode === "hard") repaint(); else repaintSoft(); },
+    context: () => {
+      const failure = apiKeyFailure(draft.apiKey);
+      const normalized = draft.baseURL.trim();
+      return {
+        disabled: saving || profileCommitted,
+        probeEnabled: Boolean(normalized) || Boolean(draft.routeId),
+        probeBlocked: normalized && !isHttpUrl(normalized) ? "custom.baseUrlInvalid"
+          : failure ? KEY_FAILURE_TEXT[failure] : undefined,
+        probe: {
+          settingsNs: NS,
+          ...(draft.routeId ? { provider: draft.routeId } : {}),
+          ...(normalized ? { baseURL: normalized } : {}),
+          ...(draft.api ? { api: draft.api } : {}),
+          ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {})
+        },
+        capacityPlaceholders: {}
+      };
     }
-    return stackedRow({
-      label: escapeHtml(t("custom.modelId")),
-      control: textInput({ id: "cst-model", value: draft.modelId, placeholder: "gpt-4o-mini", mono: true, disabled: profileCommitted })
-    })
-    + `<div class="cat-actions">`
-    + button({
-      id: "cst-fetch",
-      label: fetching ? t("custom.fetching") : t("custom.fetchModels"),
-      title: canFetch() ? t("cat.fetchHelp") : t("custom.fetchNeedsInput"),
-      disabled: !canFetch() || profileCommitted
-    })
-    + `</div>`
-    + (discovery ? `<div class="set-row-hint">${escapeHtml(discovery)}</div>` : "");
+  });
+  editor.setRows([], false);
+
+  const routeInvalid = () => draft.routeId.length > 0 && !ROUTE_ID_PATTERN.test(draft.routeId);
+  const routeTaken = () => taken.includes(draft.routeId);
+  const baseUrlInvalid = () => draft.baseURL.length > 0 && !isHttpUrl(draft.baseURL.trim());
+  const keyFailure = () => apiKeyFailure(draft.apiKey);
+
+  function ready() {
+    return draft.routeId.length > 0 && !routeInvalid() && !routeTaken()
+      && draft.baseURL.trim().length > 0 && !baseUrlInvalid()
+      && editor.rows.length > 0 && !editor.validation() && !keyFailure();
+  }
+
+  function canSave() {
+    if (saving) return false;
+    if (profileCommitted) return Boolean(draft.apiKey.trim());
+    return ready();
+  }
+
+  function catalogFailureText() {
+    const failure = editor.validation();
+    if (!failure) return null;
+    const text = {
+      idRequired: "cat.rowIdRequired", duplicate: "cat.rowDuplicateId",
+      contextInvalid: "cat.rowContextUnreadable", maxTokensInvalid: "cat.rowMaxTokensUnreadable"
+    };
+    return t(text[failure.kind], { row: failure.index + 1 });
+  }
+
+  function routeErrorHtml() {
+    if (routeInvalid()) return notice(t("custom.idInvalid"));
+    if (routeTaken()) return notice(t("custom.routeTaken"));
+    return "";
+  }
+
+  function baseUrlErrorHtml() {
+    return baseUrlInvalid() ? notice(t("custom.baseUrlInvalid")) : "";
+  }
+
+  function keyErrorHtml() {
+    const failure = keyFailure();
+    if (!failure) return "";
+    return notice(t(profileCommitted ? "prov.keyBlank" : KEY_FAILURE_TEXT[failure]));
+  }
+
+  function hint() {
+    if (message || ready() || keyFailure() || routeInvalid() || routeTaken() || baseUrlInvalid()) return null;
+    if (draft.routeId.length === 0) return null;
+    if (!draft.baseURL.trim()) return t("custom.needsBaseUrl");
+    if (editor.rows.length === 0) return t("custom.needsModels");
+    return null;
   }
 
   function body() {
-    return `<p class="set-sheet-text">${escapeHtml(t("custom.intro"))}</p>`
+    const disabled = saving || profileCommitted;
+    return '<p class="set-sheet-text">' + escapeHtml(t("custom.intro")) + "</p>"
       + section({
         header: t("custom.identitySection"),
         body: stackedRow({
           label: escapeHtml(t("custom.route")),
-          control: textInput({ id: "cst-route", value: draft.routeId, placeholder: "acme-gateway", mono: true, disabled: profileCommitted })
+          control: textInput({
+            id: "cst-route", value: draft.routeId, placeholder: "acme-gateway", mono: true, disabled
+          }),
+          hint: escapeHtml(t("custom.routeHint"))
         })
-        + (draft.routeId && !routeValid() ? notice(t("custom.idInvalid")) : "")
+        + '<div id="cst-route-error">' + routeErrorHtml() + "</div>"
         + stackedRow({
           label: escapeHtml(t("prov.displayName")),
           control: textInput({
             id: "cst-name", value: draft.displayName,
-            placeholder: draft.routeId || t("custom.nameDefaultPrompt"), disabled: profileCommitted
+            placeholder: draft.routeId || t("custom.nameDefaultPrompt"), disabled
           })
         })
       })
@@ -102,34 +180,35 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
         header: t("prov.connectionSection"),
         body: stackedRow({
           label: escapeHtml(t("custom.baseUrl")),
-          control: textInput({ id: "cst-baseurl", value: draft.baseURL, placeholder: "https://gateway.example/v1", disabled: profileCommitted })
+          control: textInput({
+            id: "cst-baseurl", value: draft.baseURL, placeholder: "https://gateway.example/v1", disabled
+          })
         })
-        + stackedRow({
-          label: escapeHtml(t("prov.apiKey")),
-          control: textInput({ id: "cst-key", value: draft.apiKey, type: "password", placeholder: t("custom.keyOptional") })
-        })
+        + '<div id="cst-baseurl-error">' + baseUrlErrorHtml() + "</div>"
         + stackedRow({
           label: escapeHtml(t("custom.apiProtocol")),
           control: select({
             id: "cst-api",
             options: protocols.map((value) => ({ value, label: value, selected: value === draft.api })),
-            disabled: profileCommitted
+            disabled
           })
-        }),
-        // 密钥的「路由已建、密钥未写」提示跟着密钥字段留在这一组,否则会孤零零
-        // 挂在一个不再存在的「凭证」组上。
-        footer: profileCommitted ? escapeHtml(t("custom.keyPending")) : ""
+        })
+        + stackedRow({
+          label: escapeHtml(t("prov.apiKey")),
+          control: textInput({
+            id: "cst-key", value: draft.apiKey, type: "password",
+            placeholder: t("custom.keyOptional"), disabled: saving
+          })
+        })
+        + '<div id="cst-key-error">' + keyErrorHtml() + "</div>"
+        + (profileCommitted ? '<div class="set-row-hint">' + escapeHtml(t("custom.keyPending")) + "</div>" : "")
       })
-      + section({
-        header: t("custom.modelsSection"),
-        body: modelsBody(),
-        footer: escapeHtml(t("custom.modelsFooter"))
-      })
-      + (message ? notice(message) : "");
+      + editor.html()
+      + (catalogFailureText() ? notice(catalogFailureText()) : "")
+      + (message ? notice(message) : "")
+      + '<div id="cst-hint">' + (hint() ? notice(hint(), "muted") : "") + "</div>";
   }
 
-  // 全局共用的 <dialog> 所有权令牌:创建在途时用户可能关掉本 sheet 再开别的,
-  // 迟到的失败重画不能覆盖用户正在编辑的那个,更不能连它一起关掉。
   let sheetToken = 0;
 
   function repaint() {
@@ -143,132 +222,75 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
     bindSheet();
   }
 
-  /// 只更新按钮可用态,不重画输入框 —— 重画会让正在输入的字段失焦。
+  /// 软刷新:只改能被当前输入影响的状态提示与按钮,不重建输入框(否则
+  /// 路由字段每敲一个字符都会失焦)。
   function repaintSoft() {
     if (!sheet.owns(sheetToken)) return;
     const root = sheet.root;
     const save = root.querySelector("#cst-save");
     if (save) save.disabled = !canSave();
-    const fetchButton = root.querySelector("#cst-fetch");
-    if (fetchButton) {
-      fetchButton.disabled = !canFetch() || profileCommitted;
-      fetchButton.title = canFetch() ? t("cat.fetchHelp") : t("custom.fetchNeedsInput");
-    }
+    const routeErr = root.querySelector("#cst-route-error");
+    if (routeErr) routeErr.innerHTML = routeErrorHtml();
+    const baseErr = root.querySelector("#cst-baseurl-error");
+    if (baseErr) baseErr.innerHTML = baseUrlErrorHtml();
+    const keyErr = root.querySelector("#cst-key-error");
+    if (keyErr) keyErr.innerHTML = keyErrorHtml();
+    const hintEl = root.querySelector("#cst-hint");
+    if (hintEl) hintEl.innerHTML = hint() ? notice(hint(), "muted") : "";
+    editor.syncChrome(root);
   }
 
   function bindSheet() {
     const root = sheet.root;
-    const wire = (id, key, { hard = false, auto = false } = {}) => {
+    const wire = (id, key, hard) => {
       root.querySelector(id)?.addEventListener("input", (event) => {
         draft[key] = event.target.value;
         if (hard) repaint(); else repaintSoft();
-        if (auto) scheduleAutoFetch();
       });
     };
-    wire("#cst-route", "routeId", { hard: true });
-    wire("#cst-name", "displayName");
-    wire("#cst-baseurl", "baseURL", { auto: true });
-    wire("#cst-model", "modelId");
-    wire("#cst-key", "apiKey", { auto: true });
-    root.querySelector("#cst-model-pick")?.addEventListener("change", (event) => {
-      draft.modelId = event.target.value; repaintSoft();
+    wire("#cst-route", "routeId", false);
+    wire("#cst-name", "displayName", false);
+    wire("#cst-baseurl", "baseURL", false);
+    wire("#cst-key", "apiKey", false);
+    root.querySelector("#cst-api")?.addEventListener("change", (event) => {
+      draft.api = event.target.value;
+      repaintSoft();
     });
-    root.querySelector("#cst-api")?.addEventListener("change", (event) => { draft.api = event.target.value; });
-    root.querySelector("#cst-fetch")?.addEventListener("click", () => fetchModels());
-    root.querySelector("#cst-cancel")?.addEventListener("click", () => close());
-    root.querySelector("#cst-save")?.addEventListener("click", () => create());
+    root.querySelector("#cst-cancel")?.addEventListener("click", () => sheet.close(sheetToken));
+    root.querySelector("#cst-save")?.addEventListener("click", () => { void create(); });
+    editor.bind(root);
   }
 
-  /// 地址与密钥齐了就自动拉一次。每次编辑取消上一个定时器重新计时,只有最后
-  /// 一次输入活下来;同一个 endpoint 只自动拉一次,重试走手动按钮。
-  function scheduleAutoFetch() {
-    if (autoFetchTimer != null) clearTimeout(autoFetchTimer);
-    autoFetchTimer = null;
-    if (!shouldAutoFetchModels({
-      baseURL: draft.baseURL, apiKey: draft.apiKey, fetchedFrom, locked: profileCommitted
-    })) return;
-    autoFetchTimer = setTimeout(() => {
-      autoFetchTimer = null;
-      if (!shouldAutoFetchModels({
-        baseURL: draft.baseURL, apiKey: draft.apiKey, fetchedFrom, locked: profileCommitted
-      })) return;
-      void fetchModels();
-    }, AUTO_FETCH_DELAY_MS);
-  }
-
-  async function fetchModels() {
-    if (fetching) return;
-    fetching = true;
-    discovery = null;
-    // 成功与否都算「这组 endpoint 试过了」,自动路径不再重复打。
-    fetchedFrom = autoFetchEndpointKey(draft.baseURL, draft.apiKey);
-    repaint();
-    try {
-      const value = await settingsService.discoverModels({
-        settingsNs: "llm-pi-ai",
-        provider: draft.routeId || undefined,
-        baseURL: draft.baseURL || undefined,
-        api: draft.api || undefined,
-        apiKey: draft.apiKey || undefined
-      });
-      // 等待期间用户可能已经改了 baseURL/apiKey。这份目录属于**发起时**的那组
-      // endpoint,若已不匹配就整份丢弃 —— 否则会把 A 网关的 modelId 写进
-      // 现在指向 B 的表单,用户可能就这样把错误的模型保存下去。
-      if (fetchedFrom !== autoFetchEndpointKey(draft.baseURL, draft.apiKey)) return;
-      const ids = (value?.models ?? []).map((model) => model?.id).filter(Boolean);
-      discoveredModels = ids;
-      // 下拉框的选中值必须始终有效,否则会渲染出一个空白选择框。
-      if (ids.length && !ids.includes(draft.modelId)) draft.modelId = ids[0];
-      discovery = ids.length ? t("cat.discoveryAdded", { found: ids.length, added: ids.length }) : t("cat.discoveryNone");
-    } catch (error) {
-      if (fetchedFrom !== autoFetchEndpointKey(draft.baseURL, draft.apiKey)) return;
-      discoveredModels = [];
-      discovery = deps.formatErrorDetails(error);
-    } finally {
-      fetching = false;
-      repaint();
-    }
-  }
-
-  /// profile 先落、密钥后落。密钥写失败时不再重复声明路由 —— 重试只补密钥。
   async function create() {
     if (!canSave()) return;
     saving = true; message = null; repaint();
-    const ns = "llm-pi-ai";
     const keyRef = deriveKeyRef(draft.routeId);
+    const storesKey = draft.apiKey.trim().length > 0;
     try {
       if (!profileCommitted) {
         const profile = {
-          baseURL: draft.baseURL.trim(),
+          ...(draft.displayName ? { displayName: draft.displayName } : {}),
+          ...(storesKey ? { apiKeyEnv: keyRef } : {}),
           api: draft.api,
-          models: [{ id: draft.modelId.trim() }]
+          baseURL: draft.baseURL.trim(),
+          models: editor.models()
         };
-        if (draft.apiKey) profile.apiKeyEnv = keyRef;
-        if (draft.displayName) profile.displayName = draft.displayName.trim();
-        // 必须走 mutate 的 path 数组。settings.update 的 patch 键是字面量键名,
-        // 不是路径:传 "providers/xxx" 会在命名空间根上建一个名字里带斜杠的
-        // 兄弟键,而不是嵌进 providers 下面,宿主因此完全看不到这个提供方。
         await settingsService.mutate(
-          ns,
+          NS,
           [{ op: "set", path: ["providers", draft.routeId], value: profile }],
-          state?.namespaces.get(ns)?.revision
+          openedAt
         );
         profileCommitted = true;
       }
-      if (draft.apiKey) await settingsService.setCredential(keyRef, draft.apiKey);
-      close();
+      if (storesKey) await settingsService.setCredential(keyRef, draft.apiKey.trim());
+      sheet.close(sheetToken);
       await onDone?.();
     } catch (error) {
+      if (!sheet.owns(sheetToken)) return;
       message = translateSaveError(error);
       saving = false;
       repaint();
     }
-  }
-
-  function close() {
-    if (autoFetchTimer != null) clearTimeout(autoFetchTimer);
-    autoFetchTimer = null;
-    sheet.close(sheetToken);
   }
 
   sheetToken = sheet.open({

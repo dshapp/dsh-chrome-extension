@@ -156,7 +156,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     if (raw === "keyBlank") return t("prov.keyBlank");
     if (raw === "keyFormat") return t("prov.keyFormatInvalid");
     if (raw === "keyLocked") return t("prov.credentialLocked");
-    if (error?.code === "settings-conflict") return t("prov.settingsConflict");
+    if (error?.code === "settings/conflict") return t("prov.settingsConflict");
     return deps.formatErrorDetails(error);
   }
 
