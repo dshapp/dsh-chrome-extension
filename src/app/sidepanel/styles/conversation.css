@@ -476,11 +476,15 @@ button.turn-tail-metrics:hover { background: var(--bg-raised); color: var(--text
 .turn-produce-icon { flex: none; display: inline-flex; opacity: 0.85; }
 .turn-produce-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-produce-more { font-size: 0.6875rem; color: var(--text-faint); }
-/* present 交付卡:web Deliverables / PresentedFileCard 的窄栏单列形态。 */
+/* present 交付卡:web Deliverables / PresentedFileCard。
+   弹性两列:卡片各按行宽一半伸缩(flex-basis 随行宽,不写死宽度),
+   一行两张;仅单文件时独占一行。 */
 .turn-presents { display: flex; flex-direction: column; gap: 0.375rem; width: 100%; min-width: 0; }
-.turn-present-grid { display: grid; grid-template-columns: 1fr; gap: 0.5rem; width: 100%; min-width: 0; }
+.turn-present-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%; min-width: 0; }
+.turn-present-grid[data-single="true"] .turn-present-card { flex-basis: 100%; }
 .turn-present-card {
   box-sizing: border-box; display: flex; align-items: center; gap: 0.625rem;
+  flex: 0 1 calc(50% - 0.25rem);
   min-width: 0; padding: 0.5rem 0.625rem; border: 1px solid var(--border);
   border-radius: calc(var(--radius) + 4px); background: var(--bg-raised);
   color: inherit; text-align: start; cursor: pointer;
