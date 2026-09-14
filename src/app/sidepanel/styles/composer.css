@@ -365,8 +365,8 @@
 #send.state-idle { background: var(--text); color: var(--bg); }
 #send.state-idle:hover { opacity: .85; }
 #send.state-idle:disabled { opacity: .3; cursor: default; }
-#send.state-stop { background: var(--bg-raised); border: 1.5px solid var(--border); color: var(--text); }
-#send.state-stop:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+#send.state-stop { background: var(--danger); border: 1.5px solid var(--danger); color: #fff; }
+#send.state-stop:hover { opacity: .85; }
 #send.state-queue { background: var(--bg-raised); border: 1.5px solid var(--border); color: var(--text-dim); font-size: 11px; font-weight: 600; }
 #send.state-queue:hover { background: var(--bg-input); }
 

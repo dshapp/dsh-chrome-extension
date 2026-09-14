@@ -142,6 +142,16 @@ describe("停止按钮", () => {
     expect(deps.sessions.prompt).not.toHaveBeenCalled();
   });
 
+  it("停止态默认就是红底白字,红色不靠 hover 才出现", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/app/sidepanel/styles/composer.css"), "utf8");
+    const base = css.match(/#send\.state-stop \{[^}]*\}/)?.[0] ?? "";
+    const hover = css.match(/#send\.state-stop:hover \{[^}]*\}/)?.[0] ?? "";
+    expect(base).toContain("background: var(--danger)");
+    expect(base).toContain("color: #fff");
+    // hover 只压暗,不能再由它引入危险色 —— 那正是"只有悬停才红"的旧写法。
+    expect(hover).not.toContain("var(--danger)");
+  });
+
   it("有内容时按钮是排队态,点击发消息而不是停止", async () => {
     const { deps, input, send } = setup({ running: true });
     input.value = "排队这条";
