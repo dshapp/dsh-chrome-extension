@@ -346,34 +346,67 @@ describe("其他节点", () => {
     expect(c.querySelector(".command-chip").textContent).toContain("/compact");
   });
 
-  it("turnTail 有指标才成行", () => {
+  it("turnTail 有指标才成行:用量/用时各成一颗可点药丸", () => {
     const c = mount();
     const r = createChatRenderer(c);
     r.render([turnTailNode({ turn: 1, seq: 9, time: 1 })]);
     expect(c.querySelector(".turn-tail")).toBeNull();
-    r.render([Object.assign(turnTailNode({ turn: 1, seq: 9, time: 1 }), { ttftMs: 250, usage: { outputTokens: 30 } })]);
-    expect(c.querySelector(".turn-tail").textContent).toContain("250");
+    r.render([Object.assign(turnTailNode({ turn: 1, seq: 9, time: 1 }), {
+      runMs: 46000,
+      usage: { inputTokens: 1000, outputTokens: 30, totalTokens: 1030 }
+    })]);
     // 对齐 Mac 的 TurnTailIconActions:复用 msg-actions 的 hover 语义,
-    // 时间戳 + 指标是同一行里左对齐的一簇,指标紧跟时间戳,中间没有 spacer。
+    // 用量 → 用时 → 时钟是同一行里左对齐的一簇,中间没有 spacer。
     const row = c.querySelector(".turn-tail-actions");
     expect(row.classList.contains("msg-actions")).toBe(true);
     expect(row.querySelector(".interaction-spacer")).toBeNull();
     expect([...row.children].map((n) => n.className.split(" ")[0]))
-      .toEqual(["msg-timestamp", "turn-tail"]);
+      .toEqual(["turn-tail", "turn-tail", "msg-timestamp"]);
+    // 药丸读数:紧凑总量 + 整秒时长(web TurnUsagePanel / TurnTimePanel 的标签口径)。
+    expect(c.querySelector(".turn-tail-usage").textContent).toContain("1K tok");
+    expect(c.querySelector(".turn-tail-time").textContent).toContain("46s");
     // 最新一轮常显(Mac 口径)。
     expect(row.classList.contains("always")).toBe(true);
   });
 
-  it("turnTail 带收尾消息时给出复制 + 分叉,顺序为 复制→分叉→时钟", () => {
+  it("点用量药丸弹锚定浮层,含缓存/输入/输出明细", () => {
+    const c = mount();
+    const r = createChatRenderer(c);
+    r.render([Object.assign(turnTailNode({ turn: 1, seq: 9, time: 1 }), {
+      runMs: 46000,
+      usage: {
+        inputTokens: 800, outputTokens: 30, totalTokens: 1030,
+        cacheReadTokens: 200, cacheWriteTokens: 0, reasoningTokens: 10,
+        routes: [{ provider: "deepseek", model: "v4" }]
+      }
+    })]);
+    c.querySelector(".turn-tail-usage").click();
+    const pop = document.querySelector(".turn-stat-pop");
+    expect(pop).toBeTruthy();
+    expect(pop.getAttribute("role")).toBe("dialog");
+    expect(pop.querySelector(".turn-stat-headline").textContent).toBe("1,030 tok");
+    const texts = [...pop.querySelectorAll(".turn-stat-rows dd")].map((n) => n.textContent);
+    expect(texts).toContain("800 tok");   // 未缓存输入
+    expect(texts).toContain("200 tok");   // 缓存读取
+    expect(texts.some((value) => value.includes("30 tok") && value.includes("10 tok"))).toBe(true);
+    expect(pop.textContent).toContain("deepseek/v4");
+    // 同一颗再点一次关闭。
+    c.querySelector(".turn-tail-usage").click();
+    expect(pop.classList.contains("open")).toBe(false);
+  });
+
+  it("turnTail 带收尾消息时给出复制 + 分叉,顺序为 复制→分叉→用量→用时→时钟", () => {
     const c = mount();
     const forked = [];
     const r = createChatRenderer(c, { onFork: (n) => forked.push(n) });
     const tail = Object.assign(turnTailNode({ turn: 1, seq: 9, time: 1 }),
-      { ttftMs: 250, messageId: "m1", closingText: "hi" });
+      { runMs: 46000, usage: { outputTokens: 30 }, messageId: "m1", closingText: "hi" });
     r.render([tail]);
     const row = c.querySelector(".turn-tail-actions");
     expect([...row.children].map((n) => n.className.split(" ")[0]))
-      .toEqual(["act-btn", "act-btn", "msg-timestamp", "turn-tail"]);
+      .toEqual(["act-btn", "act-btn", "turn-tail", "turn-tail", "msg-timestamp"]);
+    // 时钟在整簇末尾(web clock="end" / mac TurnTailIconActions)。
+    expect(row.lastElementChild.className).toBe("msg-timestamp");
     // 分叉按 turn/end 的 seq 落点(assistant step 的 seq 会被服务端以 OPEN_TURN 拒绝)。
     const fork = [...row.querySelectorAll(".act-btn")].find((b) => b.title === t("fork"));
     expect(fork.disabled).toBe(false);

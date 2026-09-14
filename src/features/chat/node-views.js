@@ -907,6 +907,210 @@ export function createCommandNode(node) {
   return wrap;
 }
 
+// ── 本轮用时/用量读数与锚定浮层(对齐 web TurnUsagePanel / TurnTimePanel + mac TurnStatPill)──
+
+/// 整轮总 token(web TurnTokenUsage.totalTokens 优先,回退到已报桶之和)。
+function turnTotalTokens(usage) {
+  if (Number.isFinite(usage.totalTokens)) return usage.totalTokens;
+  const uncached = usage.uncachedInputTokens ?? usage.inputTokens ?? 0;
+  return uncached + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) + (usage.outputTokens ?? 0);
+}
+
+/// 紧凑 token 数:517 / 12.2K / 1.2M(web formatTokens)。
+function formatCompactTokens(value) {
+  const scaled = (candidate) => candidate >= 100
+    ? String(Math.round(candidate))
+    : String(Math.round(candidate * 10) / 10);
+  if (value < 1000) return String(Math.round(value));
+  if (value < 1_000_000) return `${scaled(value / 1000)}K`;
+  return `${scaled(value / 1_000_000)}M`;
+}
+
+/// 精确 token 数,千分位分组(web formatExactTokens)。
+function formatExactTokens(value) {
+  const digits = String(Math.round(value));
+  const groups = [];
+  for (let end = digits.length; end > 0; end -= 3) {
+    groups.unshift(digits.slice(Math.max(0, end - 3), end));
+  }
+  return groups.join(",");
+}
+
+/// 精确 "N tok"(web message.turnUsage.count / mac tokenCount)。
+function tokenCount(value) {
+  return t("turn.usageCount", { count: formatExactTokens(value) });
+}
+
+/// 紧凑 "2.9M tok"——药丸自己的标签。
+function compactTokenCount(value) {
+  return t("turn.usageCount", { count: formatCompactTokens(value) });
+}
+
+/// 整秒向下取整的时长:不足一分钟 "{s}s",过一分钟 "{m}m {ss}s"(web formatRunDuration)。
+function formatRunDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = total % 60;
+  if (hours > 0) return t("duration.hours", { hours: String(hours), minutes: pad2(minutes), seconds: pad2(seconds) });
+  if (minutes > 0) return t("duration.minutes", { minutes: String(minutes), seconds: pad2(seconds) });
+  return t("duration.seconds", { seconds: String(seconds) });
+}
+
+/// 亚秒延迟读数:十秒以内一位小数,超过取整(web formatLatencySeconds)。
+function formatLatencySeconds(ms) {
+  const s = Math.max(0, ms) / 1000;
+  return s < 10 ? String(Math.round(s * 10) / 10) : String(Math.round(s));
+}
+
+/// 解码吞吐:十以上取整,以下一位小数(web formatTokensPerSecond)。
+function formatTokensPerSecond(tps) {
+  const clamped = Math.max(0, tps);
+  return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10);
+}
+
+/// 缓存读占计费 prompt 的比例,一位小数;部分命中绝不进位到 100%(web formatCacheHitPercent)。
+function cacheHitPercent(usage) {
+  if (usage.cacheReadTokens == null) return null;
+  const prompt = turnTotalTokens(usage) - (usage.outputTokens ?? 0);
+  if (prompt <= 0) return null;
+  const tenths = Math.min(1000, Math.max(0, Math.round(usage.cacheReadTokens / prompt * 1000)));
+  const units = usage.cacheReadTokens < prompt ? Math.min(tenths, 999) : tenths;
+  const whole = Math.floor(units / 10);
+  const fraction = units % 10;
+  return fraction === 0 ? String(whole) : `${whole}.${fraction}`;
+}
+
+/// 浮层的键值行(<dl>),null 值直接跳过。
+function turnStatRows(rows) {
+  const dl = el("dl", "turn-stat-rows");
+  for (const [label, value] of rows) {
+    if (value == null) continue;
+    dl.append(el("dt", null, label));
+    dl.append(el("dd", null, value));
+  }
+  return dl;
+}
+
+/// 用量明细(web TurnUsagePanel 的 <dl>)。
+function buildTurnUsageRows(usage) {
+  const routes = (usage.routes ?? []).map((route) => `${route.provider}/${route.model}`).join(", ");
+  const hit = cacheHitPercent(usage);
+  const output = tokenCount(usage.outputTokens ?? 0)
+    + (usage.reasoningTokens != null
+      ? t("turn.usageReasoning", { tokens: tokenCount(usage.reasoningTokens) })
+      : "");
+  const rows = [];
+  if (routes) rows.push([t("turn.usageModel"), routes]);
+  if (hit != null) rows.push([t("turn.usageCacheHit"), `${hit}%`]);
+  rows.push([t("turn.usageInput"), tokenCount(usage.uncachedInputTokens ?? usage.inputTokens ?? 0)]);
+  if (usage.cacheReadTokens != null) rows.push([t("turn.usageCacheRead"), tokenCount(usage.cacheReadTokens)]);
+  if (usage.cacheWriteTokens != null) rows.push([t("turn.usageCacheWrite"), tokenCount(usage.cacheWriteTokens)]);
+  rows.push([t("turn.usageOutput"), output]);
+  return turnStatRows(rows);
+}
+
+/// 用时/速度明细(web TurnTimePanel 的 <dl>)。
+function buildTurnTimeRows(runMs, tps, ttftMs) {
+  const rows = [[t("turn.timeDuration"), formatRunDuration(runMs)]];
+  if (tps != null && Number.isFinite(tps) && tps > 0) {
+    rows.push([t("turn.timeSpeed"), `${formatTokensPerSecond(tps)} tok/s`]);
+  }
+  if (ttftMs != null) {
+    rows.push([t("turn.timeTtft"), t("duration.seconds", { seconds: formatLatencySeconds(ttftMs) })]);
+  }
+  return turnStatRows(rows);
+}
+
+/// 全侧栏共用一个锚定浮层(原生 popover,自动 light-dismiss / Escape)。
+/// 触发钮临时声明 anchor-name,浮层用 CSS 锚点定位吸附在其正上方。
+let turnStatPopover = null;
+let turnStatAnchor = null;
+let turnStatPill = null;
+let turnStatOpen = false;
+
+function ensureTurnStatPopover() {
+  if (turnStatPopover?.isConnected) return turnStatPopover;
+  const panel = el("div", "turn-stat-pop");
+  panel.setAttribute("popover", "auto");
+  panel.setAttribute("role", "dialog");
+  panel.addEventListener("toggle", (event) => {
+    if (event.newState === "closed") {
+      turnStatOpen = false;
+      releaseTurnStatAnchor();
+    }
+  });
+  document.body.append(panel);
+  turnStatPopover = panel;
+  return panel;
+}
+
+function releaseTurnStatAnchor() {
+  if (turnStatAnchor) turnStatAnchor.style.removeProperty("anchor-name");
+  turnStatAnchor = null;
+  if (turnStatPill) turnStatPill.setAttribute("aria-expanded", "false");
+  turnStatPill = null;
+}
+
+/// 打开/切换某颗药丸的浮层。同一颗再点一次即关闭(native popover 的轻触关闭已处理外部点击)。
+function openTurnStatPopover(anchor, { icon, title, headline, build }) {
+  const panel = ensureTurnStatPopover();
+  panel.replaceChildren();
+  const head = el("div", "turn-stat-head");
+  const headLabel = el("span", "turn-stat-head-label");
+  headLabel.append(lucideIcon(icon, { size: 14 }));
+  headLabel.append(el("span", null, title));
+  head.append(headLabel);
+  if (headline != null) head.append(el("span", "turn-stat-headline", headline));
+  panel.append(head);
+  panel.append(el("div", "turn-stat-rule"));
+  panel.append(build());
+  panel.setAttribute("aria-label", title);
+  releaseTurnStatAnchor();
+  turnStatAnchor = anchor;
+  turnStatPill = anchor;
+  anchor.style.setProperty("anchor-name", "--turn-stat-anchor");
+  anchor.setAttribute("aria-expanded", "true");
+  panel.style.setProperty("position-anchor", "--turn-stat-anchor");
+  turnStatOpen = true;
+  if (typeof panel.showPopover === "function") {
+    try { panel.showPopover(); } catch { /* jsdom 无 popover API */ }
+  } else {
+    panel.classList.add("open");
+  }
+}
+
+/// 关掉当前浮层(换会话 / 清空记录时调用,避免它停在上一会话的读数上)。
+export function closeTurnStatPopover() {
+  turnStatOpen = false;
+  releaseTurnStatAnchor();
+  if (!turnStatPopover) return;
+  turnStatPopover.classList.remove("open");
+  if (typeof turnStatPopover.hidePopover === "function") {
+    try { turnStatPopover.hidePopover(); } catch { /* 已关闭 */ }
+  }
+}
+
+/// 一颗读数药丸:图标 + 标签,点击开锚定浮层(web TurnStatPill)。
+function buildTurnStatPill({ className, icon, label, title, headline, build }) {
+  const pill = el("button", `turn-tail turn-tail-stat ${className}`);
+  pill.type = "button";
+  pill.setAttribute("aria-haspopup", "dialog");
+  pill.title = label;
+  pill.setAttribute("aria-label", label);
+  pill.append(lucideIcon(icon, { size: 13 }));
+  pill.append(el("span", "turn-tail-stat-label", label));
+  pill.addEventListener("click", () => {
+    if (turnStatOpen && turnStatAnchor === pill) {
+      closeTurnStatPopover();
+      return;
+    }
+    openTurnStatPopover(pill, { icon, title, headline, build });
+  });
+  return pill;
+}
+
 /// turnTail:每轮的页脚操作行。对齐 Mac 的 TurnTailIconActions:复制 → 分叉 → 时钟。
 ///
 /// 分叉挂在**页脚**而不是 assistant 消息上,是 Mac 明确的设计:分叉要按 turn/end 的
@@ -921,14 +1125,13 @@ export function createTurnTailNode(node, context = {}) {
   const openPath = (path) => { if (typeof onOpenPath === "function") onOpenPath(resolveToolPath(path, context.cwd)); };
   const revealPath = (path) => { if (typeof onRevealPath === "function") onRevealPath(resolveToolPath(path, context.cwd)); };
 
-  const parts = [];
-  if (node.ttftMs != null) parts.push(t("turn.ttft", { ms: String(Math.round(node.ttftMs)) }));
-  if (node.decodeTokensPerSec != null) parts.push(t("turn.throughput", { rate: node.decodeTokensPerSec.toFixed(1) }));
-  if (node.runMs != null) parts.push(t("turn.runtime", { seconds: (node.runMs / 1000).toFixed(1) }));
-  const tokens = node.usage?.outputTokens;
-  if (tokens != null) parts.push(t("usage.tokens", { tokens: String(tokens) }));
-  const hasActions = Boolean(parts.length) || node.messageId != null;
-  // 指标、收尾消息、本轮产出三者皆无时,才彻底不占行。
+  const usage = node.usage ?? null;
+  const totalTokens = usage ? turnTotalTokens(usage) : 0;
+  const hasUsage = totalTokens > 0;
+  const runMs = node.runMs;
+  const hasTime = runMs != null && runMs > 0;
+  // 收尾消息、本轮用量、本轮用时三者皆无时,才彻底不占行(对齐 web/Mac 的 gate)。
+  const hasActions = node.messageId != null || hasUsage || hasTime;
   if (!hasActions && !produced.length && !presented.length) return null;
 
   const wrap = el("div", "turn-tail-node");
@@ -937,9 +1140,8 @@ export function createTurnTailNode(node, context = {}) {
   if (presented.length) wrap.append(buildPresentedFiles(presented, openPath, revealPath));
 
   if (hasActions) {
-    // 对齐 Mac 的 TurnTailIconActions:复制 → 分叉 → 时钟,是**同一行里的一簇**,
-    // 左对齐、不加 spacer(Mac 注释明确写了 "No Spacer ... a single left-aligned
-    // cluster")。整行沿用 msg-actions 的 hover 浮现语义。
+    // 对齐 Mac 的 TurnTailIconActions:复制 → 分叉 → 用量 → 用时 → 时钟,是**同一行里
+    // 的一簇**,左对齐、不加 spacer。整行沿用 msg-actions 的 hover 浮现语义。
     const row = el("div", "msg-actions turn-tail-actions");
     // 交互口径=Mac:最新一轮常显,其余 hover 才浮现。
     row.classList.toggle("always", isLastTurn);
@@ -974,23 +1176,29 @@ export function createTurnTailNode(node, context = {}) {
       row.append(fork);
     }
 
-    row.append(el("span", "msg-timestamp", fmtTime(node.time)));
-    if (parts.length) {
-      // 指标改成可点 pill:明细进弹窗(Mac usage/time pill,web TurnTail panels)。
-      const pill = el("button", "turn-tail turn-tail-metrics", parts.join(" · "));
-      pill.type = "button";
-      pill.setAttribute("aria-haspopup", "dialog");
-      pill.addEventListener("click", () => openCardDetail({
-        title: t("turn.metrics"),
-        copyText: parts.join("\n"),
-        build: () => {
-          const body = el("div", "turn-metrics-detail");
-          for (const part of parts) body.append(el("div", "turn-metrics-row", part));
-          return body;
-        }
+    // 本轮用量 / 用时:各一颗"图标 + 读数"的药丸,点开锚定浮层(web TurnUsagePanel /
+    // TurnTimePanel,mac TurnStatPill)。顺序与 web/Mac 一致:用量 → 用时 → 时钟。
+    if (hasUsage) {
+      row.append(buildTurnStatPill({
+        className: "turn-tail-usage",
+        icon: "database",
+        label: t("turn.usagePill", { total: compactTokenCount(totalTokens) }),
+        title: t("turn.usageTitle"),
+        headline: tokenCount(totalTokens),
+        build: () => buildTurnUsageRows(usage)
       }));
-      row.append(pill);
     }
+    if (hasTime) {
+      row.append(buildTurnStatPill({
+        className: "turn-tail-time",
+        icon: "clock",
+        label: t("turn.ranFor", { duration: formatRunDuration(runMs) }),
+        title: t("turn.timeTitle"),
+        build: () => buildTurnTimeRows(runMs, node.decodeTokensPerSec, node.ttftMs)
+      }));
+    }
+
+    row.append(el("span", "msg-timestamp", fmtTime(node.time)));
     wrap.append(row);
   }
   return wrap;
@@ -1056,7 +1264,7 @@ function bindPresentMenuDismiss() {
 /// 类型徽标 + 文件名 + 描述 + 拆分动作 —— 主按钮"打开"(默认应用),右侧 chevron
 /// 的菜单给"用默认应用打开 / 在 Finder 中显示"(web PresentedFileCard 的 split)。
 /// 前 4 张直接展示(COLLAPSED_PRESENTED_COUNT),余下折成展开入口。
-/// 窄侧栏恒为单列(web @container max-width 620px)。
+/// 每张卡占行宽一半(等宽两列),单文件时独占一行。
 function buildPresentedFiles(files, onOpen, onReveal) {
   bindPresentMenuDismiss();
   const wrap = el("div", "turn-presents");

@@ -6,7 +6,7 @@
 import { t } from "../../shared/i18n.js";
 import { nodeId, NodeKind, isNodeRunning, nodeTurn } from "../sessions/chat-nodes.js";
 import { isProcessMember } from "../sessions/turn-process.js";
-import { createNodeElement, updateNodeElement } from "./node-views.js";
+import { createNodeElement, updateNodeElement, closeTurnStatPopover } from "./node-views.js";
 import { closeCardDetail } from "./card-detail.js";
 import { toolRowModel } from "./tool-row-model.js";
 
@@ -199,6 +199,7 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
   function reset() {
     // 详情弹窗是全局单例:换会话/清空记录时必须关掉,否则它会停在上一个会话的卡片上。
     closeCardDetail();
+    closeTurnStatPopover();
     for (const entry of rendered.values()) entry.element.dispose?.();
     rendered = new Map();
     openProcessTurns.clear();

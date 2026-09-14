@@ -910,6 +910,57 @@ export function createSessionStore() {
     }
   }
 
+  /// 一整轮的 provider token 账:对各 attempt 的 usage 求和,对齐 web deriveTurnTokenUsage。
+  /// 只有每个 attempt 都报了的可选桶才出现(cacheRead/cacheWrite/reasoning/routes);
+  /// 缺 totalTokens 时按已报桶之和折算,保证 pill 总有一个可用总数。
+  function aggregateTurnUsage(attempts) {
+    if (!attempts.length) return null;
+    let input = 0;
+    let output = 0;
+    let total = 0;
+    let totalKnown = true;
+    let cacheRead = 0;
+    let cacheWrite = 0;
+    let reasoning = 0;
+    let cacheReadKnown = true;
+    let cacheWriteKnown = true;
+    let reasoningKnown = true;
+    const routes = new Map();
+    let routeKnown = true;
+
+    for (const attempt of attempts) {
+      const usage = attempt.usage ?? {};
+      input += num(usage.inputTokens) ?? 0;
+      output += num(usage.outputTokens) ?? 0;
+      const attemptTotal = num(usage.totalTokens);
+      if (attemptTotal == null) totalKnown = false;
+      else total += attemptTotal;
+      const read = num(usage.cacheReadTokens);
+      if (read == null) cacheReadKnown = false; else cacheRead += read;
+      const write = num(usage.cacheWriteTokens);
+      if (write == null) cacheWriteKnown = false; else cacheWrite += write;
+      const think = num(usage.reasoningTokens);
+      if (think == null) reasoningKnown = false; else reasoning += think;
+      if (attempt.provider && attempt.model) {
+        routes.set(`${attempt.provider}/${attempt.model}`, { provider: attempt.provider, model: attempt.model });
+      } else {
+        routeKnown = false;
+      }
+    }
+
+    const billed = input + (cacheReadKnown ? cacheRead : 0) + (cacheWriteKnown ? cacheWrite : 0);
+    const result = {
+      uncachedInputTokens: input,
+      outputTokens: output,
+      totalTokens: totalKnown ? total : billed + output
+    };
+    if (cacheReadKnown) result.cacheReadTokens = cacheRead;
+    if (cacheWriteKnown) result.cacheWriteTokens = cacheWrite;
+    if (reasoningKnown) result.reasoningTokens = reasoning;
+    if (routeKnown && routes.size) result.routes = [...routes.values()];
+    return result;
+  }
+
   /// 每轮 TTFT / 吞吐折叠:TTFT 取最小 step 的 (首 token − step 起点);
   /// 吞吐把各 step 的输出 token 之和除以解码墙钟之和(只采样同时具备首 token 与产出的 step)。
   function foldTurnMetrics(tail, turn, endTime) {
@@ -919,12 +970,13 @@ export function createSessionStore() {
     let decodeMs = 0;
     let outputTokens = 0;
     let sampled = false;
+    const attempts = [];
 
     for (const ctx of state.contexts.values()) {
       if (ctx.type !== "assistant" || ctx.node.turn !== turn) continue;
       const s = ctx.node;
       if (lastAssistant == null || s.step > lastAssistant.step) lastAssistant = s;
-      if (s.usage) tail.usage = s.usage;
+      if (s.usage) attempts.push({ usage: s.usage, provider: s.provider, model: s.model });
 
       const ttftMs = (s.stepStartTime != null && s.firstTokenTime != null)
         ? Math.max(0, s.firstTokenTime - s.stepStartTime) : null;
@@ -944,6 +996,7 @@ export function createSessionStore() {
 
     tail.ttftMs = firstStepTtftMs;
     tail.decodeTokensPerSec = (sampled && decodeMs > 0) ? outputTokens / (decodeMs / 1000) : null;
+    tail.usage = aggregateTurnUsage(attempts);
     if (lastAssistant) {
       tail.messageId = lastAssistant.messageId;
       tail.closingText = (lastAssistant.blocks ?? [])

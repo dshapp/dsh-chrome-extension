@@ -223,6 +223,11 @@ const ICONS = Object.freeze({
     ["circle", { cx: 12, cy: 12, r: 10 }],
     ["path", { d: "M12 6v6l4 2" }]
   ],
+  database: [
+    ["ellipse", { cx: 12, cy: 5, rx: 9, ry: 3 }],
+    ["path", { d: "M3 5V19A9 3 0 0 0 21 19V5" }],
+    ["path", { d: "M3 12A9 3 0 0 0 21 12" }]
+  ],
   image: [
     ["rect", { width: 18, height: 18, x: 3, y: 3, rx: 2, ry: 2 }],
     ["circle", { cx: 9, cy: 9, r: 2 }],
