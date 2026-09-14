@@ -113,6 +113,10 @@ export function createSidepanelApp(root, deps) {
   // 改成中途的轮次,等动画停在目标轮后由点击时写入的值接管。
   let railLockUntil = 0;
 
+  // 点击未加载刻度后待落的跳转目标。分页是异步的,目标锚点行要等下一次快照帧
+  // 渲染出来才存在,所以落点动作延迟到 applySnapshot 之后(对齐 web realizePendingJump)。
+  let pendingJumpTurn = null;
+
   function scrollToTurn(anchorRow, turn) {
     const el = chatRenderer.elementById(anchorRow);
     if (el) el.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -136,11 +140,24 @@ export function createSidepanelApp(root, deps) {
     turnRail.set(turnRailItems, activeTurn, busyTurn);
   }
 
+  /// 落未加载刻度跳转:分页把目标锚点带进窗口后,行要等一次快照渲染才存在。
+  /// 找到目标轮的锚点行并滚过去;取不到就返回 false,留给下一次快照再试。
+  function realizePendingJump() {
+    if (pendingJumpTurn == null) return false;
+    const entry = turnRailItems.find((i) => i.turn === pendingJumpTurn);
+    if (!entry?.anchorRow) return false;
+    if (!chatRenderer.elementById(entry.anchorRow)) return false;
+    pendingJumpTurn = null;
+    scrollToTurn(entry.anchorRow, entry.turn);
+    return true;
+  }
+
   async function jumpToUnloaded(item) {
     // 跳转到一个未加载的轮次=离开当前阅读位置,跟随随之释放。
     tailFollow.release();
     clearTimeout(stopConfirmTimer);
     stopConfirmTimer = null;
+    pendingJumpTurn = item.turn;
     busyTurn = item.turn;
     turnRail.set(turnRailItems, activeTurn, busyTurn);
     try {
@@ -148,11 +165,18 @@ export function createSidepanelApp(root, deps) {
     } finally {
       busyTurn = null;
     }
-    // 分页后 store 已重折:直接从快照找该轮的锚点行再滚过去。
+    // 分页后 store 已重折,但新锚点行要等下一次 applySnapshot 才画出来:
+    // 已渲染就先落点,否则把 pendingJumpTurn 留给那一帧。
     const snap = deps.sessions.getRuntimeSnapshot();
     const entry = (snap?.turnRail ?? []).find((i) => i.turn === item.turn);
-    if (entry?.anchorRow) scrollToTurn(entry.anchorRow, item.turn);
-    else turnRail.set(turnRailItems, activeTurn, null);
+    if (entry?.anchorRow) {
+      // 钩子排在 notifyRuntime 已注册的快照帧之后:那一帧画完再落点。
+      if (!realizePendingJump()) requestAnimationFrame(() => realizePendingJump());
+    } else {
+      // 目标不在窗口里(到底了或回包被顶掉):别把落点悬着。
+      pendingJumpTurn = null;
+      turnRail.set(turnRailItems, activeTurn, null);
+    }
   }
 
   const turnRail = mountTurnRail(elements.turnRail, {
@@ -259,6 +283,8 @@ export function createSidepanelApp(root, deps) {
       activeTurn = turnRailItems.at(-1)?.turn ?? null;
     }
     turnRail.set(turnRailItems, activeTurn, busyTurn);
+    // 未加载刻度的分页跳转:锚点行刚渲染出来,在这里落点(见 realizePendingJump)。
+    realizePendingJump();
     const statusLabel = agentStatusLabel(snapshot, { awaitingTurnStart });
     // 空会话 + 加载失败:空态提示比一片空白更能说明"这不是在加载"。
     chatRenderer.setTyping(statusLabel != null, statusLabel);

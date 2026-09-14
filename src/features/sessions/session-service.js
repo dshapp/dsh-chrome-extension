@@ -123,6 +123,39 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     applyCachedInteractions(sessionId);
   }
 
+  /// 往前翻一页历史并 prepend 进窗口(follow 切点之前)。只向左扩展,绝不缩小
+  /// 窗口右端 —— 右端是 follow 快照切点与随后追加的实时尾巴,代表当前阅读位置。
+  /// 轨迹台账的「加载更早」与 turn rail 的跳页共用。迟到回包/边界不可用时返回 null。
+  /// 返回 { prepended, earliestSeq, hasMore, value }。
+  async function fetchEarlierPage(sessionId, token) {
+    const bounds = historyBounds.get(sessionId);
+    const cursor = historyCursors.get(sessionId);
+    if (!bounds || bounds.hasMore !== true || !Number.isInteger(bounds.earliestSeq)
+      || bounds.earliestSeq < 0 || !Number.isInteger(cursor)) {
+      return null;
+    }
+    const value = await connection.call(RPC.sessionPage, {
+      request: {
+        address: { kind: "session", sessionId },
+        throughSeq: cursor,
+        beforeSeq: bounds.earliestSeq,
+        maxMessages: 50
+      }
+    });
+    if (token !== loadToken || sessionId !== currentSessionId) return null;
+    const entries = [];
+    for (const entry of value?.records ?? value?.events ?? []) {
+      for (const expanded of expandHistoryEntry(entry)) entries.push(expanded);
+    }
+    const prepended = store.prependEntries(entries);
+    const next = {
+      earliestSeq: entries.length ? entries[0].event.seq : bounds.earliestSeq,
+      hasMore: value?.hasMore === true
+    };
+    historyBounds.set(sessionId, next);
+    return { prepended, earliestSeq: next.earliestSeq, hasMore: next.hasMore, value };
+  }
+
   function beginGapRepair(entry) {
     gapRepairBuffer.push(entry);
     if (repairingGap) return;
@@ -397,51 +430,35 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     /// 轨迹台账往前翻页:取当前窗口左边界之前的一页,归并进 store 后只重折一次。
     /// 与 loadHistory 同一条 session/page 路,只是多带 beforeSeq;迟到回包按 loadToken 丢弃。
     async loadEarlier(sessionId) {
-      const bounds = historyBounds.get(sessionId);
-      const cursor = historyCursors.get(sessionId);
-      if (!bounds || bounds.hasMore !== true || !Number.isInteger(bounds.earliestSeq)
-        || bounds.earliestSeq < 0 || !Number.isInteger(cursor)) {
-        return null;
-      }
       const token = ++loadToken;
-      const value = await connection.call(RPC.sessionPage, {
-        request: {
-          address: { kind: "session", sessionId },
-          throughSeq: cursor,
-          beforeSeq: bounds.earliestSeq,
-          maxMessages: 50
-        }
-      });
-      if (token !== loadToken || sessionId !== currentSessionId) return value;
-      const entries = [];
-      for (const entry of value?.records ?? value?.events ?? []) {
-        for (const expanded of expandHistoryEntry(entry)) entries.push(expanded);
-      }
-      const prepended = store.prependEntries(entries);
-      historyBounds.set(sessionId, {
-        earliestSeq: entries.length ? entries[0].event.seq : bounds.earliestSeq,
-        hasMore: value?.hasMore === true
-      });
-      if (prepended) notifyRuntime();
-      return value;
+      const page = await fetchEarlierPage(sessionId, token);
+      if (!page) return null;
+      if (page.prepended) notifyRuntime();
+      return page.value;
     },
 
-    /// turn rail 的跳页:把窗口分到指定 seq 之前(即 shrink 到 turn/start seq 那一页),
-    /// 让投影命名、但尚未加载的轮次进入窗口。与 loadHistory 同一条 session/page 路。
+    /// turn rail 的跳页:向左翻页直到窗口左边界跨过 seq,让投影命名、但尚未加载的
+    /// 轮次进入窗口。绝不能走 throughSeq=seq —— 那会把窗口右端砍到该 seq,目标轮
+    /// 自己的内容随之被丢出窗口,锚点行不存在,自然滚不过去。对齐 web
+    /// Session.loadThrough 的 prepend 循环:单页只有 50 条消息时继续往前翻。
     async loadThrough(sessionId, seq) {
       if (!Number.isInteger(seq) || seq < 0) return null;
       const token = ++loadToken;
-      const value = await connection.call(RPC.sessionPage, {
-        request: { address: { kind: "session", sessionId }, throughSeq: seq, maxMessages: 50 }
-      });
-      if (token !== loadToken) return value;
-      ensureStore(sessionId);
-      invalidateGapRepair();
-      applyHistoryValue(sessionId, value);
-      // 跳页把窗口挪走后,旧的左边界不再代表当前窗口。
-      historyBounds.delete(sessionId);
-      notifyRuntime();
-      return value;
+      let changed = false;
+      // guard 兜底宿主始终 hasMore=true 的情况;真正的收手条件是边界不再前移。
+      for (let guard = 0; guard < 200; guard += 1) {
+        const bounds = historyBounds.get(sessionId);
+        if (!bounds || bounds.hasMore !== true || !Number.isInteger(bounds.earliestSeq)
+          || bounds.earliestSeq < 0 || bounds.earliestSeq <= seq) {
+          break;
+        }
+        const page = await fetchEarlierPage(sessionId, token);
+        if (!page) break;
+        if (page.prepended) changed = true;
+        if (page.earliestSeq >= bounds.earliestSeq) break;
+      }
+      if (changed) notifyRuntime();
+      return true;
     },
 
     async prompt(sessionId, content, { mode = "queue" } = {}) {
