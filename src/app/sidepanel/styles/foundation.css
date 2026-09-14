@@ -124,6 +124,11 @@ a { color: var(--link); }
 }
 .hdr-btn:hover { background: var(--border-soft); color: var(--text); }
 .hdr-btn svg { display: block; }
+/* 新建会话页(空态)顶部不再显示「新建会话」与「打开工作目录」两颗入口:
+   此时 hero 行已经给了工作目录 chip,而"新建会话"在本页本身就是冗余。
+   只在空态隐藏 —— 进入真实会话后两颗恢复,新建/开目录能力不受影响。 */
+body:has(#empty-hint:not([hidden])) #hdr-new,
+body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
 
 /* 工作目录下拉:住在历史浮层的搜索行里,长目录名截断,给搜索框留出空间 */
 #hdr-workspace {
