@@ -408,7 +408,16 @@ span.ref-chip { cursor: default; }
 }
 /* 可点开详情的 chip 行给出和工具行一致的 hover 反馈 */
 .chip-row:has(.chip-more):hover { background: var(--bg-raised); }
-.chip-icon { flex: none; color: var(--text-faint); }
+/* chip 行也属于卡片族:与 .tool-icon / .thinking-icon 共用 16px 方槽,
+   图标与标题文字左对齐。 */
+.chip-icon {
+  display: grid;
+  place-items: center;
+  inline-size: 16px;
+  block-size: 16px;
+  flex: none;
+  color: var(--text-faint);
+}
 /* 摘要与工具行的 .tool-label 同构:单行截断,不换行撑高记录流 */
 .chip-label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;

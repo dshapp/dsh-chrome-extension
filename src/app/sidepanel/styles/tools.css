@@ -43,7 +43,6 @@
   white-space: nowrap;
   min-width: 0;
 }
-.tool-label.done { color: var(--text-faint); }
 .tool-label.error { color: var(--danger); }
 /* 可点路径:reset 成与 .tool-label 同构的内联按钮,热区只覆盖文字本身。 */
 .tool-label.tool-path {
@@ -146,8 +145,19 @@
   user-select: none;
 }
 .thinking-header:hover { background: var(--bg-raised); }
-.thinking-icon { font-size: 12px; flex-shrink: 0; color: var(--text-faint); }
+/* 图标槽与 .tool-icon 同宽同高:卡片族(工具/思考)的图标与标题因此从同一
+   x 起排。brain 图标比 </> 窄,不套统一方槽时整行会左移约 3px。 */
+.thinking-icon {
+  display: grid;
+  place-items: center;
+  inline-size: 16px;
+  block-size: 16px;
+  flex: none;
+  color: var(--text-faint);
+}
 /* 摘要行 = 思考文本的第一行:单行截断,metadata 色(对齐 Mac 的 labelTertiary) */
+/* 卡片标题统一一档灰:与 .tool-label 同为 --text-dim,思考行不再用更淡的
+   --text-faint,否则与相邻工具行的标题深浅不一。 */
 .thinking-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -155,7 +165,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.8125rem;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 /* 正文只在弹窗里出现,不再自带滚动条(弹窗有统一的那一条) */
 .thinking-body {
