@@ -36,6 +36,11 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   // 阻止不了 service 内部把 currentSessionId/follow 抢回旧目标。
   let openToken = 0;
   let listRefreshToken = 0;
+  // 在途全量拉取的 promise。启动(startConnection)、重连(onGenerationReady)
+  // 与打开浮层会几乎同时各触发一次 refreshList,不去重就会叠出多个约 700KB 的
+  // session/list 并互相排队(实测把单个 300ms 拖到 850ms+)。对齐 Web 端
+  // SessionManager.refreshList 的 single-flight:在途调用直接复用。
+  let listInflight = null;
   let remoteEventClientId = null;
   const pendingEventSessions = new Map();
   const pendingInteractions = new Map();
@@ -315,42 +320,54 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       listStore.replaceAll(listStore.get().filter((item) => !archivedSessionIds.has(item.sessionId)));
     },
 
-    async refreshList() {
+    refreshList() {
+      // 单飞:在途拉取直接复用。对齐 Web 端 SessionManager.refreshList 的
+      // single-flight —— 启动/重连/打开浮层几乎同时触发,不去重就会叠出多个
+      // 全量 session/list 并互相排队(实测单个请求从 300ms 拖到 850ms+)。
+      if (listInflight) return listInflight;
       const token = ++listRefreshToken;
-      const rosterRevision = listStore.revision;
-      // 保留请求发出时的对象引用。listStore 的单行更新是 immutable 的，因此回包
-      // 时可精确识别等待期间新增/变化/删除了哪些 id，而不必因任意一条实时帧就
-      // 丢弃整份基线快照。
-      const before = new Map(listStore.get().map((item) => [item.sessionId, item]));
-      const value = await connection.call(RPC.sessionList, { _request: {} });
-      // 后发 refresh 的结果更权威；旧请求绝不能覆盖它。
-      if (token !== listRefreshToken) return listStore.get();
-      // 与本文件其余各处解包一致地兜底。裸取的话,一个不带 items 的回包会抛
-      // TypeError,而 resync() 的第一行就是它 —— 断线重连的收敛会整个失败,
-      // 当前会话的 loadHistory 也跟着不执行。
-      let items = (value?.items ?? []).filter(
-        (item) => !item.blank
-          && !archivedSessionIds.has(item.sessionId)
-          && !removedSessionIds.has(item.sessionId)
-      );
-      if (rosterRevision !== listStore.revision) {
-        const current = listStore.get();
-        const currentById = new Map(current.map((item) => [item.sessionId, item]));
-        // 请求期间从本地名单消失的 id 不能被旧 HTTP 回包复活。
-        const removedDuringRequest = new Set(
-          [...before.keys()].filter((sessionId) => !currentById.has(sessionId))
-        );
-        const merged = new Map(items
-          .filter((item) => !removedDuringRequest.has(item.sessionId))
-          .map((item) => [item.sessionId, item]));
-        // 新增或对象引用变化的行来自实时通道，比请求发出时的基线更新。
-        for (const item of current) {
-          if (before.get(item.sessionId) !== item) merged.set(item.sessionId, item);
+      listInflight = (async () => {
+        try {
+          const rosterRevision = listStore.revision;
+          // 保留请求发出时的对象引用。listStore 的单行更新是 immutable 的，因此回包
+          // 时可精确识别等待期间新增/变化/删除了哪些 id，而不必因任意一条实时帧就
+          // 丢弃整份基线快照。
+          const before = new Map(listStore.get().map((item) => [item.sessionId, item]));
+          const value = await connection.call(RPC.sessionList, { _request: {} });
+          // 后发 refresh 的结果更权威；旧请求绝不能覆盖它。
+          if (token !== listRefreshToken) return listStore.get();
+          // 与本文件其余各处解包一致地兜底。裸取的话,一个不带 items 的回包会抛
+          // TypeError,而 resync() 的第一行就是它 —— 断线重连的收敛会整个失败,
+          // 当前会话的 loadHistory 也跟着不执行。
+          let items = (value?.items ?? []).filter(
+            (item) => !item.blank
+              && !archivedSessionIds.has(item.sessionId)
+              && !removedSessionIds.has(item.sessionId)
+          );
+          if (rosterRevision !== listStore.revision) {
+            const current = listStore.get();
+            const currentById = new Map(current.map((item) => [item.sessionId, item]));
+            // 请求期间从本地名单消失的 id 不能被旧 HTTP 回包复活。
+            const removedDuringRequest = new Set(
+              [...before.keys()].filter((sessionId) => !currentById.has(sessionId))
+            );
+            const merged = new Map(items
+              .filter((item) => !removedDuringRequest.has(item.sessionId))
+              .map((item) => [item.sessionId, item]));
+            // 新增或对象引用变化的行来自实时通道，比请求发出时的基线更新。
+            for (const item of current) {
+              if (before.get(item.sessionId) !== item) merged.set(item.sessionId, item);
+            }
+            items = [...merged.values()];
+          }
+          listStore.replaceAll(items);
+          return listStore.get();
+        } finally {
+          // 结算后才允许下一次新拉取:在途期间所有调用者都拿到同一个 promise。
+          listInflight = null;
         }
-        items = [...merged.values()];
-      }
-      listStore.replaceAll(items);
-      return listStore.get();
+      })();
+      return listInflight;
     },
 
     async create(input = {}) {

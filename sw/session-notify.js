@@ -19,7 +19,11 @@ import {
 } from "../src/features/notifications/notification-click.js";
 import { openPanel } from "./sidepanel-open.js";
 
-const POLL_INTERVAL_MS = 15000;
+// 每次轮询都是一次全量 session/list(约 700KB、数百毫秒)。Chrome 对 alarm
+// 周期有 30s 下限:原先写的 15s 在 116–119 上被钳到 60s,在新版 Chrome 被钳到
+// 30s —— 反正不会按 15s 跑。这里显式定 60s 降载:侧栏打开时它那条实时流才是
+// 状态权威,轮询只负责"侧栏关着时的完成通知",晚一分钟可接受。
+const POLL_INTERVAL_MS = 60000;
 
 const settings = createSettings();
 const notifier = createBackgroundNotifier({
@@ -27,14 +31,21 @@ const notifier = createBackgroundNotifier({
   settings,
 });
 
+// 防叠加:上一次轮询还没结算时 alarm 又到,直接跳过 —— 否则慢请求会和下一次
+// 全量拉取排队,把宿主拖得更慢。
+let polling = false;
 async function pollSessions() {
-  // 先恢复持久化的运行集合:worker 可能刚被回收重启,漏了状态会漏报完成通知。
-  await notifier.loadRunning();
+  if (polling) return;
+  polling = true;
   try {
+    // 先恢复持久化的运行集合:worker 可能刚被回收重启,漏了状态会漏报完成通知。
+    await notifier.loadRunning();
     const api = createApiClient({ baseUrl: await settings.getBackendUrl() });
     await pollSessionStatuses(api, notifier);
   } catch {
     // Backend unreachable: stay quiet and retry on the next tick.
+  } finally {
+    polling = false;
   }
 }
 

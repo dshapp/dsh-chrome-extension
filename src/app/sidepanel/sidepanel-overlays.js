@@ -50,18 +50,22 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   // 前者是"光标在哪",后者是"哪个会话是当前的"。
   let selectedIndex = -1;
 
-  /// 打开浮层:清空上一次的搜索词、刷新列表,并把光标放进搜索框。
+  /// 打开浮层:清空上一次的搜索词、渲染列表,并把光标放进搜索框。
   /// 抽成函数是因为 show() 也要走同一套 —— 否则用 show() 开出来的浮层
   /// 不聚焦,得多点一下才能打字。
   function open() {
     popover.classList.add("open");
     titleWrap.setAttribute("aria-expanded", "true");
     search.value = "";
-    // 高亮由 refresh() → render(reset) 落到第一行,这样浮层一开回车就能开首条。
-    // showLoading:refreshList 是一次 RPC,慢的时候浮层会挂着**上一次**的行不动 ——
-    // 那批行属于打开之前的时刻(甚至是上个工作目录),看着像已经加载完了。
-    // 先落加载态,列表回来再整体换掉,与切工作目录那条路径同一套处理。
-    refresh({ resetSelection: true, showLoading: true });
+    // listStore 一直被 host 实时帧维护着,打开浮层直接渲染这份 warm 快照即可,
+    // 不再先清空成 loading 去等一次全量 session/list RPC(对齐 Web 端侧栏直接读
+    // snapshot store 的做法)。只有冷启动还没有任何基线时才落 loading。
+    // 高亮落到第一行,这样浮层一开回车就能开首条。
+    allItems = listStore?.get?.() ?? allItems;
+    if (allItems.length) render(filterItems(""), { resetSelection: true });
+    else renderLoading();
+    // 后台静默刷新:single-flight,会和启动/重连的在途拉取合并;回包后整体替换。
+    void refresh({ resetSelection: true });
     // 浮层刚从 display:none 切出来,同一帧里 focus() 在部分浏览器上不生效。
     requestAnimationFrame(() => search.focus());
   }
@@ -155,8 +159,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       : matched;
   }
 
-  /// 列表正在刷新:显示加载态。切换工作目录 / 首次打开浮层时,旧列表不再适用,
-  /// 与其让用户盯着一片空白或上个目录的残留行,不如明确告诉他在加载。
+  /// 列表正在刷新:显示加载态。冷启动还没有任何基线、或切换工作目录时,旧列表
+  /// 不再适用,与其让用户盯着一片空白或上个目录的残留行,不如明确告诉他在加载。
+  /// 普通打开浮层不走这里 —— 那份 warm 快照会被直接渲染。
   function renderLoading() {
     selectedIndex = -1;
     renderedItems = [];
