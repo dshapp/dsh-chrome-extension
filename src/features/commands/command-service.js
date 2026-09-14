@@ -17,11 +17,11 @@ export function createCommandService(connection) {
     // line 是整行文本,如 "/compact" 或 "/goal 修复登录报错"。
     // 返回 undefined 表示 line 不是已注册的合法命令;否则 { commandId, result: { kind, text? } }。
     //
-    // images 必须**始终携带**(无图片时为空数组)。Typert 网关按描述符逐字段校验,
-    // 缺字段会整体拒绝并报 `args fields do not match the descriptor: missing "images"`,
-    // 于是每一条斜杠命令都执行失败。Mac 端的 CommandExecutePayload 同样总是带上它。
-    async execute(sessionId, line, images = []) {
-      return connection.call("commands/execute", { agentId: sessionId, line, images });
+    // submittedAttachments 必须**始终携带**(无附件时为空数组)。Typert 网关按描述符逐字段
+    // 校验,缺字段或多余字段都会整体拒绝并报 `args fields do not match the descriptor`,
+    // 于是每一条斜杠命令都执行失败。宿主曾用 `images`,现描述符字段名为 submittedAttachments。
+    async execute(sessionId, line, submittedAttachments = []) {
+      return connection.call("commands/execute", { agentId: sessionId, line, submittedAttachments });
     }
   };
 }
