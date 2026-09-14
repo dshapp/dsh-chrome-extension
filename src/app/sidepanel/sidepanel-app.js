@@ -535,6 +535,10 @@ export function createSidepanelApp(root, deps) {
       updateSendState();
       return;
     }
+    // 新建会话页上换过工作目录:这条消息该落在 chip 指的那个目录,而会话的 cwd
+    // 建时就定死了 —— 先把页面搬到目标目录的新会话上,再发。上面取的文本/附件/
+    // 元素都已是副本,切会话清空输入框不会带走它们。
+    if (!await retargetNewSessionPage()) return;
     sending = true;
     // 新的一轮开始了:turn 轨道回到"跟随最新",读者上滚/点刻度的锁定随之解除。
     activeTurnFollowsLatest = true;
@@ -672,7 +676,10 @@ export function createSidepanelApp(root, deps) {
   const gitEntry = mountGitEntry(elements.gitEntryBtn, elements.gitEntryMenu, {
     summaryReader: createGitSummaryReader(gitHostProxy),
     gitService,
-    getCwd: () => state.cwd,
+    // 新建会话页上跟着工作目录 chip 走(见 pendingWorkspacePath):那时页面上还
+    // 没有任何内容,"这个会话在哪个仓库"由 chip 说了算,而不是由这个一次性空
+    // 会话建成时落在的目录。会话一旦开聊,cwd 就固定了,入口回到跟随会话。
+    getCwd: () => pendingWorkspacePath() ?? state.cwd,
     showToast,
     onWorkingTreeChanged: () => refreshGitEntry(),
     promptBranchName: () => promptBranchName()
@@ -681,6 +688,41 @@ export function createSidepanelApp(root, deps) {
   /// 重读 Git 入口。cwd 落定的每一处都调它。
   function refreshGitEntry() {
     return gitEntry.refresh().catch(() => {});
+  }
+
+  /// 空态 = 新建会话页(hero 可见)。此时对话里一条内容都没有,页面讲的是
+  /// "下一条消息发去哪",而不是"这个会话是什么"。
+  function isNewSessionPage() {
+    return !elements.emptyHint.hidden;
+  }
+
+  /// 新建会话页上 chip 指向的目录,且它与当前空会话的 cwd 不是同一个 ——
+  /// 也就是"这个会话该搬家了"。其余情况返回 null(chip 只是历史过滤器)。
+  /// 「全部」/「临时目录」没有可展示的路径,同样返回 null:那时沿用会话 cwd
+  /// 比画一个猜出来的仓库诚实。
+  function pendingWorkspacePath() {
+    if (!isNewSessionPage()) return null;
+    const path = workspaceMenu?.displayedPath() ?? null;
+    return path && path !== state.cwd ? path : null;
+  }
+
+  /// 把新建会话页搬到 chip 指的工作目录。会话的 cwd 在 session.create 时定死、
+  /// 之后不可改,所以"换目录"只能是另建一个;被丢下的空会话不留痕 ——
+  /// 宿主的 session/list 会把 blank 会话过滤掉(见 session-service)。
+  /// 返回 false 表示该搬却没搬成,调用方应当放弃这次发送:发到旧目录去
+  /// 比不发更糟,用户看到的 Git 入口与 chip 说的都是新目录。
+  async function retargetNewSessionPage() {
+    if (!pendingWorkspacePath()) return true;
+    // 先清空输入框:切会话会把它当成"旧空会话的草稿"存起来。文字与胶囊
+    // 在下面原样搬到新会话,发送流程读的是它自己早先取好的副本。
+    const text = elements.input.value;
+    const chips = occurrences;
+    setInputText("");
+    const created = await newSession();
+    setInputText(text, chips);
+    autoResizeInput();
+    updateSendState();
+    return Boolean(created);
   }
 
   /// 新建分支的名字。用原生 prompt:侧栏没有通用输入模态,而这一处的输入
@@ -1513,7 +1555,13 @@ export function createSidepanelApp(root, deps) {
     workspaceMenu = mountWorkspaceMenu(elements, deps, {
       showToast,
       hostCwd: () => state.hostCwd,
-      onChange: () => historyDrawer?.refresh({ showLoading: true })
+      // 换工作目录:历史列表换过滤范围;新建会话页上它还决定"下一条消息发去哪",
+      // 所以 Git 入口也要跟着重判 —— 否则头部会一边写着新目录名,一边显示上一个
+      // 仓库的分支。
+      onChange: () => {
+        historyDrawer?.refresh({ showLoading: true });
+        refreshGitEntry();
+      }
     });
     historyDrawer = mountHistoryDrawer(deps, openSession, newSession, shortcutLabels, {
       workspacePath: () => workspaceMenu?.activePath() ?? null,
