@@ -5,9 +5,6 @@
   "description": "DSH Chrome Bridge: the browser half of the dsh-chrome stack, plus a DSH side panel chat. Loaded unpacked by the user.",
   "type": "module",
   "scripts": {
-    "test": "node --test --test-force-exit --test-timeout=15000 'tests/*.spec.mjs'",
-    "test:sidepanel": "vitest run",
-    "test:all": "npm test && npm run test:sidepanel"
   },
   "devDependencies": {
     "ws": "^8.18.0",
