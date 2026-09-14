@@ -18,6 +18,7 @@ const LUCIDE_ICONS = Object.freeze({
   bookOpen: ["book-open", '<path d="M12 5v16"/><path d="M20.001 19A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2 5 5 0 0 1 4-2z"/>'],
   sparkleSearch: ["search", '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>'],
   terminal: ["terminal", '<path d="M12 19h8"/><path d="m4 17 6-6-6-6"/>'],
+  codeXml: ["code-xml", '<path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>'],
   git: ["git-branch", '<path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>'],
   database: ["database", '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>'],
   bell: ["bell", '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>'],
@@ -44,6 +45,7 @@ const EXACT = Object.freeze({
   RequestPermission: ["request-permission", "permission", "permission"],
   request_permission: ["request-permission", "permission", "permission"],
   PermissionRequest: ["request-permission", "permission", "permission"],
+  run_code: ["code-exec", "code", "codeXml"],
   Skill: ["skill", "skill", "skill"],
   skill: ["skill", "skill", "skill"]
 });
@@ -56,6 +58,7 @@ const CATEGORY_ICON = Object.freeze({
   navigation: "compass",
   network: "globe",
   command: "terminal",
+  code: "codeXml",
   git: "git",
   database: "database",
   notification: "bell",

@@ -505,7 +505,7 @@ function createReasoningBlock() {
   const header = el("button", "thinking-header");
   header.type = "button";
   const thinkingIcon = el("span", "thinking-icon");
-  thinkingIcon.append(lucideIcon("sparkles", { size: 13 }));
+  thinkingIcon.append(lucideIcon("brain", { size: 13 }));
   header.append(thinkingIcon, el("span", "thinking-title", ""));
   // 可读名称 = "思考过程" + 摘要,与 Mac 的 accessibilityRowLabel 一致。
   header.addEventListener("click", () => openChunkedTextDetail({

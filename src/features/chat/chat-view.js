@@ -177,7 +177,7 @@ export function createReasoningElement(item) {
   wrap.className = "thinking-bubble";
   wrap.innerHTML = `
     <div class="thinking-header">
-      <span class="thinking-icon">${lucideIconSvg("sparkles", { size: 13 })}</span>
+      <span class="thinking-icon">${lucideIconSvg("brain", { size: 13 })}</span>
       <span class="thinking-title">${escapeHtml(t("thinking"))}</span>
     </div>
     <div class="thinking-body"></div>`;

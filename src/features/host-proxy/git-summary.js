@@ -23,7 +23,7 @@ export const NO_REPOSITORY = Object.freeze({
   upstream: null
 });
 
-/// 解析 `git diff --numstat -z`；也兼容旧的换行格式，方便已有调用与测试。
+/// 解析 `git diff --numstat HEAD`；也兼容 `-z` 的 NUL 分隔格式，便于复用与测试。
 ///
 /// 二进制文件 git 用 `-\t-` 表示「没有 diff 内容」,不能当 0 行处理 —— 那会让
 /// 一个二进制改动在计数上凭空消失。这里单独标记并计入 changedFiles。
@@ -126,9 +126,18 @@ export function createGitSummaryReader(client) {
       if (inside === null || inside.trim() !== "true") return NO_REPOSITORY;
 
       // 其余读取互不依赖,并发发出:串行会让切换会话时入口明显迟滞。
+      //
+      // 两条刻意与 Mac 的 GitRepository.lineCounts 保持一致,否则 chip 会退化成
+      // 只剩分支名(它正是用户看到的样子):
+      //   - 比对 HEAD 而不是工作树对 index:只有比到 HEAD 才把**已暂存**的改动
+      //     算进来,git add 之后不带 HEAD 就是空的。
+      //   - 不加 `-z`:daemon 的 diff 允许项(GIT_ALLOWED_OPTIONS)没有它,传了会
+      //     被 `/host/git` 以 400 拒掉,而 read() 把命令级失败吞成 null,于是
+      //     `--numstat` 的正常换行输出拿不到,摘要静默变成干净。
+      //     换行格式由 parseNumstat 处理,它同时兼容 `-z` 的 NUL 形式。
       const [statusOut, numstatOut, branchesOut, gitDirOut] = await Promise.all([
         read(cwd, ["status", "--porcelain=v2", "--branch"]),
-        read(cwd, ["diff", "--numstat", "-z"]),
+        read(cwd, ["diff", "--numstat", "HEAD"]),
         read(cwd, ["branch", "--format=%(refname:short)"]),
         read(cwd, ["rev-parse", "--git-dir"])
       ]);

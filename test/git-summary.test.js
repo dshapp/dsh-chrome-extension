@@ -118,7 +118,24 @@ describe("git-summary 读取", () => {
       localBranches: ["main", "feat/x"], isWorktree: true
     });
     expect(summary.upstream.ahead).toBe(1);
-    expect(client.git).toHaveBeenCalledWith("/repo", ["diff", "--numstat", "-z"]);
+    // 必须比对 HEAD —— 对齐 Mac GitRepository.lineCounts,否则已暂存的改动
+    // 会被算成 0 行,chip 只剩分支名。不加 `-z`:daemon 的 diff 允许项没有它,
+    // 带了会被 /host/git 拒掉,失败又被吞成 null。
+    expect(client.git).toHaveBeenCalledWith("/repo", ["diff", "--numstat", "HEAD"]);
+  });
+
+  it("numstat 比对 HEAD,已暂存的改动也计入", async () => {
+    // git add 之后 `git diff`(不带 HEAD)是空的,只有 `git diff HEAD` 仍能看到。
+    const client = fakeClient({
+      "rev-parse --is-inside-work-tree": "true\n",
+      "status --porcelain=v2": "# branch.head main",
+      "diff --numstat": "7\t1\tstaged.txt",
+      "branch --format": "main",
+      "rev-parse --git-dir": ".git"
+    });
+    const summary = await createGitSummaryReader(client).summary("/repo");
+    expect(summary).toMatchObject({ hasRepository: true, added: 7, removed: 1, changedFiles: 1 });
+    expect(client.git.mock.calls.find((c) => c[1][0] === "diff")[1]).toEqual(["diff", "--numstat", "HEAD"]);
   });
 
   it("单条命令失败不让整份摘要失败", async () => {
