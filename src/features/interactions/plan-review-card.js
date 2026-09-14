@@ -52,7 +52,7 @@ export function createPlanReviewCard(question, review, { onRespond }) {
   });
 
   // ---- 计划正文 ----
-  const planBody = el("div", "plan-body");
+  const planBody = el("div", "plan-body md-body");
   planBody.innerHTML = mdToHtml(review.plan);
   decorateCodeBlocks(planBody);
 

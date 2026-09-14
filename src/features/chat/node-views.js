@@ -449,7 +449,7 @@ function blockPartKind(block) {
 
 function createBlockPart(kind) {
   if (kind === "reasoning") return createReasoningBlock();
-  if (kind === "text") return el("div", "msg-agent");
+  if (kind === "text") return el("div", "msg-agent md-body");
   if (kind === "other") return el("div", "unknown-node");
   if (kind === "imageGroup") return el("div", "msg-img-group");
   return assistantImage(null);
@@ -658,7 +658,7 @@ function buildToolBody(node, model, context = {}) {
   if (node.name === "exit_plan_mode") {
     const plan = planText(node);
     if (plan) {
-      const card = el("div", "plan-inline");
+      const card = el("div", "plan-inline md-body");
       card.innerHTML = mdToHtml(plan);
       decorateCodeBlocks(card);
       wrap.append(card);

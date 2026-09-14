@@ -139,7 +139,7 @@ export function createAssistantElement(item, { onFork } = {}) {
   const turn = document.createElement("div");
   turn.className = "msg-turn";
   const body = document.createElement("div");
-  body.className = "msg-agent";
+  body.className = "msg-agent md-body";
   renderMarkdownInto(body, item.text);
   turn.appendChild(body);
   turn.appendChild(buildAssistantActions(turn, body, item, { onFork }));

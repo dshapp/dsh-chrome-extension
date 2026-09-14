@@ -512,8 +512,11 @@
 /* 共用状态条:参考 UI 用中性描边 + 分隔线,不再整卡染琥珀。
    只有状态点保留强调色,层级靠排版而非色块建立。 */
 .interaction-strip {
-  display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.75rem 0.875rem;
+  flex: none;
+  display: flex; align-items: center; gap: 0.5rem; min-inline-size: 0;
+  /* 右侧留 0.5rem:图标按钮自带 0.375rem 的内边距,按外框对齐反而显得离边太远,
+     按图标光学对齐才和左侧的 --card-pad 看齐。 */
+  padding: 0.625rem 0.5rem 0.625rem var(--card-pad);
   border-block-end: 1px solid var(--border-soft);
   font-size: 0.8125rem;
 }
@@ -521,20 +524,30 @@
   inline-size: 0.5rem; block-size: 0.5rem; border-radius: 50%;
   background: var(--warn); flex: none;
 }
-.interaction-strip-label { font-weight: 650; color: var(--text); }
+.interaction-strip-label {
+  font-weight: 650; color: var(--text);
+  min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .interaction-spacer { flex: 1 1 auto; }
 .interaction-body {
-  padding: 0.75rem 0.875rem;
+  padding: 0.75rem var(--card-pad);
   display: flex; flex-direction: column; gap: 0.5rem;
 }
 .interaction-actions {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
-  padding: 0 0.875rem 0.875rem;
+  padding: 0 var(--card-pad) var(--card-pad);
 }
 .interaction-error { color: var(--danger); font-size: 0.75rem; }
 
-/* 卡片外壳:统一圆角 + raised 底 + 柔和投影(对齐参考 .request-card) */
+/* 卡片外壳:统一圆角 + raised 底 + 柔和投影(对齐参考 .request-card)。
+   --card-pad 是卡片唯一的水平边距来源 —— 状态条、正文、底部动作行都引它,
+   所以三段永远对齐同一条竖线。 */
 .approval-card, .plan-card, .question-card {
+  --card-pad: 0.875rem;
+  /* 纵向弹性:状态条与动作行按内容定高,正文吃掉剩下的空间。宽度永远由
+     #composer-takeover 给,卡片自己不写死任何尺寸 —— 侧栏可被用户任意拖宽拖窄。 */
+  display: flex; flex-direction: column;
+  min-inline-size: 0;
   background: var(--bg-input);
   border: 1px solid color-mix(in oklab, var(--text) 24%, var(--border));
   border-radius: 0.875rem;
@@ -565,15 +578,38 @@
 }
 .plan-strip-btn:hover { background: var(--bg-raised); color: var(--text); }
 .plan-body {
-  padding: 0.875rem; font-size: 0.8125rem; line-height: 1.6;
+  /* 长计划自己滚动,短计划只占自己的高度:min-block-size:0 是 flex 子项能
+     真正滚动的前提(默认 auto 会被内容撑开,滚动条就跑到整张卡片上去)。 */
+  flex: 1 1 auto; min-block-size: 0; min-inline-size: 0;
+  padding: 0.75rem var(--card-pad);
+  font-size: 0.8125rem; line-height: 1.6;
   max-block-size: min(60vh, 32rem); overflow: auto;
+  /* 卡片自己吃掉滚动,别把外层会话列表也带着滚。 */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
-.plan-footer { padding: 0 0.875rem 0.875rem; display: flex; flex-direction: column; gap: 0.5rem; }
+/* 首尾块的外边距会叠在 padding 上,让正文顶部凭空多一截。留白归 padding 所有。 */
+.plan-body > :first-child { margin-block-start: 0; }
+.plan-body > :last-child { margin-block-end: 0; }
+/* 计划文档常以 h1 开题。.md-body 已把标题压到 14px,这里再给 h1/h2 一点层级差,
+   同时补上标题之间的呼吸(连续的「目标 / 成功标准」段落否则会糊成一块)。 */
+.plan-body h1 { font-size: 0.9375rem; margin-block: 0 0.375rem; }
+.plan-body h2, .plan-body h3 { margin-block-start: 0.875rem; }
+.plan-footer {
+  flex: none;
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.625rem var(--card-pad) 0.75rem;
+  /* 正文可滚动,没有这条线时最后一行文字会像被按钮压断。 */
+  border-block-start: 1px solid var(--border-soft);
+}
 /* 备注框会逐行增高,按钮跟随它的最后一行 —— 故底对齐而非居中
    (对齐 Mac b841912 把动作行改为 .bottom 对齐)。 */
-.plan-actions { display: flex; gap: 0.5rem; align-items: flex-end; }
+/* 窄侧栏里三个元素挤不下时换行,而不是把按钮推出卡片外。 */
+.plan-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; }
 .plan-feedback {
-  flex: 1 1 auto; min-inline-size: 0;
+  /* 基准取 8em(跟着字号走)而非固定像素:够宽时和按钮同排,窄到放不下时
+     整条输入框换到自己那一行。 */
+  flex: 1 1 8em; min-inline-size: 0;
   padding: 0.45rem 0.625rem;
   border: 1px solid var(--border); border-radius: 0.5rem;
   background: var(--bg); color: var(--text); font: inherit; font-size: 0.8125rem;
@@ -590,7 +626,7 @@
 /* ── 提问卡(向导):对齐参考 UI 的胶囊选项行 ── */
 .question-card-header {
   display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.75rem 0.875rem 0.375rem;
+  padding: 0.75rem var(--card-pad) 0.375rem;
 }
 .question-card-icon {
   display: grid; place-items: center; flex: none;
