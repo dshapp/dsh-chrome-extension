@@ -28,10 +28,10 @@ export function createSkillService(connection) {
 
 export function renderSkillsMenu(skills) {
   if (!skills.length) return "";
-  return skills.map((skill) => (
-    `<div class="skill-row" data-skill-name="${escapeHtml(skill.name)}">`,
-    `<code>/${escapeHtml(skill.name)}</code>`,
-    `<span class="skill-desc">${escapeHtml(skill.description || "")}</span>`,
-    "</div>"
-  )).join("");
+  // 这里曾经写成 `(a, b, c, "</div>")` —— 逗号表达式只返回最后一个值,整个菜单
+  // 每项都只剩一个孤立的 </div>,技能名与描述全被丢掉。必须是一个模板字符串。
+  return skills.map((skill) => `<div class="skill-row" data-skill-name="${escapeHtml(skill.name)}">` +
+    `<code>/${escapeHtml(skill.name)}</code>` +
+    `<span class="skill-desc">${escapeHtml(skill.description || "")}</span>` +
+    "</div>").join("");
 }
