@@ -873,12 +873,20 @@ export function createSessionStore() {
 
     if (kind === "error") {
       const failure = reason && isObject(reason.error) ? reason.error : null;
-      const ctx = state.contexts.get(errKey);
-      if (ctx?.type === "turnErrorPending") {
-        ctx.pending.message = turnFailureMessage(reason);
-        ctx.pending.code = failure ? str(failure.code) : null;
-        ctx.pending.seq = event.seq;
+      let ctx = state.contexts.get(errKey);
+      // 没有 turn/start 的出错也要留下一行:agent 级错误由 session-service 合成
+      // 一条 turn:0 的 turn/end(宿主轮次从 1 开始,永远不会有 turn-error:0),
+      // 重放窗口也可能只有 turn/end。此时就地补一个 pending 上下文。
+      if (ctx?.type !== "turnErrorPending") {
+        ctx = {
+          type: "turnErrorPending",
+          pending: { turn, startSeq: event.seq, time: event.time, seq: null, message: null, code: null }
+        };
+        state.contexts.set(errKey, ctx);
       }
+      ctx.pending.message = turnFailureMessage(reason);
+      ctx.pending.code = failure ? str(failure.code) : null;
+      ctx.pending.seq = event.seq;
     } else if (kind === "max-tokens") {
       state.contexts.set(`turn-max-tokens:${turn}`, {
         type: "turnMaxTokens",
