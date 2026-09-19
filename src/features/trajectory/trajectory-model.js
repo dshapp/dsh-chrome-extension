@@ -478,8 +478,17 @@ export function assembleTrajectory(entries) {
           timing,
           requestId
         };
-        assistantRecordIndex.set(key, records.length);
-        records.push(record);
+        // 同一 (turn, step) 只允许一条助手行。已经有行时就地结算它 —— 可能是
+        // step/end 补的 requestOnly 占位行,也可能是重放里更早的一条消息。
+        // 直接 push 会产生两条 id 相同的记录,而上层拿 id 当主键(折叠集合、
+        // 选中态、时间线槽位),重复 id 会让两行联动、时间线上多出一个槽位。
+        const existingIndex = assistantRecordIndex.get(key);
+        if (existingIndex == null) {
+          assistantRecordIndex.set(key, records.length);
+          records.push(record);
+        } else {
+          records[existingIndex] = record;
+        }
         if (request) {
           request.completedAt = event.time;
           request.resultSeq = event.seq;
@@ -525,6 +534,9 @@ export function assembleTrajectory(entries) {
         request.error = t("trajectory.requestEnded");
         requests.set(requestId, request);
         if (!assistantRecordIndex.has(key)) {
+          // 占位行也要登记:它是这个 step 的助手行,后来的 assistant/message
+          // 应当就地结算它,而不是再 push 一条同 id 的记录。
+          assistantRecordIndex.set(key, records.length);
           records.push({
             id: `assistant\0${turn}\0${step}`,
             kind: TrajectoryKind.assistant,
