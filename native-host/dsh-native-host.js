@@ -119,12 +119,25 @@ function logDir() {
   return dir;
 }
 
+/// 帧体不是合法 JSON 时的哨兵。坏帧也要回一条结构化错误 —— 直接在 data 监听器
+/// 里 JSON.parse 抛异常会把宿主进程带走(exit 1、stdout 0 字节),Chrome 只看到
+/// "native host 退出且没有回包",dispatch 里那条 bad-message 分支永远走不到。
+const MALFORMED_FRAME = Symbol("malformed-frame");
+
 function readMessage() {
   return new Promise((resolve) => {
     let header = Buffer.alloc(0);
     let body = Buffer.alloc(0);
     let bodyLen = 0;
     let gotLen = false;
+    const finish = (buf) => {
+      process.stdin.removeListener("data", onData);
+      try {
+        resolve(JSON.parse(buf.subarray(0, bodyLen).toString("utf8")));
+      } catch {
+        resolve(MALFORMED_FRAME);
+      }
+    };
     const onData = (chunk) => {
       if (!gotLen) {
         header = Buffer.concat([header, chunk]);
@@ -135,18 +148,12 @@ function readMessage() {
           gotLen = true;
           if (rest.length) {
             body = Buffer.concat([body, rest]);
-            if (body.length >= bodyLen) {
-              process.stdin.removeListener("data", onData);
-              resolve(JSON.parse(body.subarray(0, bodyLen).toString("utf8")));
-            }
+            if (body.length >= bodyLen) finish(body);
           }
         }
       } else {
         body = Buffer.concat([body, chunk]);
-        if (body.length >= bodyLen) {
-          process.stdin.removeListener("data", onData);
-          resolve(JSON.parse(body.subarray(0, bodyLen).toString("utf8")));
-        }
+        if (body.length >= bodyLen) finish(body);
       }
     };
     process.stdin.on("data", onData);
@@ -231,6 +238,11 @@ async function dispatch(msg) {
 }
 
 const msg = await readMessage();
+if (msg === MALFORMED_FRAME) {
+  writeMessage({ ok: false, reason: "bad-message" });
+  await sleep(50);
+  process.exit(0);
+}
 if (msg != null) {
   let result;
   try { result = await dispatch(msg); }
