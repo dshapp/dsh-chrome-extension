@@ -1820,9 +1820,15 @@ function waitForLoad(tabId, timeoutMs = 15000) {
     }
     const timer = setTimeout(done, timeoutMs)
     chrome.tabs.onUpdated.addListener(listener)
-    chrome.tabs.get(tabId).then((tab) => {
-      if (tab?.status === 'complete') done()
-    })
+    chrome.tabs.get(tabId)
+      .then((tab) => {
+        if (tab?.status === 'complete') done()
+      })
+      // The tab can be closed while we wait. onUpdated will never speak for a tab
+      // that no longer exists, so settle here rather than idling until the timeout,
+      // and never let the rejection escape into the worker: an unhandled rejection
+      // in an MV3 service worker outlives the tool call that caused it.
+      .catch(() => done())
   })
 }
 
