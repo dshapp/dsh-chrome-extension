@@ -89,7 +89,7 @@ die()  {
   exit 1
 }
 
-usage() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 case "${1:-}" in -h|--help) usage ;; esac
 
 derive_extension_id() {
