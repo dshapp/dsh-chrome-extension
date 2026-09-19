@@ -70,6 +70,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   /// 严格 +1;start 的 revision===1 表示宿主重置了代际,先清空再采纳。缺字段的旧宿主
   /// 退化为只做 index 稠密校验。
   let assistantRevision = 0;
+  /// reopenFollow 之后、新快照武装 baseline 之前:这段时间到达的都是旧代际的尾巴帧,
+  /// 只静默丢弃,不能再触发下一次重开 —— 否则丢帧瞬间的尾巴有多长,就会
+  /// unsubscribe+subscribe 多少次。快照重新武装 baseline 时清除。
+  let assistantResyncing = false;
   // gap repair 等待 HTTP page 时继续缓存实时帧；切会话/新快照会使旧修复失效。
   let gapRepairGeneration = 0;
   let repairingGap = false;
@@ -85,6 +89,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       currentSessionId = sessionId;
       assistantExpectation = null;
       assistantRevision = 0;
+      assistantResyncing = false;
       store.reset(sessionId);
       applyCachedControl(sessionId);
       applyCachedInteractions(sessionId);
@@ -242,6 +247,11 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   /// 恢复被丢的正文(否则 start 丢失会让整段 token 静默空白到 settlement)。返回是否可交给 store。
   function foldAssistantStreamFrame(frame) {
     if (!frame || typeof frame.type !== "string" || typeof frame.attemptId !== "string") return false;
+    // 重开之后、baseline 重新武装之前,到达的都是旧代际的尾巴帧:静默丢弃。
+    // 这里必须早于 revision 校验 —— 尾巴帧的 revision 一定对不上(重置后期望 1),
+    // 若让它走到 revision 分支,每个尾巴帧都会再 reopenFollow 一次,形成
+    // unsubscribe/subscribe 风暴,正好和 reopenFollow 注释里"静默等 settle"的意图相反。
+    if (assistantResyncing) return false;
     // revision 存在时必须与已采纳代际 +1(web transport.ts / assistant-stream.ts)。
     // 不嵌在这里对 chunk/end 各自判断:start 允许 revision===1 重置代际。
     const revision = Number.isInteger(frame.revision) ? frame.revision : null;
@@ -295,6 +305,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   function reopenFollow(reason) {
     assistantExpectation = null;
     assistantRevision = 0;
+    assistantResyncing = true;
     // 丢帧后的旧代际帧(中段挂载、陈旧尾巴)在被清空的期望下不会再触发重开,静默等 settle 兜底。
     if (!followedStreamId || !currentFollowAddress) return;
     connection.unsubscribe?.(followedStreamId);
@@ -768,6 +779,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           assistantRevision = Number.isInteger(payload.assistantStream?.revision)
             ? payload.assistantStream.revision
             : 0;
+          // 新快照已重新武装 baseline,重开窗口结束:之后的帧照常按代际校验。
+          assistantResyncing = false;
           notifyRuntime();
           return;
         }
