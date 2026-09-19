@@ -6,7 +6,7 @@
 //
 // 切点必须落在**代码围栏之外的空白行之后**:renderTextBlock 在空白行会重置
 // 段落/列表/表格,而围栏内换行是代码内容,不能切。
-import { mdToHtml } from "../../shared/md-to-html.js";
+import { mdToHtml, readFence, isClosingFence } from "../../shared/md-to-html.js";
 import { decorateCodeBlocks, mayContainMath } from "./chat-view.js";
 import { highlightCodeBlocks } from "./code-highlight.js";
 import { ensureKatex, isKatexReady } from "./katex-loader.js";
@@ -20,10 +20,19 @@ export function stableCut(markdown, unstableBlocks = UNSTABLE_TAIL_BLOCKS) {
   const starts = [0];
   let offset = 0;
   let inCode = false;
+  let fenceRun = 0;
   for (const line of text.split("\n")) {
     const length = line.length + 1;   // 含被 split 掉的换行
-    if (/^\s*```/.test(line)) inCode = !inCode;
-    else if (!inCode && line.trim() === "") starts.push(offset + length);
+    // 与 md-to-html 共用同一套围栏判定:开栅栏记下反引号个数,只有不短于它
+    // 且不带信息串的纯反引号行才算关闭。否则 4 反引号块里的 ``` 行会被当成
+    // 关闭,切点落进代码块,head/tail 各渲染半块。
+    if (inCode) {
+      if (isClosingFence(line, fenceRun)) inCode = false;
+    } else {
+      const fence = readFence(line);
+      if (fence) { inCode = true; fenceRun = fence.run; }
+      else if (line.trim() === "") starts.push(offset + length);
+    }
     offset += length;
   }
   // 尾随空白不构成"块":流式中的末尾空行不该把倒数第二个真块算成不稳定。
