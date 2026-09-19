@@ -31,7 +31,36 @@ function el(tag, className, text) {
 
 /// 历史图片按 attachmentId 惰性读回(content-addressed,块里没有字节)。
 /// 同一 id 只读一次;读回前留 loading 占位,失败标 failed(绝不写 ...base64,undefined)。
+///
+/// 缓存必须有上限:entry.url 是整张图的 `data:` base64,模块级 Map 无上限累积
+/// 等于把这段会话里渲染过的每一张图都钉死在内存里(长会话 + 多截图时是实打实的
+/// 增长,而且永不释放)。超出上限时从最旧的**已结算**条目开始淘汰;淘汰掉的再次
+/// 需要时重读即可,readAttachment 本来就是幂等的读路径。在途条目跳过,免得把同一
+/// 张图读两遍。
+const ATTACHMENT_IMAGE_CACHE_MAX = 32;
+/// 插入顺序即最近使用顺序(Map 按插入序迭代),命中时移到队尾。
 const attachmentImageCache = new Map();
+
+function markAttachmentImageUsed(id, entry) {
+  attachmentImageCache.delete(id);
+  attachmentImageCache.set(id, entry);
+}
+
+function trimAttachmentImageCache() {
+  while (attachmentImageCache.size > ATTACHMENT_IMAGE_CACHE_MAX) {
+    let victim = null;
+    for (const [key, value] of attachmentImageCache) {
+      // 只淘汰已结算的:在途条目被删掉会让同一张图被读第二遍。
+      if (value.url) { victim = key; break; }
+    }
+    if (victim === null) return; // 全在途:宁可短暂超界,也不重复读
+    attachmentImageCache.delete(victim);
+  }
+}
+
+/// 仅供测试观察缓存是否真的被裁剪。上限见 ATTACHMENT_IMAGE_CACHE_LIMIT。
+export function attachmentImageCacheSize() { return attachmentImageCache.size; }
+export const ATTACHMENT_IMAGE_CACHE_LIMIT = ATTACHMENT_IMAGE_CACHE_MAX;
 
 function applyImageSource(img, source, context = {}) {
   const a = source ?? {};
@@ -48,13 +77,18 @@ function applyImageSource(img, source, context = {}) {
   }
   const cached = attachmentImageCache.get(id);
   if (cached?.url) {
+    markAttachmentImageUsed(id, cached); // 命中刷到队尾,让 LRU 顺序反映真实使用
     img.src = cached.url;
     img.classList.remove("img-loading", "img-failed");
     return;
   }
   img.classList.add("img-loading");
   let entry = cached;
-  if (!entry) { entry = { url: null, pending: null }; attachmentImageCache.set(id, entry); }
+  if (!entry) {
+    entry = { url: null, pending: null };
+    attachmentImageCache.set(id, entry);
+    trimAttachmentImageCache();
+  }
   if (!entry.pending) {
     entry.pending = Promise.resolve(context.readAttachment(id)).then((value) => {
       const bytes = typeof value === "string" ? value : value?.data;
@@ -62,6 +96,8 @@ function applyImageSource(img, source, context = {}) {
       if (typeof bytes !== "string" || !bytes) throw new Error("empty attachment");
       const url = `data:${type};base64,${bytes}`;
       entry.url = url;
+      markAttachmentImageUsed(id, entry);
+      trimAttachmentImageCache();
       return url;
     }).catch(() => { attachmentImageCache.delete(id); return null; });
   }
