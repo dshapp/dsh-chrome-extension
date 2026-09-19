@@ -208,7 +208,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     store.setJobs(controlJobs.get(sessionId) ?? []);
     const projections = controlProjections.get(sessionId);
     for (const [key, value] of Object.entries(projections?.values ?? {})) {
-      store.applyProjection(key, value, projections?.asOfSeq);
+      // 逐 key 的版本,和 applyHistoryValue 同一套规则:块级 asOfSeq 只是整块的快照
+      // 切点。拿它给块内所有 key 盖同一个版本,会让 title@10 被同块的 usage@20 顶到
+      // 20,此后真正更新的 title@15 反被判为陈旧丢弃 —— 标题永远停在旧值。
+      store.applyProjection(key, value, projections?.seqs?.[key] ?? projections?.asOfSeq);
     }
   }
 
@@ -727,7 +730,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           for (const [sid, projections] of Object.entries(value.projections ?? {})) {
             controlProjections.set(sid, projections);
             for (const [key, val] of Object.entries(projections?.values ?? {})) {
-              listStore.setProjection?.(sid, key, val, projections?.asOfSeq);
+              listStore.setProjection?.(sid, key, val, projections?.seqs?.[key] ?? projections?.asOfSeq);
               if (key === "title") listStore.setTitle(sid, val);
             }
           }
@@ -740,9 +743,14 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           if (payload.type === "queue") controlQueues.set(payload.sessionId, payload.items ?? []);
           else if (payload.type === "jobs") controlJobs.set(payload.sessionId, payload.jobs ?? []);
           else if (payload.type === "projection") {
-            const previous = controlProjections.get(payload.sessionId) ?? { values: {}, asOfSeq: -1 };
+            const previous = controlProjections.get(payload.sessionId) ?? { values: {}, seqs: {}, asOfSeq: -1 };
+            // 版本必须逐 key 记:一个会话的 asOfSeq 是所有 key 的最大值,只能当
+            // 快照切点用,不能代表某一个 key 的版本。
+            const seqs = { ...(previous.seqs ?? {}) };
+            if (Number.isInteger(payload.seq)) seqs[payload.key] = Math.max(seqs[payload.key] ?? -1, payload.seq);
             controlProjections.set(payload.sessionId, {
               values: { ...previous.values, [payload.key]: payload.value },
+              seqs,
               asOfSeq: Math.max(previous.asOfSeq ?? -1, payload.seq ?? -1)
             });
           }
