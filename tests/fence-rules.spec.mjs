@@ -52,11 +52,22 @@ test('没有扩展 id 时不写白名单字段(退回旧行为,而不是写空�
 
 test('authority 与主机转义保持原样', () => {
   const condition = conditionOf('http://127.0.0.1:3080', { extensionId: EXT })
-  assert.equal(condition.regexFilter, '^https?://127\\.0\\.0\\.1:3080/')
+  assert.equal(condition.regexFilter, '^(?:https?|wss?)://127\\.0\\.0\\.1:3080/')
   assert.deepEqual(condition.resourceTypes, ['xmlhttprequest', 'websocket'])
   // 默认端口折叠成可选端口;非默认端口写死。
-  assert.equal(conditionOf('https://host.example.com/', {}).regexFilter, '^https?://host\\.example\\.com(?::\\d+)?/')
-  assert.equal(conditionOf('http://host.example.com:8642/', {}).regexFilter, '^https?://host\\.example\\.com:8642/')
+  assert.equal(conditionOf('https://host.example.com/', {}).regexFilter, '^(?:https?|wss?)://host\\.example\\.com(?::\\d+)?/')
+  assert.equal(conditionOf('http://host.example.com:8642/', {}).regexFilter, '^(?:https?|wss?)://host\\.example\\.com:8642/')
+})
+
+test('regexFilter 真的能匹配 ws:// 与 wss://(websocket 声明不作废)', () => {
+  const condition = conditionOf('http://127.0.0.1:3080', { extensionId: EXT })
+  const regex = new RegExp(condition.regexFilter)
+  // WebSocket 的 URL 就是 ws:// / wss://,^https?:// 一个也匹配不到 ——
+  // resourceTypes 里写着 websocket 却永远命不中,那条声明等于没写。
+  assert.ok(regex.test('http://127.0.0.1:3080/api/x'), 'http 请求仍要命中')
+  assert.ok(regex.test('ws://127.0.0.1:3080/api/remote.mux'), 'ws:// 必须命中')
+  assert.ok(regex.test('wss://127.0.0.1:3080/api/remote.mux'), 'wss:// 必须命中')
+  assert.ok(!regex.test('http://127.0.0.1:9999/api/x'), '别的端口不能被误伤')
 })
 
 test('applyFenceRules 自动用 chrome.runtime.id 兜底,并替换掉旧规则', async () => {

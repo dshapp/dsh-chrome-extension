@@ -56,7 +56,10 @@ export function rulesForBackendUrl(backendUrl, options = {}) {
     : `${escapedHost}:${parsed.port}`;
   const initiatorDomains = normalizeInitiatorDomains(options.initiatorDomains ?? options.extensionId);
   return buildRules({
-    regexFilter: `^https?://${authority}/`,
+    // ws/wss 也要覆盖:规则声明了 websocket,而 WebSocket 的 URL 是 ws:// 或
+    // wss:// —— ^https?:// 一个都匹配不到,那条声明等于空转(浏览器实测:
+    // ws:// 地址不匹配 ^https?://,匹配 ^wss?://)。
+    regexFilter: `^(?:https?|wss?)://${authority}/`,
     resourceTypes: ["xmlhttprequest", "websocket"],
     ...(initiatorDomains ? { initiatorDomains } : {})
   });
