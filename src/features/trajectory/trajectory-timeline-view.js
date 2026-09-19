@@ -441,10 +441,24 @@ export function mountTrajectoryTimeline({ section, hasMore, onLoadEarlier, onSel
     updateAria();
   }
 
+  /// 手势的中止路径:停掉边缘滚动并丢掉拖拽/平移状态。
+  function cancelDrag() {
+    stopEdgeScroll();
+    drag = null;
+    pan = null;
+    hideHoverLine();
+  }
+
   track?.addEventListener("pointerdown", beginDrag);
   track?.addEventListener("pointermove", (event) => { moveDrag(event); updateHoverLine(event); });
   track?.addEventListener("pointerup", endDrag);
-  track?.addEventListener("pointercancel", () => { stopEdgeScroll(); drag = null; pan = null; hideHoverLine(); });
+  track?.addEventListener("pointercancel", cancelDrag);
+  // 指针不必在轨道上抬起:拖到边缘后把鼠标移出去再松手,pointerup 会落在别的
+  // 元素上(pointerleave 在拖拽中又刻意 return),只监听 track 就会漏掉收尾 ——
+  // 30ms 的边缘滚动定时器会一直跑下去,时间线在松手后继续自己漂移。
+  // 文档级兜底;轨道上的那次已经处理过时,drag/pan 为空,这里直接跳过。
+  document.addEventListener("pointerup", (event) => { if (drag || pan) endDrag(event); });
+  document.addEventListener("pointercancel", () => { if (drag || pan) cancelDrag(); });
   track?.addEventListener("pointerleave", (event) => {
     if (drag || pan) return;
     hideHoverLine();
