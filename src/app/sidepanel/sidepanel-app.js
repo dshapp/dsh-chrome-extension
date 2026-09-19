@@ -306,7 +306,10 @@ export function createSidepanelApp(root, deps) {
     dock.renderPlanChip(snapshot.planMode);
     // 占位符与可用性统一在这里裁决(子代理只读 > 计划模式 > 默认)。
     applyComposerAvailability(snapshot);
-    if (snapshot.permissions) dock.renderPermMenu(snapshot.permissions);
+    // 无条件重画:0.1.6 的 permissions 投影只剩 currentValue,选项要等目录
+    // RPC 回来才齐;若这里只在有值时调用,一个没有权限服务的会话会留着上一个
+    // 会话的药丸。传 null 让 dock 自己隐藏入口。
+    dock.renderPermMenu(snapshot.permissions);
     // 尾部跟随:仍在产出的修订先证伪 pending stop;running 只上膛不释放;跟随中重钉。
     tailFollow.transcriptChanged();
     tailFollow.runningChanged(snapshot.running);
@@ -381,17 +384,25 @@ export function createSidepanelApp(root, deps) {
     if (readOnly) elements.send.disabled = true;
   }
 
-  /// 队列面板每次快照都重建:面板自身只持有编辑/请求中的瞬时状态,
-  /// 队列内容的唯一权威是宿主推送的 session/queue 帧。
+  /// 队列面板按快照**就地更新**,不是每帧重建:流式输出时一个 rAF 就会来一个
+  /// 快照,重建会把行内编辑的输入框(连同已敲进去的字)换掉,也会白重建整块
+  /// DOM。队列内容的唯一权威仍是宿主推送的 session/queue 帧,面板的 update()
+  /// 只在签名变化时重画(见 queue-panel.js)。
   function renderQueuePanel(queue, snapshot) {
-    const previous = elements.promptQueue.firstElementChild;
-    const panel = createQueuePanel(queue, {
+    const options = {
       onAction: handleQueueAction,
       // 插队要有"当前轮"可插;子代理会话的队列不归本端管,只读展示。
       running: Boolean(snapshot?.running),
       mutable: !snapshot?.subagent
-    });
-    if (previous) previous.replaceWith(panel); else elements.promptQueue.appendChild(panel);
+    };
+    const previous = elements.promptQueue.firstElementChild;
+    if (typeof previous?.update === "function") {
+      previous.update(queue, options);
+      elements.promptQueue.hidden = previous.hidden;
+      return;
+    }
+    const panel = createQueuePanel(queue, options);
+    elements.promptQueue.replaceChildren(panel);
     elements.promptQueue.hidden = panel.hidden;
   }
 

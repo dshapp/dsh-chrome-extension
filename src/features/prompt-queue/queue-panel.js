@@ -39,6 +39,21 @@ const ICONS = {
   cancel: lucideIconSvg("x", { size: 14 })
 };
 
+/// 待发队列行:只有 placement === "queued" 的条目进面板(见文件头)。
+function queuedRows(items) {
+  return (items ?? []).filter((item) => (item.placement ?? "queued") === "queued");
+}
+
+/// 决定渲染结果的一份签名:行 id、可编辑性、预览文本,加上两个开关。
+/// 内容相同即视为"这一帧无需重画"。
+function queueSignature(queued, running, mutable) {
+  return JSON.stringify([
+    Boolean(running),
+    Boolean(mutable),
+    queued.map((item) => [item.id, blocksToText(item.message?.content), editableText(item.message) !== null])
+  ]);
+}
+
 /// 渲染排队面板。
 ///
 /// @param items   session/queue 快照
@@ -48,6 +63,7 @@ const ICONS = {
 /// @param mutable  子代理会话的队列不归本端管,只读展示。
 /// @param onError  (error, itemId, action) => void;onAction 失败时的上报口。
 ///                 不传也不会漏成未处理拒绝,只是失败对用户不可见。
+/// @returns 面板根元素;其上挂有 update(items, options),供侧栏按快照就地更新。
 export function createQueuePanel(items, { onAction, onError, running = false, mutable = true } = {}) {
   const element = document.createElement("div");
   element.className = "queue-dock";
@@ -56,8 +72,14 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
   // 避免同一条目上叠加两次互相打架的变更。
   let editingId = null;
   let busyId = null;
-
-  const queued = (items ?? []).filter((item) => (item.placement ?? "queued") === "queued");
+  // 两个开关随快照变,所以不能是解构出来的常量 —— update() 要能改它们。
+  let panelRunning = Boolean(running);
+  let panelMutable = Boolean(mutable);
+  let queued = queuedRows(items);
+  // 上一次真正画出来的输入签名。同一个签名再来一次就不碰 DOM:侧栏每个快照
+  // 都会 update(),若每帧重画 innerHTML,正在编辑的那一行会被换回只读文本,
+  // 用户刚敲进去的字连同光标一起消失。
+  let signature = queueSignature(queued, panelRunning, panelMutable);
 
   function render() {
     if (!queued.length) {
@@ -86,7 +108,7 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
       `<div class="queue-row${busy ? " is-busy" : ""}" data-item-id="${escapeHtml(item.id)}">`,
       GLYPH,
       body,
-      mutable ? `<div class="queue-actions">${renderActions(item, editing, busy)}</div>` : "",
+      panelMutable ? `<div class="queue-actions">${renderActions(item, editing, busy)}</div>` : "",
       "</div>"
     ].join("");
   }
@@ -103,7 +125,7 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
       action("remove", ICONS.remove, t("queue.remove"), busy),
       // 插队只在运行中可用;不可用时 title 说明原因,而不是把按钮藏掉 ——
       // 藏掉会让"这条能不能插队"随 agent 状态忽隐忽现。
-      action("steer", ICONS.steer, running ? t("queue.steer") : t("queue.steerUnavailable"), busy || !running)
+      action("steer", ICONS.steer, panelRunning ? t("queue.steer") : t("queue.steerUnavailable"), busy || !panelRunning)
     ].join("");
   }
 
@@ -161,6 +183,33 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
     });
   }
 
+  /// 用一份新快照就地更新面板,供侧栏在每个渲染帧调用。
+  ///
+  /// 两种情况下不碰 DOM:内容签名没变(流式输出期间每个 rAF 都会来一遍),
+  /// 以及某一行正在编辑 —— 重画 innerHTML 会把输入框换回只读文本,用户刚敲
+  /// 进去的字连同光标一起丢。返回 true 表示这次真的重画了。
+  ///
+  /// @param nextItems session/queue 快照
+  /// @param options   { running, mutable };缺省则沿用上一次的值。
+  function update(nextItems, options = {}) {
+    const nextQueued = queuedRows(nextItems);
+    if (options.running !== undefined) panelRunning = Boolean(options.running);
+    if (options.mutable !== undefined) panelMutable = Boolean(options.mutable);
+    // 编辑中的条目已离开队列(被取走/撤回/插队):结束编辑态,否则面板会
+    // 永远停在一个已经不存在的行上。
+    if (editingId != null && !nextQueued.some((item) => item.id === editingId)) editingId = null;
+    queued = nextQueued;
+    const nextSignature = queueSignature(queued, panelRunning, panelMutable);
+    if (editingId != null || nextSignature === signature) {
+      signature = nextSignature;
+      return false;
+    }
+    signature = nextSignature;
+    render();
+    return true;
+  }
+
+  element.update = update;
   render();
   return element;
 }
