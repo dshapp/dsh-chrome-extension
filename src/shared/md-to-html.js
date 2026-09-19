@@ -124,7 +124,13 @@ function splitFencedBlocks(markdown) {
   let codeLang = "";
   let codeLines = [];
   for (const line of lines) {
-    const fenceMatch = /^\s*```(\S*)\s*$/.exec(line);
+    // CommonMark 允许开栅栏与信息串之间有空白("``` js"):反引号后先吃掉
+    // 空白,信息串再取到行尾并去掉首尾空白。原来的 (\S*) 要求反引号后立刻是
+    // 非空白,于是带前导空格的围栏既不算开也不算关 —— 代码块退化成段落,
+    // 后面真正的关栅栏反倒开了个吞掉余下正文的 <pre>。
+    // 栅栏判定必须与 incremental-markdown 的 stableCut(/^\s*```/)一致,
+    // 否则切点会落进代码块。
+    const fenceMatch = /^\s*```\s*(\S*)\s*$/.exec(line);
     if (fenceMatch && !inCode) {
       if (buffer.length) { blocks.push({ kind: "text", lines: buffer }); buffer = []; }
       inCode = true;
