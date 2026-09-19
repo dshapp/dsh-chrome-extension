@@ -206,21 +206,47 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 
 // ---------------------------------------------------------------- CDP plumbing
 
-/** Attach the debugger to a tab once, and remember that we did. */
-async function attach(tabId) {
-  if (attached.has(tabId)) return
-  await chrome.debugger.attach({ tabId }, CDP_VERSION)
-  attached.add(tabId)
-  // Page and DOM are needed for navigation and screenshots. Accessibility must
-  // be enabled explicitly: without it getFullAXTree answers with a bare stub
-  // root and none of the page's real nodes.
-  await chrome.debugger.sendCommand({ tabId }, 'Page.enable')
-  await chrome.debugger.sendCommand({ tabId }, 'DOM.enable')
-  await chrome.debugger.sendCommand({ tabId }, 'Accessibility.enable')
-  // Network powers the network/network_detail tools. It must be enabled before
-  // the requests we want to report are made, which is why it happens here at
-  // attach time rather than lazily inside the tool.
-  await chrome.debugger.sendCommand({ tabId }, 'Network.enable')
+/**
+ * Attach the debugger to a tab once, and remember that we did.
+ *
+ * Single-flight per tab. Tool calls are dispatched without awaiting each other
+ * (see handleFrame), so two calls can reach this function before the first
+ * chrome.debugger.attach settles. A plain attached-check-then-await lets both
+ * through, and Chrome rejects the second attach from the same extension as
+ * "Another debugger is already attached" even though the debugger is in fact
+ * attached — a spurious failure for a perfectly valid call. Sharing the
+ * in-flight promise collapses them into one attach.
+ *
+ * A failed attempt clears the slot immediately, so the next caller retries
+ * instead of inheriting the rejection forever.
+ */
+const attachInFlight = new Map()
+
+function attach(tabId) {
+  if (attached.has(tabId)) return Promise.resolve()
+  const pending = attachInFlight.get(tabId)
+  if (pending) return pending
+
+  const attempt = (async () => {
+    await chrome.debugger.attach({ tabId }, CDP_VERSION)
+    attached.add(tabId)
+    // Page and DOM are needed for navigation and screenshots. Accessibility must
+    // be enabled explicitly: without it getFullAXTree answers with a bare stub
+    // root and none of the page's real nodes.
+    await chrome.debugger.sendCommand({ tabId }, 'Page.enable')
+    await chrome.debugger.sendCommand({ tabId }, 'DOM.enable')
+    await chrome.debugger.sendCommand({ tabId }, 'Accessibility.enable')
+    // Network powers the network/network_detail tools. It must be enabled before
+    // the requests we want to report are made, which is why it happens here at
+    // attach time rather than lazily inside the tool.
+    await chrome.debugger.sendCommand({ tabId }, 'Network.enable')
+  })()
+  attachInFlight.set(tabId, attempt)
+  // Delete on both outcomes, and do it before the awaiters resume so a caller
+  // that attaches again right after a rejection sees a clean slot.
+  const clear = () => { if (attachInFlight.get(tabId) === attempt) attachInFlight.delete(tabId) }
+  attempt.then(clear, clear)
+  return attempt
 }
 
 async function detach(tabId) {
