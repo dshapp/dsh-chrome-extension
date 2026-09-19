@@ -4,7 +4,7 @@
 // 每个 create* 返回一个 DOM 节点;每个 update* 就地更新同一节点。
 // renderer 靠 nodeId 决定复用还是重建。
 import { t } from "../../shared/i18n.js";
-import { mdToHtml, escapeHtml } from "../../shared/md-to-html.js";
+import { mdToHtml, escapeHtml, readFence, isClosingFence } from "../../shared/md-to-html.js";
 import { NodeKind, AssistantStatus, ToolRowState, blocksToText } from "../sessions/chat-nodes.js";
 import { toolRowModel, resultText, hasResultText, ToolVariant } from "./tool-row-model.js";
 import { resolveMention, deliverablesBasename } from "../sessions/turn-deliverables.js";
@@ -315,11 +315,21 @@ function updateAgentText(body, text, mentions = null) {
   }
 }
 
-/// 折叠切点若落在未闭合的 ``` 围栏内,补一行围栏收尾。
-function closeOpenFence(preview) {
-  let fences = 0;
-  for (const line of preview.split("\n")) if (/^\s*```/.test(line)) fences += 1;
-  return fences % 2 === 1 ? `${preview}\n\`\`\`` : preview;
+/// 折叠切点若落在未闭合的围栏内,补一行**等长**围栏收尾。
+///
+/// 不能固定补三个反引号:开栅栏是四个时 ``` 关不掉它,反而变成代码块里多出来
+/// 的一行。判定共用 md-to-html 的 readFence/isClosingFence,长度取开栅栏长度。
+export function closeOpenFence(preview) {
+  let openRun = 0;
+  for (const line of String(preview ?? "").split("\n")) {
+    if (openRun === 0) {
+      const fence = readFence(line);
+      if (fence) openRun = fence.run;
+    } else if (isClosingFence(line, openRun)) {
+      openRun = 0;
+    }
+  }
+  return openRun === 0 ? preview : `${preview}\n${"`".repeat(openRun)}`;
 }
 
 /// 正文里被行内 code 命名的本轮产出路径 → 可点按钮(web fileMentions / mac
