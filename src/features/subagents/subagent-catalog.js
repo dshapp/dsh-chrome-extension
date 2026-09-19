@@ -118,8 +118,14 @@ export function subagentTokenTotal(summary) {
   return total > 0 ? total : null;
 }
 
-/// 累计活跃时长:settledMs + max(0, 末刻 - 起始)。非运行态末刻取 through,否则 now。
-export function subagentDurationMs(summary, now) {
+/// 累计活跃时长:settledMs + max(0, 末刻 - 起始)。运行态末刻取 now,否则取 through。
+///
+/// active 还在 = 这一轮没结算(宿主在 turn/end 时把它折进 settledMs 并删掉
+/// active),所以此时末刻必须跟着 wall clock 走;through 只是"最后一个事件的
+/// 时刻",长工具调用/长思考期间事件稀疏,拿它当末刻会让"已跑多久"一直冻住,
+/// popover 的 1 秒重绘也就成了空转。对齐 reference client 的
+/// activityDuration(summary, activity, now) 与 Mac SubagentCatalogAction。
+export function subagentDurationMs(summary, now, activity) {
   const timing = summary?.projections?.values?.subagentTiming;
   if (!timing || typeof timing !== "object") return null;
   const settled = Number(timing.settledMs) || 0;
@@ -127,7 +133,13 @@ export function subagentDurationMs(summary, now) {
   if (!active || typeof active !== "object") return settled > 0 ? settled : null;
   const since = Number(active.since) || 0;
   const through = Number(active.through) || 0;
-  const end = through > 0 ? through : (Number(now) || since);
+  // 显式给 activity 时以它为准;没给就按"active 存在即运行"推断。
+  const running = activity === undefined
+    ? true
+    : (typeof activity === "boolean" ? activity : activity === "running");
+  // now 不可用(0/NaN)或早于 through(时钟回拨)时退回 through,时长不倒退。
+  const clock = Number(now);
+  const end = running && Number.isFinite(clock) && clock > through ? clock : through;
   return settled + Math.max(0, end - since);
 }
 

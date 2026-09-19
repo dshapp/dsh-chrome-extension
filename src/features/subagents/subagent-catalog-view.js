@@ -180,7 +180,7 @@ export function mountSubagentCatalog(trigger, menu, { deps, getSessionId, onOpen
 
     // 右侧指标:token + 时长。
     const tokenTotal = subagentTokenTotal(summary);
-    const duration = subagentDurationMs(summary, Date.now());
+    const duration = subagentDurationMs(summary, Date.now(), entry.activity);
     if (tokenTotal != null || duration != null) {
       const metrics = el("span", "subagent-metrics");
       if (tokenTotal != null) metrics.append(el("span", "subagent-metric", formatSubagentTokens(tokenTotal) + " tok"));
