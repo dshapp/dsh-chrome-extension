@@ -944,18 +944,25 @@ const tools = {
     if (active) {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
       if (!tab) throw new Error('no active tab to borrow')
-      sessionTabs.set(session, tab.id)
       // Same reason as navigate: start recording network traffic immediately,
       // rather than from whenever the first page tool happens to attach.
+      //
+      // Attach *before* binding: if the debugger refuses this target (a chrome://
+      // page, or a file: page without file access), find_tab must fail without
+      // side effects. Binding first left close_session pointing at the user's own
+      // tab, so cleaning up a task that never took over that tab closed it.
       await attach(tab.id)
+      sessionTabs.set(session, tab.id)
       return { success: true, url: tab.url, tabId: tab.id, borrowed: true }
     }
     if (!url) throw new Error('pass url, or active:true to borrow the visible tab')
     const tabs = await chrome.tabs.query({})
     const match = tabs.find((tab) => tab.url === url) || tabs.find((tab) => tab.url?.startsWith(url))
     if (!match) throw new Error(`no tab matching ${url} in this session`)
-    sessionTabs.set(session, match.id)
+    // Same ordering rule as the active:true branch above: a refused attach must
+    // not leave the session bound to a tab this call never took over.
     await attach(match.id)
+    sessionTabs.set(session, match.id)
     return { success: true, url: match.url, tabId: match.id, borrowed: false }
   },
 
