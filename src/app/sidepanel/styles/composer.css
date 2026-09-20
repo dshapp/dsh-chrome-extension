@@ -352,7 +352,8 @@
 /* 不再 margin-left:auto —— 靠右推挤由它前面的 #stats-btn 负责。
    flex 里只有第一个 auto 外边距吃得到剩余空间,两个都写会让后面那个失效。 */
 #send {
-  width: 32px; height: 32px;
+  /* 28px:与同排胶囊(.bar-btn / #attach-btn 的 2rem)等高。之前写死 32px,比它们高 4px。 */
+  inline-size: 2rem; block-size: 2rem;
   border-radius: 50%;
   border: none;
   display: flex;
@@ -367,6 +368,10 @@
 #send.state-idle:disabled { opacity: .3; cursor: default; }
 #send.state-stop { background: var(--danger); border: 1.5px solid var(--danger); color: #fff; }
 #send.state-stop:hover { opacity: .85; }
+/* 停止图标 = Mac 的 stop.fill:实心方块,不再是 lucide 的描边方框。
+   停止态 color 已是 #fff;fill 落在 svg 根上,rect 自身没写 fill 所以直接继承,
+   于是整块填白。idle/queue 两态不匹配此选择器,仍是线稿。 */
+#send.state-stop svg { fill: currentColor; }
 #send.state-queue { background: var(--bg-raised); border: 1.5px solid var(--border); color: var(--text-dim); font-size: 11px; font-weight: 600; }
 #send.state-queue:hover { background: var(--bg-input); }
 
