@@ -13,6 +13,8 @@ import { decorateCodeBlocks, fmtTime } from "./chat-view.js";
 import { renderIncrementalMarkdown } from "./incremental-markdown.js";
 import { openCardDetail } from "./card-detail.js";
 import { splitUserContent, projectUserText, referenceSummary, fileExtension, fileSizeText } from "./user-content.js";
+import { parseXMLMessageCards } from "./user-xml-cards.js";
+import { createUserXmlCards } from "./user-xml-cards-view.js";
 import { attachCopyFeedback } from "./copy-feedback.js";
 import { foldMessageText, chunkText } from "./long-message.js";
 import { lucideIcon, fileTypeIconName, linkIconName, fileTypeKind } from "./file-icons.js";
@@ -212,6 +214,9 @@ export function createUserNode(node, context = {}) {
   const turn = el("div", "msg-user-turn");
   const bubble = el("div", "msg-user");
   const { text, images, files, rest } = splitUserContent(node.content);
+  // 圈选元素的消息正文是一段属性 XML:投影成键值卡片,不把标记原样铺开。
+  // [指令] 之后的原话仍在气泡里,按普通用户消息渲染。
+  const cards = parseXMLMessageCards(text);
 
   // 附件行:图片 + 文件卡(web attachmentRow)。
   if (images.length || files.length) {
@@ -247,10 +252,13 @@ export function createUserNode(node, context = {}) {
     onOpenFile: context.onOpenFile,
     onOpenSkill: context.onOpenSkill
   };
-  if (text) bubble.append(createUserText(text, refs));
+  const remainder = cards ? cards.remainder : text;
+  if (remainder) bubble.append(createUserText(remainder, refs));
   for (const block of rest) bubble.append(createJsonBlock(block, t("message.extraBlock")));
 
-  turn.append(bubble);
+  // 卡片不进气泡:气泡是用户消息的强调底色,卡片各有自己的表面。
+  if (cards) turn.append(createUserXmlCards(cards.cards, cards));
+  if (bubble.childNodes.length) turn.append(bubble);
   const summary = referenceSummary(node.referenceLabels);
   if (summary) turn.append(summary);
 

@@ -71,6 +71,40 @@ mark.find-hit.current { background: var(--accent); color: #fff; outline: 1px sol
   user-select: text;
 }
 
+/* 圈选元素 XML 的键值卡片(对齐 Mac 的 XMLMessageCardsView)。
+
+   消息气泡是"用户原话"的强调底色,卡片不属于原话,所以卡片排在气泡之外、
+   单独一层表面:每张卡 = 等宽标签头 + 若干 键/值 行,列宽按内容自适应。
+   卡片整体靠右,与用户消息同侧。 */
+.xml-cards {
+  display: flex; flex-direction: column; gap: 6px;
+  align-items: flex-end; max-inline-size: 100%;
+}
+.xml-card {
+  min-inline-size: 0; max-inline-size: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+/* 标签头保留等宽字体:它显示的确实是标记名,不是文案。 */
+.xml-card-tag {
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-dim);
+}
+.xml-card-body { display: flex; flex-direction: column; gap: 1px; margin-block-start: 5px; }
+/* 两列 grid:键右对齐贴住值,和 macOS LabeledContent 的读法一致。 */
+.xml-card-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.xml-card-key {
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-faint); text-align: end;
+}
+.xml-card-value {
+  min-inline-size: 0; font-size: 0.75rem; line-height: 1.5;
+  color: var(--text); overflow-wrap: anywhere;
+}
+/* "查看全部"挂在卡片列尾部,与长消息折叠的入口同一形状。 */
+.msg-xml-more { align-self: flex-end; margin-block-start: 0; }
+
 .msg-user .msg-imgs { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px; align-items: center; }
 .msg-user .msg-imgs img { max-width: 120px; max-height: 120px; border-radius: 10px; display: block; }
 /* 历史图片字节要按需读回:加载中压暗,失败留可见占位而不是破图。 */
