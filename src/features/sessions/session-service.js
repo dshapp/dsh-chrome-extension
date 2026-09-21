@@ -1012,7 +1012,18 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
             // 通知必须跳过它 —— 对齐 Mac AgentNotificationCenter 的
             // "guard !subject.isSubagent else return"(AppModel 用
             // summary.origin == "subagent" 喂那个 subject)。
-            if (!listStore.isSubagent(payload.sessionId)) {
+            //
+            // 第二道闸门:这个会话本客户端见过它在跑吗?api-session/error 还兼着
+            // "激活失败"的出口 —— 宿主在任何客户端打开一个冷会话时后台 resume
+            // (SessionHistoryController.promote),失败就全局广播
+            // "resume failed for session ...: RemoteError: agent-presets:
+            // preset \"x\" not found"。那既不是这边的任务,也根本没有任务:会话
+            // 连 agent 都没起来。没有这道闸门时,别人(Mac app、另一个侧栏)每打开
+            // 一次那个再也起不来的旧会话,这边就弹一条顶着旧任务标题的
+            // "后台任务失败",而用户这边什么都没做。
+            // 判据与完成通知同源(见 background-notifier 的 running 集合):
+            // 没见它跑起来过,就不是"用户的后台任务"结束了。
+            if (!listStore.isSubagent(payload.sessionId) && listStore.hasRunHere(payload.sessionId)) {
               onBackgroundTurnFailure?.(
                 payload.sessionId, payload.message ?? "", listStore.titleOf(payload.sessionId)
               );

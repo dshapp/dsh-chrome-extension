@@ -76,6 +76,8 @@ test('service:背景会话的 agent-error 不产出当前快照的行', () => {
     subscribe() {}, unsubscribe() {}, async call() { return {} }
   }, { onBackgroundTurnFailure: (id, message) => failures.push([id, message]) })
   service.open('s1')
+  // 通知闸门只放行"本客户端见过它在跑"的会话(见 resume-failure-notification.spec.mjs)。
+  service.listStore.setStatus('other', true)
   service.handleHostFrame({
     payload: { type: 'host/agent-error', sessionId: 'other', message: 'background crash' }
   })

@@ -86,6 +86,8 @@ test('service:子代理 follow 流的出错 turn/end 也不进系统通知', () 
 test('service:根会话的后台失败照常上报(闸门没把通知整条关掉)', () => {
   const { service, failures } = serviceHarness()
   service.open('session-other')
+  // 跑起来过才算"用户的后台任务" —— 见 resume-failure-notification.spec.mjs。
+  service.listStore.setStatus(ROOT, true)
   emitError(service, ROOT, 'backend crash')
   followEndError(service, ROOT, 'turn crash')
   assert.deepEqual(failures, [[ROOT, 'backend crash'], [ROOT, 'turn crash']])
@@ -94,6 +96,9 @@ test('service:根会话的后台失败照常上报(闸门没把通知整条关�
 test('service:名单里没有的会话按非子代理处理(不知道就不拦)', () => {
   const { service, failures } = serviceHarness()
   service.open(ROOT)
+  // host/session-status 可能早于 host/session-added 到,名单里还没有这一行,
+  // 但它确实在跑:这种"不知道 origin"的会话仍旧放行,免得真失败被静音。
+  service.listStore.setStatus('session-unknown', true)
   emitError(service, 'session-unknown', 'boom')
   assert.deepEqual(failures, [['session-unknown', 'boom']],
     '拿不到 origin 时保守放行,免得把真正的后台失败也静音')

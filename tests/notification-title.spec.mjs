@@ -107,6 +107,9 @@ test('service:后台失败回调带上该会话的标题', () => {
   }, { onBackgroundTurnFailure: (id, message, title) => failures.push([id, message, title]) })
   service.listStore.replaceAll([{ sessionId: ROOT, running: false, updatedAt: 1 }])
   service.listStore.setTitle(ROOT, TITLE)
+  // 通知闸门要求"本客户端见过它在跑"(见 resume-failure-notification.spec.mjs):
+  // 这里测的是跑完之后失败的那条真路径。
+  service.listStore.setStatus(ROOT, true)
   service.open('session-other')
   service.handleHostFrame({
     type: 'item', streamId: 'events',

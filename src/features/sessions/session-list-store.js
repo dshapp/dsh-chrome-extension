@@ -36,6 +36,16 @@ export function createSessionListStore() {
   // 否则启动时拉到的一批本来就 idle 的会话会集体亮绿点(对齐 macOS 的
   // reconcileCompletedNotification:没有 previous 就只记 running 位然后返回)。
   const previousRunning = new Map();
+  // ranSessionIds:本客户端**亲眼看到跑过**的会话。它是"后台任务失败"系统通知的
+  // 闸门 —— 与完成通知里那个 running 集合(background-notifier)是同一条规矩:
+  // 没见它跑起来过,它结束/出错就不是"用户的后台任务"出了事。
+  //
+  // 没有这道闸门时,宿主的 api-session/error 是**进程级全局广播**(任何客户端
+  // 激活任何会话失败都会发给所有人),于是别的客户端打开一个再也起不来的旧会话
+  // (典型:header 钉着一个已被删掉的 agentPreset,resume 永远失败)时,
+  // 这边会凭空弹出一条"后台任务失败:resume failed for session ...",
+  // 标题还是那个早就做完的任务名。
+  const ranSessionIds = new Set();
   // 哪个会话是当前打开的那个。未读提醒只发给**不在眼前**的会话:
   // 用户正看着的那个会话跑完了,他自己就看见了,再点一个绿点是噪声。
   let selectedSessionId = null;
@@ -70,6 +80,9 @@ export function createSessionListStore() {
   function reconcileCompleted(summary) {
     const id = summary.sessionId;
     const running = Boolean(summary.running);
+    // "跑过"要记在首次观察之前:冷启动基线里本来就在跑的会话(别的客户端
+    // 刚启动的任务)不产生绿点,但它确确实实在跑,之后失败了该通知。
+    if (running && id) ranSessionIds.add(id);
     if (!previousRunning.has(id)) {
       // 首次观察:只登记,不产生提醒。
       previousRunning.set(id, running);
@@ -99,6 +112,7 @@ export function createSessionListStore() {
     // 随进程无限增长,而且该会话一旦重新出现,行上会升起一个并不存在的徽章。
     for (const id of [...awaitingKinds.keys()]) if (!seen.has(id)) awaitingKinds.delete(id);
     for (const id of [...draftSessionIds]) if (!seen.has(id)) draftSessionIds.delete(id);
+    for (const id of [...ranSessionIds]) if (!seen.has(id)) ranSessionIds.delete(id);
   }
 
   function upsert(summary) {
@@ -208,6 +222,9 @@ export function createSessionListStore() {
       notify();
     },
     setStatus(sessionId, running) {
+      // 先记"跑过"再看行在不在:host/session-status 可能早于 host/session-added
+      // (别的客户端刚建的会话),名单还没收到这一行,但运行这件事已经发生了。
+      if (running && sessionId) ranSessionIds.add(sessionId);
       const target = byId.get(sessionId);
       if (target && target.running !== running) {
         // 对账必须在写入**之前**:reconcileCompleted 靠 previousRunning 里那个
@@ -304,6 +321,7 @@ export function createSessionListStore() {
       completedSessionIds.delete(sessionId);
       erroredSessionIds.delete(sessionId);
       previousRunning.delete(sessionId);
+      ranSessionIds.delete(sessionId);
       if (existed) revision += 1;
       notify();
     },
@@ -351,6 +369,10 @@ export function createSessionListStore() {
     /// (与会话头部的 origin 同源,见 host 的 listFields)。通知这条路上要用它
     /// 挡掉子代理:子代理跑完只是父轮里的一个步骤,不是用户的task结束。
     isSubagent: (sessionId) => Boolean(sessionId) && byId.get(sessionId)?.origin === "subagent",
+    /// 本客户端有没有见过这个会话真的在跑(session.list 基线的 running 位,
+    /// 或 host/session-status、turn/start 的实时帧)。失败通知的闸门用它:
+    /// 从没跑起来过的会话,它的 agent-error 是"打不开",不是"任务失败"。
+    hasRunHere: (sessionId) => Boolean(sessionId) && ranSessionIds.has(sessionId),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
