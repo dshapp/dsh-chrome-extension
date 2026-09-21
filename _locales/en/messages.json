@@ -1,8 +1,8 @@
 {
   "extDescription": {
-    "message": "Lets a DeepSeek Harness agent drive this browser through a local MCP daemon, and puts a DSH AI chat in the side panel."
+    "message": "Lets a DeepSeek Harness agent drive this browser through a local MCP daemon, and puts the Deepseek Harness APP chat in a side panel."
   },
   "openSidepanel": {
-    "message": "Open DSH AI side panel"
+    "message": "Open Deepseek Harness APP side panel"
   }
 }
