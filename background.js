@@ -42,6 +42,17 @@ const sessionTabs = new Map()
 const sessionGroups = new Map()
 /** Tabs currently attached to the debugger. */
 const attached = new Set()
+/**
+ * Tabs a session adopted from the user's own browsing instead of opening.
+ *
+ * A borrowed tab is the user's, so close_tab/close_session must not close it
+ * without an explicit force. sessionTabs cannot carry that distinction, and the
+ * MV3 worker can be evicted at any moment, so the ledger lives in
+ * chrome.storage.session and borrowedTabs is only its in-memory cache.
+ */
+const BORROWED_TABS_KEY = 'dsh_borrowed_tabs'
+const borrowedTabs = new Map()
+let borrowedTabsLoaded = false
 
 // ---------------------------------------------------------------- desired state
 
@@ -273,6 +284,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   for (const [session, id] of sessionTabs) {
     if (id === tabId) sessionTabs.delete(session)
   }
+  // A closed tab must not linger in the borrowed ledger, or a later session
+  // reusing the same (now recycled) tab id would refuse to close a tab it never
+  // borrowed.
+  pruneBorrowedTab(tabId)
 })
 
 /**
@@ -557,6 +572,202 @@ async function groupTab(session, tabId, groupTitle) {
   } catch {
     // Grouping is a convenience; losing it must not fail the tool call.
   }
+}
+
+/**
+ * Remember that a session is acting on a tab the user already had open.
+ *
+ * The ledger outlives this worker instance because close_session runs in a
+ * later, evicted worker than the navigate that borrowed the tab. Reads are
+ * cached; every write re-reads first, so two sessions borrowing in parallel
+ * cannot clobber each other's entry.
+ */
+async function loadBorrowedTabs() {
+  if (borrowedTabsLoaded) return borrowedTabs
+  try {
+    const stored = await chrome.storage.session.get(BORROWED_TABS_KEY)
+    const value = stored?.[BORROWED_TABS_KEY]
+    if (value && typeof value === 'object') {
+      for (const [session, ids] of Object.entries(value)) {
+        if (Array.isArray(ids)) borrowedTabs.set(session, ids.filter((id) => typeof id === 'number'))
+      }
+    }
+  } catch {
+    // No storage.session (or it was cleared): closing protection degrades to
+    // this worker's lifetime, which is still correct for same-worker calls.
+  }
+  borrowedTabsLoaded = true
+  return borrowedTabs
+}
+
+async function saveBorrowedTabs() {
+  try {
+    const value = {}
+    for (const [session, ids] of borrowedTabs) if (ids.length) value[session] = ids
+    await chrome.storage.session.set({ [BORROWED_TABS_KEY]: value })
+  } catch {
+    // Best effort: the in-memory cache still protects this worker.
+  }
+}
+
+async function rememberBorrowedTab(session, tabId) {
+  if (tabId == null) return
+  await loadBorrowedTabs()
+  const ids = borrowedTabs.get(session) || []
+  if (!ids.includes(tabId)) ids.push(tabId)
+  borrowedTabs.set(session, ids)
+  await saveBorrowedTabs()
+}
+
+/** Whether this session adopted `tabId` from the user rather than opening it. */
+async function isBorrowedTab(session, tabId) {
+  await loadBorrowedTabs()
+  return (borrowedTabs.get(session) || []).includes(tabId)
+}
+
+/** Forget one tab everywhere, so a closed tab cannot linger in the ledger. */
+async function pruneBorrowedTab(tabId) {
+  await loadBorrowedTabs()
+  let changed = false
+  for (const [session, ids] of borrowedTabs) {
+    const kept = ids.filter((id) => id !== tabId)
+    if (kept.length !== ids.length) {
+      changed = true
+      if (kept.length) borrowedTabs.set(session, kept)
+      else borrowedTabs.delete(session)
+    }
+  }
+  if (changed) await saveBorrowedTabs()
+}
+
+/**
+ * Normalise a URL into the keys tab reuse matches on.
+ *
+ * Returns null for anything that is not an absolute URL. about:blank and bare
+ * strings are therefore never reused, which is what keeps a half-specified
+ * target from hijacking whichever tab happens to look similar. The fragment is
+ * dropped (an anchor never identifies a different page) and the trailing slash
+ * of a path is ignored, so "/docs" and "/docs/" are one page.
+ */
+function normalizeUrl(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  let parsed
+  try {
+    parsed = new URL(raw.trim())
+  } catch {
+    return null
+  }
+  // about:blank is what a brand-new tab reports; matching two of them would
+  // adopt an arbitrary empty tab instead of the page the caller asked for.
+  if (parsed.protocol === 'about:') return null
+  const path = parsed.pathname.replace(/\/+$/, '')
+  const query = parsed.search || ''
+  // Non-special schemes (chrome:, file:, about:) report origin "null", which
+  // would collapse unrelated pages together, so the scheme stands in for the
+  // authority there.
+  const base = parsed.origin === 'null' ? parsed.protocol : parsed.origin
+  return {
+    hrefKey: `${base}${path}${query}`,
+    pageKey: `${base}${path}`,
+    hasQuery: query !== '',
+  }
+}
+
+/** The extension's own origin, whose pages are never borrowed from the user. */
+function ownOrigin() {
+  return `chrome-extension://${chrome.runtime.id}`
+}
+
+/**
+ * Whether a tab may be adopted as a session's working tab.
+ *
+ * chrome:// and file: pages are allowed: they can be the very page the user
+ * asked about, and the worst case is that CDP tools report the page as not
+ * debuggable. Devtools, view-source, and any extension page are not — an
+ * extension UI is no one's working tab, and borrowing this extension's own
+ * page would point the bridge at itself.
+ */
+function isReusableTab(tab) {
+  if (tab?.id == null) return false
+  const url = typeof tab.url === 'string' ? tab.url : ''
+  if (!url || !normalizeUrl(url)) return false
+  if (/^(devtools|view-source|chrome-untrusted|chrome-extension):/i.test(url)) return false
+  if (url.startsWith(ownOrigin())) return false
+  return true
+}
+
+/**
+ * Order candidate tabs so the most likely intended one comes first.
+ *
+ * The user's visible tab wins (that is the page they mean when they say "this
+ * page"), then the most recently used. lastAccessed is Chrome 121+, so a miss
+ * degrades to tab order instead of throwing.
+ */
+function rankTabs(tabs, session) {
+  const currentId = sessionTabs.get(session)
+  return [...tabs].sort((a, b) => {
+    if (a.id === currentId) return -1
+    if (b.id === currentId) return 1
+    const activePriority = (tab) => (tab.active ? 1 : 0)
+    if (activePriority(a) !== activePriority(b)) return activePriority(b) - activePriority(a)
+    return (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0)
+  })
+}
+
+/**
+ * Find a tab in the user's browser that already shows `url`.
+ *
+ * Two levels, in order: the same URL including query, then the same path when
+ * the open tab is the plain (query-less) form of it. The plain tab is a
+ * landing page that is safe to navigate to the parameterized URL; a tab that
+ * already carries its own query is not, because that query is the state of a
+ * search or a signed link and moving it elsewhere would destroy the page the
+ * user is reading.
+ */
+async function findReusableTab(url, session) {
+  const wanted = normalizeUrl(url)
+  if (!wanted) return null
+  const tabs = (await chrome.tabs.query({})).filter(isReusableTab)
+  const ranked = rankTabs(tabs, session)
+  for (const [matchKind, matches] of [
+    ['exact', (tab) => normalizeUrl(tab.url)?.hrefKey === wanted.hrefKey],
+    ['page', (tab) => {
+      const candidate = normalizeUrl(tab.url)
+      return candidate != null && !candidate.hasQuery && candidate.pageKey === wanted.pageKey
+    }],
+  ]) {
+    const hit = ranked.find(matches)
+    if (hit) return { tab: hit, matchKind }
+  }
+  return null
+}
+
+/**
+ * Adopt a tab the user already had open.
+ *
+ * Deliberately less invasive than the create path: it does not activate the tab
+ * or focus its window, and it leaves an already-grouped tab where the user put
+ * it. Only an ungrouped tab joins the session's group, so a task's tabs stay
+ * together without rearranging the user's own tab strip.
+ */
+async function adoptTab(session, tab, groupTitle) {
+  sessionTabs.set(session, tab.id)
+  const ungrouped = tab.groupId == null || tab.groupId === -1
+  if (ungrouped && sessionGroups.get(session) != null) {
+    await groupTab(session, tab.id, groupTitle)
+  }
+  const debuggable = isDebuggableTarget(tab.url)
+  let attachedNow = false
+  if (debuggable) {
+    try {
+      await attach(tab.id)
+      attachedNow = true
+    } catch {
+      // e.g. a file: page without "Allow access to file URLs". Adoption still
+      // succeeds; only CDP-backed tools are unavailable.
+    }
+  }
+  return { debuggable, attached: attachedNow }
 }
 
 // ---------------------------------------------------------------- selectors
@@ -894,6 +1105,45 @@ const tools = {
       throw new Error('url is required')
     }
     let tabId = sessionTabs.get(session)
+    // "Open this page" should not mean "open a second copy of this page". When
+    // the session has no tab of its own yet, adopt the user's tab if it already
+    // shows the target. A session that already owns a tab keeps the in-place
+    // navigation below: that is reuse too, and swapping tabs mid-task would
+    // abandon the page the task was on.
+    if (!newTab && tabId == null) {
+      const hit = await findReusableTab(target, session)
+      if (hit) {
+        tabId = hit.tab.id
+        const { attached: attachedNow } = await adoptTab(session, hit.tab, groupTitle)
+        await rememberBorrowedTab(session, tabId)
+        // An exact hit is already on the page: navigating again would reload the
+        // document and discard whatever the user had typed or scrolled to. So
+        // only move the tab when the URL really differs — the path-level match,
+        // where the query does.
+        const current = normalizeUrl(hit.tab.url)
+        const wanted = normalizeUrl(target)
+        if (current?.hrefKey !== wanted?.hrefKey) {
+          await chrome.tabs.update(tabId, { url: target })
+          if (!attachedNow && isDebuggableTarget(target)) {
+            try {
+              await attach(tabId)
+            } catch {
+              // e.g. a file: target without "Allow access to file URLs".
+            }
+          }
+        }
+        await waitForLoad(tabId)
+        const adopted = await chrome.tabs.get(tabId)
+        return {
+          success: true,
+          url: adopted.url,
+          tabId,
+          reused: true,
+          matchKind: hit.matchKind,
+          borrowed: true,
+        }
+      }
+    }
     if (newTab || tabId == null) {
       // Open the tab at about:blank and attach *before* pointing it at the
       // URL. The Network domain only reports requests issued after it is
@@ -937,7 +1187,7 @@ const tools = {
     }
     await waitForLoad(tabId)
     const tab = await chrome.tabs.get(tabId)
-    return { success: true, url: tab.url, tabId }
+    return { success: true, url: tab.url, tabId, reused: false }
   },
 
   async find_tab({ session, url, active }) {
@@ -953,22 +1203,36 @@ const tools = {
       // tab, so cleaning up a task that never took over that tab closed it.
       await attach(tab.id)
       sessionTabs.set(session, tab.id)
+      // An explicit borrow is still a borrow: a later close_session must not
+      // close a tab the user was already looking at.
+      await rememberBorrowedTab(session, tab.id)
       return { success: true, url: tab.url, tabId: tab.id, borrowed: true }
     }
     if (!url) throw new Error('pass url, or active:true to borrow the visible tab')
     const tabs = await chrome.tabs.query({})
-    const match = tabs.find((tab) => tab.url === url) || tabs.find((tab) => tab.url?.startsWith(url))
+    const wanted = normalizeUrl(url)
+    // Normalised matching first (so a trailing slash or hash never hides an
+    // otherwise exact tab), then the historical literal/prefix fallback for
+    // callers that pass a bare domain.
+    const match =
+      (wanted &&
+        (tabs.find((tab) => normalizeUrl(tab.url)?.hrefKey === wanted.hrefKey) ||
+          tabs.find((tab) => normalizeUrl(tab.url)?.pageKey === wanted.pageKey))) ||
+      tabs.find((tab) => tab.url === url) ||
+      tabs.find((tab) => tab.url?.startsWith(url))
     if (!match) throw new Error(`no tab matching ${url} in this session`)
     // Same ordering rule as the active:true branch above: a refused attach must
     // not leave the session bound to a tab this call never took over.
     await attach(match.id)
     sessionTabs.set(session, match.id)
+    await rememberBorrowedTab(session, match.id)
     return { success: true, url: match.url, tabId: match.id, borrowed: false }
   },
 
   async list_tabs({ session }) {
     const tabId = sessionTabs.get(session)
     const groupId = sessionGroups.get(session)
+    const borrowed = (await loadBorrowedTabs()).get(session) || []
     const tabs = []
     for (const tab of await chrome.tabs.query({})) {
       const grouped = groupId != null && tab.groupId === groupId
@@ -987,6 +1251,9 @@ const tools = {
         title: tab.title,
         active: tab.active,
         groupTitle,
+        // Adopted from the user's own tabs, so close_session leaves it open
+        // unless force:true is passed.
+        borrowed: borrowed.includes(tab.id),
         // The tab page tools currently act on; siblings need find_tab first.
         current: tab.id === tabId,
       })
@@ -994,21 +1261,40 @@ const tools = {
     return { success: true, tabs }
   },
 
-  async close_tab({ session }) {
+  async close_tab({ session, force }) {
     const tabId = currentTab(session)
+    // A tab the user already had open is theirs, not the task's. Finishing a
+    // task is not consent to destroy it, so the tab is released (untracked,
+    // debugger detached) and left open unless the caller forces it.
+    if (!force && (await isBorrowedTab(session, tabId))) {
+      // Refuse without side effects: the session keeps its tab (still attached,
+      // still current), so a later force:true can close it, and nothing about
+      // the user's page changed just because a close was declined.
+      return {
+        success: true,
+        closed: false,
+        borrowed: true,
+        note: 'this tab was already open before the task; left it open — pass force:true to close it',
+      }
+    }
     await detach(tabId)
     await chrome.tabs.remove(tabId)
     sessionTabs.delete(session)
-    return { success: true, closed: true }
+    await pruneBorrowedTab(tabId)
+    return { success: true, closed: true, borrowed: false }
   },
 
-  async close_session({ session }) {
+  async close_session({ session, force }) {
     const tabId = sessionTabs.get(session)
     let groupId = sessionGroups.get(session)
-    if (tabId == null && groupId == null) return { success: true, closed: 0 }
+    const borrowed = (await loadBorrowedTabs()).get(session) || []
+    if (tabId == null && groupId == null) return { success: true, closed: 0, kept: [] }
     let ids = tabId != null ? [tabId] : []
     try {
-      if (groupId == null && tabId != null) {
+      // Only infer a group from the tracked tab when that tab is the task's
+      // own. A borrowed tab may sit in a group the user made, and closing that
+      // whole group because a session ended would be a destructive surprise.
+      if (groupId == null && tabId != null && !borrowed.includes(tabId)) {
         const tab = await chrome.tabs.get(tabId)
         if (tab.groupId != null && tab.groupId !== -1) groupId = tab.groupId
       }
@@ -1019,11 +1305,25 @@ const tools = {
     } catch {
       // Fall back to just the tracked tab.
     }
+    const keep = force ? [] : ids.filter((id) => borrowed.includes(id))
+    const close = force ? ids : ids.filter((id) => !borrowed.includes(id))
+    // Release the debugger from every tab this session touched, including the
+    // ones being left open: a leftover "being debugged" banner is not a thing
+    // to leave on a page the user is still using.
     for (const id of ids) await detach(id)
-    if (ids.length) await chrome.tabs.remove(ids)
+    if (close.length) await chrome.tabs.remove(close)
     sessionTabs.delete(session)
     sessionGroups.delete(session)
-    return { success: true, closed: ids.length }
+    borrowedTabs.delete(session)
+    await saveBorrowedTabs()
+    return {
+      success: true,
+      closed: close.length,
+      kept: keep,
+      note: keep.length
+        ? 'left the user\'s pre-existing tab(s) open; pass force:true to close them too'
+        : undefined,
+    }
   },
 
   async snapshot({ session, mode, maxDepth, diff, selector }) {
