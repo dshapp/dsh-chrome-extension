@@ -4,7 +4,7 @@
 //
 // 交互是「圈选即批注」的两态机:
 //   hovering   —— 跟随鼠标画蒙层,点击选中一个元素后进入 annotating
-//   annotating —— 在该元素上方就地弹出批注框,三个出口(提交 / 下一个 / 关闭)
+//   annotating —— 在该元素上方就地弹出批注框,三个出口(退出圈选 / 下一个 / 提交)
 // 批注文本合并进元素摘要后 push 进 __cmPickerQueue,由侧栏轮询 drain 取走;
 // 「提交」「关闭」额外置一个标志位,让侧栏知道该发送还是该退出圈选模式。
 
@@ -21,6 +21,8 @@ export function elementPickerPageScript(options) {
     next: rawLabels.next || "下一个",
     close: rawLabels.close || "退出圈选",
     placeholder: rawLabels.placeholder || "对这个元素说点什么…",
+    // 键盘说明。单独占一行太吵,并进 textarea 的 placeholder 当第二行。
+    hint: rawLabels.hint || "",
     annotated: rawLabels.annotated || "已批注 {n} 个",
   };
   const OVERLAY_ID = "__cm-element-picker-overlay";
@@ -162,20 +164,34 @@ export function elementPickerPageScript(options) {
     return text.length > 40 ? text.slice(0, 40) + "…" : text;
   };
 
-  const styleButton = (button, primary) => {
+  /// kind: "primary"(提交) | "secondary"(下一个) | "ghost"(退出圈选)。
+  /// 退出是放弃路径,做成无边框弱化态 —— 它不该跟两个推进操作抢视觉权重,
+  /// 也让「误点退出把批注丢掉」这件事不容易发生。
+  const styleButton = (button, kind) => {
+    const idle = kind === "primary" ? "#3b82f6" : "transparent";
+    const hover = kind === "primary" ? "#2f6fd0" : "rgba(255,255,255,.1)";
     // 同 panel:先把页面继承来的样式打回默认,再叠自己的。
     button.style.all = "revert";
     Object.assign(button.style, {
       opacity: "1", filter: "none", transform: "none", visibility: "visible",
       flex: "0 0 auto",
-      padding: "5px 12px",
-      borderRadius: "6px",
-      border: primary ? "1px solid #3b82f6" : "1px solid #475569",
-      background: primary ? "#3b82f6" : "transparent",
-      color: primary ? "#ffffff" : "#e2e8f0",
-      font: "500 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      // 比原来的 5px/12px + 12px 字号小一圈:弹窗只有 280px 宽,底行现在要放三个按钮。
+      padding: "3px 9px",
+      borderRadius: "5px",
+      border:
+        kind === "primary" ? "1px solid #3b82f6"
+        : kind === "ghost" ? "1px solid transparent"
+        : "1px solid #475569",
+      background: idle,
+      color:
+        kind === "primary" ? "#ffffff"
+        : kind === "ghost" ? "rgba(248,250,252,.6)"
+        : "#e2e8f0",
+      font: "500 11px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       cursor: "pointer",
     });
+    button.addEventListener("mouseenter", () => { button.style.background = hover; });
+    button.addEventListener("mouseleave", () => { button.style.background = idle; });
   };
 
   /// 弹窗锚在**用户点击的那一点**上:默认左上角与点击点对齐 ——
@@ -256,7 +272,7 @@ export function elementPickerPageScript(options) {
     stop();
   };
 
-  /// 右上角关闭:丢弃这一条未提交的批注并退出圈选模式。
+  /// 底行最左的「退出圈选」(原右上角 ×):丢弃这一条未提交的批注并退出圈选模式。
   /// 已经点过「下一个」收下的元素不受影响 —— 它们早已进了队列,侧栏药丸里留着。
   const cancelClose = () => {
     pendingElement = null;
@@ -310,33 +326,35 @@ export function elementPickerPageScript(options) {
     });
     title.textContent = shortName(el);
 
-    const close = doc.createElement("button");
-    close.type = "button";
-    close.setAttribute("aria-label", labels.close);
-    close.title = labels.close;
-    Object.assign(close.style, {
-      flex: "0 0 auto", inlineSize: "18px", blockSize: "18px",
-      display: "inline-flex", alignItems: "center", justifyContent: "center",
-      padding: "0", border: "0", borderRadius: "50%",
-      background: "transparent", color: "#94a3b8",
-      font: "500 14px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      cursor: "pointer",
+    /// 已批注计数从底行挪到标题行右侧:底行要腾给「退出圈选」按钮。
+    /// 0 条时整个元素不渲染文本,标题独占一行,不留一块空白。
+    const count = doc.createElement("span");
+    Object.assign(count.style, {
+      flex: "0 0 auto",
+      whiteSpace: "nowrap",
+      color: "#94a3b8", font: "500 11px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     });
-    // 这段脚本会被序列化注入页面,不能 import;内联 lucide x 的原始路径。
-    close.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
-    close.addEventListener("click", cancelClose);
+    count.textContent = annotatedCount > 0
+      ? labels.annotated.replace("{n}", String(annotatedCount))
+      : "";
 
     head.appendChild(title);
-    head.appendChild(close);
+    head.appendChild(count);
 
     textarea = doc.createElement("textarea");
     textarea.rows = 3;
-    textarea.placeholder = labels.placeholder;
+    // placeholder 的第二行是键盘说明(textarea 的 placeholder 会照常渲染 \n)。
+    // rows=3 正好容得下两行提示,不必像单独一行说明那样再占掉一格竖直空间。
+    textarea.placeholder = labels.hint
+      ? labels.placeholder + "\n" + labels.hint
+      : labels.placeholder;
     textarea.style.all = "revert";
     Object.assign(textarea.style, {
       opacity: "1", filter: "none", transform: "none", visibility: "visible",
       inlineSize: "100%", boxSizing: "border-box", resize: "vertical",
-      minBlockSize: "56px", padding: "6px 8px",
+      // placeholder 现在是两行文案,窄框里还会各自折行 —— 按三行(3×18px 行高 + 内边距)
+      // 给下限,否则键盘说明会被裁掉半行,等于白写。
+      minBlockSize: "68px", padding: "6px 8px",
       borderRadius: "6px", border: "1px solid #475569",
       background: "#0f172a", color: "#f8fafc",
       font: "400 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -345,32 +363,36 @@ export function elementPickerPageScript(options) {
 
     const foot = doc.createElement("div");
     Object.assign(foot.style, {
-      display: "flex", alignItems: "center", gap: "6px", marginTop: "8px",
+      display: "flex", alignItems: "center", justifyContent: "flex-end",
+      // 超长本地化文案(德语之类)撑爆一行时换行,而不是把按钮挤出弹窗。
+      flexWrap: "wrap", gap: "6px", rowGap: "6px", marginTop: "8px",
     });
 
-    const count = doc.createElement("span");
-    Object.assign(count.style, {
-      flex: "1 1 auto", minInlineSize: "0",
-      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-      color: "#94a3b8", fontSize: "11px",
-    });
-    count.textContent = annotatedCount > 0
-      ? labels.annotated.replace("{n}", String(annotatedCount))
-      : "";
+    // 原来在右上角的 ×,改成底行最左的文字按钮:图标按钮的语义要靠猜,
+    // 而「退出圈选」这条路径是会丢掉当前草稿的,值得把话说明白。
+    // marginInlineEnd:auto 把它顶到行首,与右侧两个推进操作拉开距离,免得误点。
+    const exit = doc.createElement("button");
+    exit.type = "button";
+    exit.textContent = labels.close;
+    exit.title = labels.close;
+    exit.setAttribute("aria-label", labels.close);
+    styleButton(exit, "ghost");
+    exit.style.marginInlineEnd = "auto";
+    exit.addEventListener("click", cancelClose);
 
     const next = doc.createElement("button");
     next.type = "button";
     next.textContent = labels.next;
-    styleButton(next, false);
+    styleButton(next, "secondary");
     next.addEventListener("click", commitNext);
 
     const submit = doc.createElement("button");
     submit.type = "button";
     submit.textContent = labels.submit;
-    styleButton(submit, true);
+    styleButton(submit, "primary");
     submit.addEventListener("click", commitSubmit);
 
-    foot.appendChild(count);
+    foot.appendChild(exit);
     foot.appendChild(next);
     foot.appendChild(submit);
 

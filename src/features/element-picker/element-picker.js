@@ -115,6 +115,8 @@ export function createElementPicker({ chromeApi, showToast, t, onChange = () => 
       next: t("picker.annotate.next"),
       close: t("picker.annotate.close"),
       placeholder: t("picker.annotate.placeholder"),
+      // 键盘说明并进 placeholder 的第二行:弹窗本来就矮,单独占一行说明纯属噪音。
+      hint: t("picker.annotate.hint"),
       annotated: t("picker.annotate.count", { n: "{n}" })
     };
   }
