@@ -1,77 +1,79 @@
-// 把已选页面元素序列化成注入 prompt 的上下文块,用语义化 XML 包裹,
-// 便于大模型稳定解析出「用户指代了哪些元素」以及每个元素的定位信息。
-// 只发结构化摘要与定位符,不发 innerHTML,控制 token。
+// 把已选页面元素序列化成注入 prompt 的上下文块。
 //
-// 刻意不带说明句:标签名 selected_page_elements 与属性名 xpath/css/ref 已自解释,
-// 每条消息重复教一遍定位优先级纯属浪费 token。同理不发 id/class(已被选择器编码)、
-// 不发 bounding_box(无消费方,computer 工具按 ref 操作)。
+// 格式刻意做成「纯属性、一行一元素、不缩进」,只发结构化摘要与定位符,不发 innerHTML:
+//
+//   - 所有字段都进属性,name/text/note 不再占子节点 —— 20 元素同批实测比旧格式小 ~31%
+//     (旧的 name 正文 + <text>/<note> 子节点 + 4 空格缩进都要乘以元素个数);
+//   - 定位符只发 css:bridge 的 elementExpression() 只认 @eN 与 @option:<id>,其余一律
+//     走 document.querySelector,XPath 没有任何工具消费;picker 自己的 ref_N 也不在
+//     任何工具的可解析范围内 —— 发出去只会诱导模型拿它去 click 然后失败。所以
+//     xpath / ref 都不进 prompt。
+//   - 空值不产出属性:一排 foo="" 纯属占位。
+//   - 属性值里 > 与 ' 合法,不转义(css 里每个 > 因此省 3 字节)。
+//
+// 页面侧摘要(picker-element-summary.js)仍照常产出 xpath/ref:药丸 tooltip 与 hover
+// 高亮还在用,这里只是不把它们写进 prompt。
 
 const MAX_TEXT = 160;
 /// 批注是用户对这个元素的原话,是本轮交互的核心诉求 —— 按 MAX_TEXT 截会把需求截没,
 /// 所以单独给它一个更宽的上限。
 const MAX_NOTE = 500;
 
-/** XML 文本节点转义。属性值同样走这里,因此统一转义引号。 */
-function escapeXml(value) {
+/** 属性值转义。& 必须最先替换;'>' 与 "'" 在双引号属性里合法,不转义。 */
+function escapeAttr(value) {
   return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+    .replace(/"/g, "&quot;");
 }
 
-function truncate(value) {
-  const text = String(value == null ? "" : value).trim();
-  return text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "…" : text;
+/** 折叠空白:批注允许换行(Shift+Enter),不折叠会把属性行劈成多行,破坏「一行一元素」。 */
+function normalize(value) {
+  return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+}
+
+function truncate(value, max = MAX_TEXT) {
+  const text = normalize(value);
+  return text.length > max ? text.slice(0, max) + "…" : text;
 }
 
 /** 空值不产出属性,避免一排 foo="" 占位。 */
-function attr(name, value) {
-  const text = truncate(value);
-  return text ? ` ${name}="${escapeXml(text)}"` : "";
+function attr(name, value, max = MAX_TEXT) {
+  const text = truncate(value, max);
+  return text ? ` ${name}="${escapeAttr(text)}"` : "";
 }
 
 /// url 与定位符一样不能截断:半截 URL 既无法点开也无法比对,省下的 token 毫无意义。
 function rawAttr(name, value) {
-  const text = String(value == null ? "" : value).trim();
-  return text ? ` ${name}="${escapeXml(text)}"` : "";
+  const text = normalize(value);
+  return text ? ` ${name}="${escapeAttr(text)}"` : "";
 }
 
 function elementXml(element, index) {
   const attrs = element.attrs || {};
-  const tag = element.tag || "element";
+  const tag = truncate(element.tag || "element");
   const name = truncate(element.name);
   // role 与 tag 同义时(<button> 的 role=button)不带,只有显式改写过语义才有信息量。
   const role = truncate(element.role);
   // describe() 已优先把 aria-label / placeholder 当 name,这里只补它们与 name 不同的情形。
   const ariaLabel = truncate(attrs.ariaLabel);
   const placeholder = truncate(attrs.placeholder);
-  const head = [
-    `    <element i="${index + 1}"`,
+  // 可读名称当属性;可见文本与它不同时才另出一个 text。
+  const text = truncate(element.text);
+  return [
+    `<element i="${index + 1}"`,
     attr("tag", tag),
     role && role !== tag ? attr("role", role) : "",
-    // 定位信息优先级:xpath / css 稳定可回放,ref 只在本次页面生命周期内有效。
-    rawAttr("xpath", element.xpath),
+    // 定位符优先级:css 是本栈唯一能被工具直接执行的定位方式。
     rawAttr("css", element.selector),
-    rawAttr("ref", element.ref),
     ariaLabel && ariaLabel !== name ? attr("aria_label", ariaLabel) : "",
     placeholder && placeholder !== name ? attr("placeholder", placeholder) : "",
     attr("href", attrs.href),
+    text && text !== name ? attr("text", text) : "",
+    attr("name", name),
+    attr("note", element.note, MAX_NOTE),
+    " />",
   ].join("");
-  // 批注走子节点而不是属性:它是用户原话,可能多行、可能很长,塞进属性行既难读也易超宽。
-  const noteRaw = String(element.note == null ? "" : element.note).trim();
-  const note = noteRaw.length > MAX_NOTE ? noteRaw.slice(0, MAX_NOTE) + "…" : noteRaw;
-  // 可读名称当正文;可见文本与它不同时才另起子节点(长文本不挤进属性行)。
-  const text = truncate(element.text);
-  const children = [];
-  if (text && text !== name) children.push(`      <text>${escapeXml(text)}</text>`);
-  if (note) children.push(`      <note>${escapeXml(note)}</note>`);
-  if (children.length) {
-    const body = name ? [`      ${escapeXml(name)}`, ...children] : children;
-    return `${head}>\n${body.join("\n")}\n    </element>`;
-  }
-  return name ? `${head}>${escapeXml(name)}</element>` : `${head} />`;
 }
 
 /**
@@ -81,8 +83,9 @@ function elementXml(element, index) {
 export function formatPickedElementsContext(elements) {
   if (!Array.isArray(elements) || !elements.length) return "";
   const page = elements.find(element => element.url || element.title) || {};
+  // count 不再产出:一行一元素之后模型直接数行即可。
   const root = [
-    `<selected_page_elements count="${elements.length}"`,
+    "<selected_page_elements",
     rawAttr("url", page.url),
     attr("title", page.title),
   ].join("");
