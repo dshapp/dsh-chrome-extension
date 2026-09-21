@@ -79,6 +79,11 @@ export function createDshConnection(options) {
       await ensureStarted();
       return api.uploadFile(sessionId, file, name);
     },
+    /// 宿主插件的普通 GET 路由(非 RPC 信封)。404 → null,见 api-client.getJson。
+    async getJson(path, query, timeoutMs) {
+      await ensureStarted();
+      return api.getJson(path, query, timeoutMs);
+    },
     async settleRemoteEvent(clientId, eventId, outcome) {
       await ensureStarted();
       return api.settleRemoteEvent(clientId, eventId, outcome);

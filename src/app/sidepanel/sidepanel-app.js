@@ -71,11 +71,21 @@ export function createSidepanelApp(root, deps, options = {}) {
         presentedFiles: (turn) => snap?.presentedByTurn?.get?.(turn) ?? [],
         deliverablesRevision: snap?.deliverablesRevision ?? null,
         // 行内 mention / 产出 chip / 交付卡点击:侧栏是扩展页,file: 打不开,
+        // 本轮改动文件卡(web ChangedFiles / mac ChangedFilesCard):耐久事件只公告
+        // turn 与 seq,清单与逐文件 diff 要按 seq 去宿主读;读到的结果由服务缓存,
+        // 所以重渲染不会重复拉取。
+        changesSeq: (turn) => snap?.changesSeqByTurn?.get?.(turn) ?? null,
+        changesSummary: (seq) => deps.changes?.summary?.(snap?.sessionId, seq) ?? null,
+        loadChangesSummary: (seq) => deps.changes?.loadSummary?.(snap?.sessionId, seq) ?? null,
+        changesDiff: (seq, index) => deps.changes?.diff?.(snap?.sessionId, seq, index) ?? null,
+        loadChangesDiff: (seq, index) => deps.changes?.loadDiff?.(snap?.sessionId, seq, index) ?? null,
         // 统一走宿主 openPath。打开失败不再静默吞:宿主对不存在的路径会回错,
         // 用户看到 toast 才知道"点了没反应"是路径问题而不是按钮坏了。
         onOpenPath: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
         onOpenFile: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
         onRevealPath: (path) => { void deps.workspaces.revealPath(path).catch((error) => showToast(format(error))); },
+        // 气泡里的会话引用胶囊:点了就切到被引用的那个会话(可跨工作区)。
+        onOpenSession: (sessionId) => { void openSession(sessionId).catch((error) => showToast(format(error))); },
         // 历史图片只有 attachmentId,按需回读字节(web historical-images)。
         readAttachment: (attachmentId) => deps.sessions.readAttachment?.(snap?.sessionId, attachmentId) ?? null
       };

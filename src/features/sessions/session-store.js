@@ -21,6 +21,7 @@ import { t } from "../../shared/i18n.js";
 import { expandAssistantStream } from "./assistant-stream.js";
 import { mergeTurnRailItems, clipTurnPreview, TurnRailPreview } from "./turn-rail.js";
 import { producedPath, presentedFiles } from "./turn-deliverables.js";
+import { changesAnnouncement } from "../changes/turn-changes.js";
 import { buildTurnProcessSpecs } from "./turn-process.js";
 import { projectReferenceLabels } from "./references.js";
 import { assembleTrajectory } from "../trajectory/trajectory-model.js";
@@ -201,6 +202,9 @@ export function createSessionStore() {
       // deliverablesRevision 在词表实际变化时递增,尾行读它即可重渲染(对齐 mac 5af61e6)。
       producedPathsByTurn: new Map(),
       presentedByTurn: new Map(),
+      // 每轮最新一条 `workspace/changes` 公告的 seq(turn → seq)。摘要与逐文件
+      // 对比都按这个 seq 去宿主读(见 features/changes),同轮的新公告覆盖旧的。
+      changesSeqByTurn: new Map(),
       deliverablesRevision: 0,
       // Turn process 折叠规格(turn → spec),渲染层用它判断成员与折叠头文案。
       turnProcessByTurn: new Map(),
@@ -366,6 +370,9 @@ export function createSessionStore() {
       // present 工具的交付清单(web ui-deliverables):它不带 surfaceOp,不产生自己的一行,
       // 只为回合尾行的交付卡与 mention 词表供数据。
       case EVT.deliverablesPresented: return applyPresented(event);
+      // 改动文件卡的公告(workspace-changes 插件):只带 turn 号,自己不成行,
+      // 只把回合尾行指向宿主提供的摘要。在这里认领同时也让它不落进未知面兜底。
+      case EVT.workspaceChanges: return applyWorkspaceChanges(event);
       // request/header、system/message 与 step 边界一样不产生行,但也不是"未知":
       // system/message 属于 Web 的 request/trajectory 视图,主记录里不该有行。
       case EVT.systemMessage:
@@ -1322,6 +1329,16 @@ export function createSessionStore() {
     state.deliverablesRevision += 1;
   }
 
+  /// 记下一条 `workspace/changes` 公告(web `isChangesEvent` / mac applyWorkspaceChanges):
+  /// 它指名一个 turn,摘要按这条事件自己的 seq 去宿主读。同轮的更晚公告替换更早的地址,
+  /// 与宿主替换自己那条记录的口径一致。
+  function applyWorkspaceChanges(event) {
+    const announcement = changesAnnouncement(event);
+    if (!announcement) return;
+    state.changesSeqByTurn.set(announcement.turn, announcement.seq);
+    state.deliverablesRevision += 1;
+  }
+
   // ---- projections ----
 
   function applyProjection(key, value, seq) {
@@ -1736,6 +1753,7 @@ export function createSessionStore() {
       pendingQuestion: state.pendingQuestion,
       producedPathsByTurn: state.producedPathsByTurn,
       presentedByTurn: state.presentedByTurn,
+      changesSeqByTurn: state.changesSeqByTurn,
       deliverablesRevision: state.deliverablesRevision,
       turnProcessByTurn: state.turnProcessByTurn
     };
@@ -1759,6 +1777,8 @@ export function createSessionStore() {
     producedPaths(turn) { return state.producedPathsByTurn.get(turn) ?? []; },
     /// 某轮的 present 交付声明(首见路径顺序)。
     presentedFiles(turn) { return state.presentedByTurn.get(turn) ?? []; },
+    /// 某轮改动文件记录的公告 seq;该轮没有记录(宿主没记过)时为 null。
+    changesSeq(turn) { return state.changesSeqByTurn.get(turn) ?? null; },
     /// follow 流失败的落地点:对齐 Mac StreamCoordinator 的 failEventStream。
     /// 同时清掉 running —— 流已经死了,再没有 turn/end 会来把转圈停下。
     setHistoryError(message) {

@@ -2,17 +2,22 @@
 // 对齐 web conversation-nodes/chat-snapshot-builder.ts ReferenceLabelProjector
 // 与 event-projection.ts sessionRecallLabels。
 
-/// source.kind === "session-reference" 时取 references[].label(首见顺序去重)。
-export function sessionRecallLabels(source) {
+/// source.kind === "session-reference" 时取 references[]{label, sessionId}(按 label 首见顺序去重)。
+/// host 会把直接用户消息里的 `@[label](dsh-session:…)` 重写成纯文本 `@label`,
+/// 会话 id 只剩这条 recall 上下文还带着 —— 气泡要把标签点成跳转就得靠它。
+export function sessionRecallReferences(source) {
   if (!source || typeof source !== "object") return [];
   if (source.kind !== "session-reference") return [];
   const refs = Array.isArray(source.references) ? source.references : [];
-  const labels = [];
+  const seen = [];
   for (const ref of refs) {
     const label = ref && typeof ref === "object" ? ref.label : null;
-    if (typeof label === "string" && label && !labels.includes(label)) labels.push(label);
+    const sessionId = ref && typeof ref === "object" ? ref.sessionId : null;
+    if (typeof label !== "string" || !label) continue;
+    if (seen.some((item) => item.label === label)) continue;
+    seen.push({ label, sessionId: typeof sessionId === "string" && sessionId ? sessionId : null });
   }
-  return labels;
+  return seen;
 }
 
 /// 用户消息引用标签投影:recall 上下文节点 seq 紧跟其用户消息(seq-1)。
@@ -20,11 +25,13 @@ export function projectReferenceLabels(nodes) {
   const byMessageSeq = new Map();
   for (const node of nodes) {
     if (node.kind !== "context") continue;
-    const labels = sessionRecallLabels(node.source);
-    if (labels.length) byMessageSeq.set(node.seq - 1, labels);
+    const refs = sessionRecallReferences(node.source);
+    if (refs.length) byMessageSeq.set(node.seq - 1, refs);
   }
   for (const node of nodes) {
     if (node.kind !== "user" && node.kind !== "steering") continue;
-    node.referenceLabels = byMessageSeq.get(node.seq) ?? null;
+    const refs = byMessageSeq.get(node.seq) ?? null;
+    node.referenceSessions = refs;
+    node.referenceLabels = refs ? refs.map((ref) => ref.label) : null;
   }
 }

@@ -58,6 +58,42 @@ export function createApiClient(options) {
     }
   }
 
+  /// 宿主插件注册的**普通 GET 路由**(非 JSON-RPC 信封),如 ui-deliverables 的
+  /// `/api/changes.summary` / `/api/changes.diff`。与 post() 的区别:
+  /// 404 不是失败,而是"宿主已不再提供这条记录"(会话被回收 / 本进程没记过),
+  /// 与 Mac APIClient.changesGet 同口径 —— 调用方据此不画卡,而不是报错。
+  async function getJson(path, query = {}, timeoutMs = 30000, mayRetryAuth = true) {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value == null) continue;
+      search.set(key, String(value));
+    }
+    const suffix = search.size ? `?${search.toString()}` : "";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(`${baseUrl}${path}${suffix}`, {
+        method: "GET",
+        credentials: "include",
+        signal: options.makeSignal ? options.makeSignal(controller.signal) : controller.signal
+      });
+      if (response.status === 401 && mayRetryAuth && await options.onUnauthorized?.()) {
+        clearTimeout(timer);
+        return getJson(path, query, timeoutMs, false);
+      }
+      if (response.status === 404) return null;
+      if (response.status === 403) throw new DshTransportError(t("api.trustFence403"));
+      if (!response.ok) throw new DshTransportError(`DSH HTTP ${response.status} ${path}`);
+      return await response.json();
+    } catch (error) {
+      if (error instanceof DshTransportError) throw error;
+      if (error?.name === "AbortError") throw new DshTransportError(t("api.timeout", { path }));
+      throw new DshTransportError(t("api.connectFailed", { baseUrl, message: error.message }), error);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   function parseServerResponse(envelope, expectedRpcId) {
     if (!envelope || envelope.type !== "server-response") {
       throw new DshTransportError(t("api.badEnvelope"));
@@ -119,6 +155,7 @@ export function createApiClient(options) {
       }
       return envelope.value;
     },
+    getJson,
     async settleRemoteEvent(clientId, eventId, outcome) {
       const method = "$events/result";
       const rpcId = mkId();

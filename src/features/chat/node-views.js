@@ -18,6 +18,7 @@ import { createUserXmlCards } from "./user-xml-cards-view.js";
 import { attachCopyFeedback } from "./copy-feedback.js";
 import { foldMessageText, chunkText } from "./long-message.js";
 import { lucideIcon, fileTypeIconName, linkIconName, fileTypeKind } from "./file-icons.js";
+import { buildUnifiedDiff, unifiedDiffText } from "./unified-diff.js";
 
 /// assistant 正文的折叠阈值。比用户消息的 1000 宽松得多:模型回答本来就长,
 /// 过早折叠会破坏正常阅读。这里要挡的是"打印整个文件"那一类,所以取一个
@@ -247,10 +248,11 @@ export function createUserNode(node, context = {}) {
   }
 
   const refs = {
-    sessionLabels: node.referenceLabels ?? [],
+    sessionRefs: node.referenceSessions ?? [],
     slashNames: node.skillNames ?? [],
     onOpenFile: context.onOpenFile,
-    onOpenSkill: context.onOpenSkill
+    onOpenSkill: context.onOpenSkill,
+    onOpenSession: context.onOpenSession
   };
   const remainder = cards ? cards.remainder : text;
   if (remainder) bubble.append(createUserText(remainder, refs));
@@ -1238,6 +1240,9 @@ export function createTurnTailNode(node, context = {}) {
   const openPath = (path) => { if (typeof onOpenPath === "function") onOpenPath(resolveToolPath(path, context.cwd)); };
   const revealPath = (path) => { if (typeof onRevealPath === "function") onRevealPath(resolveToolPath(path, context.cwd)); };
 
+  // 本轮改动文件记录的公告 seq(workspace-changes 插件);没有记录时为 null。
+  const changesSeq = typeof context.changesSeq === "function" ? context.changesSeq(node.turn) : null;
+
   const usage = node.usage ?? null;
   const totalTokens = usage ? turnTotalTokens(usage) : 0;
   const hasUsage = totalTokens > 0;
@@ -1245,9 +1250,11 @@ export function createTurnTailNode(node, context = {}) {
   const hasTime = runMs != null && runMs > 0;
   // 收尾消息、本轮用量、本轮用时三者皆无时,才彻底不占行(对齐 web/Mac 的 gate)。
   const hasActions = node.messageId != null || hasUsage || hasTime;
-  if (!hasActions && !produced.length && !presented.length) return null;
+  if (!hasActions && !produced.length && !presented.length && changesSeq == null) return null;
 
   const wrap = el("div", "turn-tail-node");
+  // 顺序对齐 web:改动文件卡在最上,其后才是产出 chips 与交付卡。
+  if (changesSeq != null) wrap.append(buildChangedFiles(changesSeq, context, openPath));
   // 产出 chips 在收尾正文与图标动作之间(web TurnTail chain / mac ProducedFilesRow)。
   if (produced.length) wrap.append(buildProducedFiles(produced, openPath));
   if (presented.length) wrap.append(buildPresentedFiles(presented, openPath, revealPath));
@@ -1469,6 +1476,128 @@ function buildPresentedFiles(files, onOpen, onReveal) {
     wrap.append(more);
   }
   return wrap;
+}
+
+/// 本轮改动文件卡(web ui-deliverables ChangedFiles / mac ChangedFilesCard)。
+///
+/// 两段式:耐久事件只公告"这一轮有改动记录",清单与逐文件对比要按公告的 seq
+/// 去宿主读。所以这张卡先挂一个**空占位**,摘要落地后自己填 —— 宿主不再提供
+/// (会话被回收后 404)时占位保持隐藏,而不是画一张空卡或报错。
+const CHANGED_FILES_SHOWN = 3;
+
+function buildChangedFiles(seq, context, openPath) {
+  const card = el("div", "turn-changes");
+  card.hidden = true;
+  let expanded = false;
+
+  const paint = (summary) => {
+    card.replaceChildren();
+    const header = el("div", "turn-changes-header");
+    const tile = el("span", "turn-changes-tile");
+    tile.append(lucideIcon("file-pen", { size: 13 }));
+    header.append(tile);
+    const titles = el("div", "turn-changes-titles");
+    titles.append(el("span", "turn-changes-title",
+      summary.total === 1 ? t("changes.titleOne") : t("changes.title", { n: String(summary.total) })));
+    const stat = el("span", "turn-changes-stat");
+    if (summary.added > 0) stat.append(el("span", "turn-changes-added", t("changes.added", { n: String(summary.added) })));
+    if (summary.deleted > 0) stat.append(el("span", "turn-changes-deleted", t("changes.deleted", { n: String(summary.deleted) })));
+    titles.append(stat);
+    header.append(titles);
+    card.append(header);
+
+    const list = el("ul", "turn-changes-list");
+    const shown = expanded ? summary.files : summary.files.slice(0, CHANGED_FILES_SHOWN);
+    shown.forEach((file) => {
+      // index 必须取自完整清单:diff 路由按摘要里的下标寻址,折叠后的切片下标会错位。
+      const index = summary.files.indexOf(file);
+      const item = el("li", null);
+      const row = el("button", "turn-changes-row");
+      row.type = "button";
+      row.title = file.path;
+      row.setAttribute("aria-label", t("changes.viewDiff", { name: file.display }));
+      row.append(el("span", "turn-changes-path", file.display));
+      const counts = el("span", "turn-changes-counts");
+      if (file.binary) counts.append(el("span", null, t("changes.binary")));
+      else if (file.oversized) counts.append(el("span", null, t("changes.oversized")));
+      else {
+        if (file.added > 0) counts.append(el("span", "turn-changes-added", t("changes.added", { n: String(file.added) })));
+        if (file.deleted > 0) counts.append(el("span", "turn-changes-deleted", t("changes.deleted", { n: String(file.deleted) })));
+      }
+      row.append(counts);
+      row.addEventListener("click", () => openChangedFileDetail(seq, index, file, context, openPath));
+      item.append(row);
+      list.append(item);
+    });
+    card.append(list);
+
+    if (summary.files.length > CHANGED_FILES_SHOWN) {
+      const toggle = el("button", "turn-changes-toggle");
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.append(lucideIcon(expanded ? "chevron-up" : "chevron-down", { size: 13 }));
+      toggle.append(el("span", null, expanded
+        ? t("changes.collapse")
+        : t("changes.showAll", { n: String(summary.files.length) })));
+      toggle.addEventListener("click", () => { expanded = !expanded; paint(summary); });
+      card.append(toggle);
+    }
+    card.hidden = false;
+  };
+
+  const render = (summary) => {
+    // 宿主不再提供、或这一轮其实没有列出任何文件:保持隐藏的空占位。
+    if (!summary || !summary.files.length) return;
+    paint(summary);
+  };
+
+  const cached = typeof context.changesSummary === "function" ? context.changesSummary(seq) : null;
+  if (cached) render(cached);
+  else if (typeof context.loadChangesSummary === "function") {
+    Promise.resolve(context.loadChangesSummary(seq)).then(render).catch(() => {});
+  }
+  return card;
+}
+
+/// 一个改动文件的 turn 起止对比:按需读一次,画进详情弹窗(mac ChangedFileReviewSheet)。
+function openChangedFileDetail(seq, index, file, context, openPath) {
+  openCardDetail({
+    title: file.display,
+    copyText: () => {
+      const diff = typeof context.changesDiff === "function" ? context.changesDiff(seq, index) : null;
+      return diff?.kind === "text" ? unifiedDiffText(diff.hunks) : "";
+    },
+    build: () => {
+      const sheet = el("div", "diff-sheet");
+      const head = el("div", "diff-sheet-head");
+      head.append(el("span", "diff-sheet-path", file.path));
+      const open = el("button", "diff-sheet-open", t("turn.open"));
+      open.type = "button";
+      open.addEventListener("click", () => openPath(file.path));
+      head.append(open);
+      const body = el("div", "diff-sheet-body");
+      body.append(el("div", "diff-note", t("changes.loading")));
+      sheet.append(head, body);
+
+      const fill = (diff) => {
+        body.replaceChildren();
+        if (!diff) { body.append(el("div", "diff-note", t("changes.unavailable"))); return; }
+        if (diff.kind === "binary") { body.append(el("div", "diff-note", t("changes.binary"))); return; }
+        if (diff.kind === "oversized") { body.append(el("div", "diff-note", t("changes.oversized"))); return; }
+        // 行级对比超时:宿主退化成整文件替换,明说一句,别让读者以为文件全被重写了。
+        if (diff.coarse) body.append(el("div", "diff-note", t("changes.coarse")));
+        if (!diff.hunks.length) { body.append(el("div", "diff-note", t("changes.identical"))); return; }
+        body.append(buildUnifiedDiff(diff.hunks));
+      };
+
+      const cached = typeof context.changesDiff === "function" ? context.changesDiff(seq, index) : null;
+      if (cached) fill(cached);
+      else if (typeof context.loadChangesDiff === "function") {
+        Promise.resolve(context.loadChangesDiff(seq, index)).then(fill).catch(() => fill(null));
+      } else fill(null);
+      return sheet;
+    }
+  });
 }
 
 /// workflow:记录里只留标题行 + 成员计数,phases/members 全部进弹窗。

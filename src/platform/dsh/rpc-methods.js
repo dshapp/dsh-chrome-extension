@@ -162,7 +162,10 @@ export const EVT = Object.freeze({
   workflowAgentStart: "tool-workflow/agent-start",
   workflowAgentEnd: "tool-workflow/agent-end",
   workflowRunEnd: "tool-workflow/run-end",
-  deliverablesPresented: "deliverables/presented"
+  deliverablesPresented: "deliverables/presented",
+  // workspace-changes 插件的"本轮改动文件"公告:只带 turn,摘要与逐文件对比
+  // 要按这条事件自己的 seq 去宿主 /api/changes.* 读(见 features/changes)。
+  workspaceChanges: "workspace/changes"
 });
 
 /// 审批结论。宿主只接受这四个字面量。
