@@ -5,7 +5,7 @@
 // renderer 靠 nodeId 决定复用还是重建。
 import { t } from "../../shared/i18n.js";
 import { mdToHtml, escapeHtml, readFence, isClosingFence } from "../../shared/md-to-html.js";
-import { NodeKind, AssistantStatus, ToolRowState, blocksToText } from "../sessions/chat-nodes.js";
+import { NodeKind, AssistantStatus, ToolRowState } from "../sessions/chat-nodes.js";
 import { toolRowModel, resultText, hasResultText, ToolVariant } from "./tool-row-model.js";
 import { resolveMention, deliverablesBasename } from "../sessions/turn-deliverables.js";
 import { getToolIconSvg, getToolPresentation } from "./tool-presentation.js";
@@ -288,20 +288,77 @@ export function createSteeringNode(node, context = {}) {
   return createUserNode(node, context);
 }
 
-/// context:插件/工具注入的上下文。记录里只留一行入口,全文进弹窗。
-export function createContextNode(node) {
+/// 注入上下文的纯文本部分。
+///
+/// 不能用 blocksToText:它把图片块折成 "[image]" 占位符,而图片在这里是**正文**
+/// (插件工具的截图往往是整条消息的全部内容),占位符只会把摘要行变成一句
+/// "[image]",图片本身反而看不见 —— 正是 Mac ContextRow 修掉的那个症状。
+function contextText(content) {
+  return (content ?? [])
+    .filter((block) => block?.type === "text")
+    .map((block) => block.text ?? "")
+    .join("\n")
+    .trim();
+}
+
+/// 注入上下文里的图片(插件工具截图、粘贴的参考图)。
+/// 历史消息里只有 attachment 引用,草稿/乐观消息才内联 data —— 两种都收。
+function contextImageStrip(images, context, onOpen) {
+  const strip = el("div", images.length > 1 ? "context-imgs multi" : "context-imgs");
+  for (const image of images) {
+    const img = document.createElement("img");
+    img.alt = image.name || "";
+    applyImageSource(img, image, context);
+    if (onOpen) {
+      img.addEventListener("click", onOpen);
+      img.title = t("card.viewDetail");
+    }
+    strip.append(img);
+  }
+  return strip;
+}
+
+/// context:插件/工具注入的上下文。记录里只留一行入口,全文进弹窗 ——
+/// 但图片例外,它们直接在行内出图。
+///
+/// 对齐 Mac 的 ContextRow:一行只写着 "tools-ptc" 等于把截图从记录里藏掉了,
+/// 而截图恰恰是这类消息的全部内容。图片行内渲染,点击进详情看大图。
+export function createContextNode(node, context = {}) {
   const label = node.provenanceLabel || node.provenanceRole || "context";
-  const text = blocksToText(node.content);
+  const text = contextText(node.content);
+  const { images } = splitUserContent(node.content);
   const wrap = el("div", "context-node");
   const trigger = el("button", "context-summary");
   trigger.type = "button";
   trigger.append(el("span", "context-label", label));
   trigger.append(el("span", "context-preview", text.slice(0, 80)));
-  trigger.addEventListener("click", () => openChunkedTextDetail({
-    title: label, text, className: "context-body"
-  }));
+  const openDetail = () => openContextDetail({ title: label, text, images, context });
+  trigger.addEventListener("click", openDetail);
   wrap.append(trigger);
+  if (images.length) wrap.append(contextImageStrip(images, context, openDetail));
   return wrap;
+}
+
+/// 上下文详情:图片在上、正文在下。正文仍然分片渲染(注入块可能几百 KB)。
+function openContextDetail({ title, text, images, context }) {
+  let cancel = null;
+  const dialog = openCardDetail({
+    title,
+    // 只有文本才可复制;纯图片的注入不给复制键(对齐 Mac:结构化 UI 不给复制)。
+    copyText: text ? () => text : null,
+    build: () => {
+      const host = el("div", "context-detail");
+      if (images.length) host.append(contextImageStrip(images, context, null));
+      if (text) {
+        const pre = el("pre", "context-body");
+        cancel = appendChunked(pre, chunkText(text));
+        host.append(pre);
+      }
+      return host;
+    }
+  });
+  dialog?.addEventListener("close", () => { cancel?.(); cancel = null; }, { once: true });
+  return dialog;
 }
 
 // ---------- assistant ----------
@@ -679,7 +736,9 @@ function hasToolDetail(node, model) {
   if (node.argsRaw) return true;
   if (node.result) {
     if (hasResultText(node.result)) return true;
-    if ((node.result.content ?? []).some((b) => b?.type === "image" && b.data)) return true;
+    // 历史结果里的图片块只有 attachment 引用(字节按需读回),只认 data 会让
+    // 一条纯图片的工具结果整行不可点 —— 图既不在行上,也打不开详情。
+    if ((node.result.content ?? []).some((b) => b?.type === "image" && (b.data || b.attachment))) return true;
   }
   return false;
 }
@@ -1499,7 +1558,7 @@ export function createNodeElement(node, context) {
   switch (node.kind) {
     case NodeKind.user: return createUserNode(node, context);
     case NodeKind.steering: return createSteeringNode(node, context);
-    case NodeKind.context: return createContextNode(node);
+    case NodeKind.context: return createContextNode(node, context);
     case NodeKind.assistant: return createAssistantNode(node, context);
     case NodeKind.toolCall: return createToolNode(node, context);
     case NodeKind.compaction: return createCompactionNode(node);

@@ -412,6 +412,22 @@ span.ref-chip { cursor: default; }
   color: var(--text-faint); font-size: 0.6875rem;
 }
 .context-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 注入上下文里的图片行内出图(对齐 Mac ContextRow 的 MessageGallery):
+   一张按单图尺寸铺开,多张退成方块缩略图。点击进详情看大图。 */
+.context-imgs { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 0.5rem 0.25rem; }
+.context-imgs img {
+  display: block; max-inline-size: 100%; max-block-size: 220px;
+  border-radius: var(--radius); cursor: zoom-in;
+}
+.context-imgs.multi img { max-inline-size: 96px; max-block-size: 96px; }
+.context-imgs img.img-loading { opacity: 0.35; }
+.context-imgs img.img-failed {
+  min-inline-size: 60px; min-block-size: 40px;
+  background: var(--bg-raised); border: 1px dashed var(--border);
+}
+/* 详情弹窗里的图片不可再点(已经是大图),按弹窗宽度铺满 */
+.context-detail .context-imgs { padding: 0 0 0.5rem; flex-direction: column; }
+.context-detail .context-imgs img { max-inline-size: 100%; max-block-size: none; cursor: default; }
 /* 正文只在详情弹窗里出现:不自带高度上限,交给弹窗那一条滚动 */
 .context-body {
   margin: 0; padding: 0.5rem;
