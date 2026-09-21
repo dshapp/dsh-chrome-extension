@@ -34,7 +34,10 @@ import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../../fe
 import { createPageContext } from "../../features/page-context/page-context.js";
 import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER, steerChordLabel } from "../../features/prompt-queue/index.js";
 
-export function createSidepanelApp(root, deps) {
+export function createSidepanelApp(root, deps, options = {}) {
+  // 主题句柄由入口创建(首帧要在 app 组装前就定色),app 只负责把本地镜像与
+  // 宿主偏好灌进去。缺失时(单元测试、dev web)主题保持跟随系统。
+  const theme = options.theme ?? null;
   const elements = collectElements(root);
   let sending = false;
   let historyDrawer = null;
@@ -1035,14 +1038,19 @@ export function createSidepanelApp(root, deps) {
   /// 注意 options 必须防御非对象:这个函数直接当过 click 监听器,
   /// 那时传进来的是 MouseEvent。
   async function newSession(options) {
-    const { _retried = false } = (options && typeof options === "object" && !("target" in options))
+    const { _retried = false, agentPreset = null } = (options && typeof options === "object" && !("target" in options))
       ? options : {};
     const workspace = workspaceMenu?.selected() ?? null;
-    const input = workspace?.workspaceId
-      ? { workspaceId: workspace.workspaceId }
-      : workspace?.path
-        ? { cwd: workspace.path }
-        : {};
+    // agentPreset 只在"用创造模式创作"那条路径上传:宿主在 create 时就按它组装
+    // agent,比先建再 select 少一次重建(select 是斜杠命令,会重启一次 agent)。
+    const input = {
+      ...(workspace?.workspaceId
+        ? { workspaceId: workspace.workspaceId }
+        : workspace?.path
+          ? { cwd: workspace.path }
+          : {}),
+      ...(agentPreset ? { agentPreset } : {})
+    };
     try {
       const sessionId = await deps.sessions.create(input);
       await openSession(sessionId, { fresh: true, _retried });
@@ -1557,6 +1565,11 @@ export function createSidepanelApp(root, deps) {
 
   async function start() {
     setStreamState(deps.DshStreamState.CONNECTING);
+    // 先用本地镜像定色:宿主的 ui-theme.preference 要等连接之后才知道,
+    // 而用户上次的选择不该在冷启动时被系统色盖掉一帧。
+    deps.settings.getThemePreference?.()
+      .then((preference) => theme?.setPreference(preference))
+      .catch(() => { /* 读不到就保持跟随系统 */ });
     applyStaticLabels(root);
     elements.input.placeholder = t("input.placeholder");
     updateSendState(false);
@@ -1584,10 +1597,25 @@ export function createSidepanelApp(root, deps) {
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
     settingsView = mountSettings(
       // 语言切换要重画整个界面(静态标签 + 各 pane),所以把 app 的 relabel 交给设置页。
-      { ...deps, showToast, onBusyEnterChange: setBusyEnter, onLanguageChange: relabel },
-      // 设置页改完提供方/模型目录后,当场重画底栏模型菜单 ——
-      // 用户关掉设置页就能在对话框里看到新模型,不必切会话。
-      { onModelsChanged: () => { dock.refreshModelMenu(); } }
+      {
+        ...deps, showToast, onBusyEnterChange: setBusyEnter, onLanguageChange: relabel, theme,
+        // full-access 的确认框由通用分页与 composer 共用同一个 <dialog>;
+        // composer-dock 自己拿的是 elements.permConfirm,这里补一份给设置页。
+        permConfirm: elements.permConfirm
+      },
+      {
+        // 设置页改完提供方/模型目录后,当场重画底栏模型菜单 ——
+        // 用户关掉设置页就能在对话框里看到新模型,不必切会话。
+        onModelsChanged: () => { dock.refreshModelMenu(); },
+        // 预设页的"用创造模式创作":新建一个跑创造模式预设的会话,然后关掉设置页
+        // —— 这个手势结束在对话里,不在设置页(web D43)。新建失败时把错误抛回
+        // 预设页,由它就地显示,不要静默留用户站在一个什么都没发生的按钮前面。
+        onStartCreatorDraft: async (agentPreset) => {
+          const sessionId = await newSession({ agentPreset });
+          if (sessionId) settingsView?.close();
+          return sessionId;
+        }
+      }
     );
     startConnection();
     // 通知点击(侧栏已开着):worker 写入 pending sessionId,这里即时切会话。

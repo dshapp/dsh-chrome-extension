@@ -1,42 +1,24 @@
-// 插件 pane。照搬 macos/.../Settings/SettingsRoot.swift PluginsSection:
-// 一个分段切换器(可配置 / 插件清单)+ 各自的表单。
+// 插件 pane。照搬 macos/.../Settings/SettingsRoot.swift PluginsSection 与
+// Components/Plugins/PluginsPage.swift:一个分段切换器,两个面 ——
+// 「插件市场」(官方 / 已安装两组 + 添加 / 卸载,并含可配置的官方卡片)与
+// 「内置插件」(只读清单)。
 //
-// 与 Mac 的差异(已与使用者确认):不做「联网搜索」卡片。Mac 那张卡片写的是
-// baseURL + maxUses,而宿主 web-search-deepseek 实际暴露的是
-// model/apiVersion/maxTokens/maxUses —— 两边字段对不上,且该卡片还要写凭证库,
-// 所以整张卡片不渲染。可配置段落只保留 Shell 与 Agent 循环。
+// 与 Mac 的差异(刻意保留):内置页签里保留了经 daemon 代理的 dsh plugin
+// 装 / 更 / 删控件(plugin-actions-ui.js)。市场页是 pluginManager/* 的界面,
+// daemon 不可用或不支持 pluginManager 时它整片降级为说明文字,那时这些控件
+// 是唯一的管理入口。
 //
 // Mac D30 规则保留:命名空间不被当前部署组装的卡片完全不渲染,而不是画一个
 // 禁用的空壳 —— 一张点不动的卡片读起来像坏了,而不像"此部署没有它"。
 import { t } from "../../../shared/i18n.js";
 import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import {
-  section, row, stackedRow, textInput, button, notice, spinner,
-  escapeHtml, tag, formFooter
+  section, row, textInput, button, notice, spinner, escapeHtml
 } from "./settings-ui.js";
-import { createPluginSettingsState } from "../../../features/settings/plugin-settings-state.js";
+import { PLUGIN_CARDS, availableCards } from "./plugin-config-cards.js";
+import { createPluginCardViews } from "./plugin-card-view.js";
+import { createMarketplaceView } from "./plugin-marketplace.js";
 import { createPluginActionsUi } from "./plugin-actions-ui.js";
-
-/// 可配置卡片规格。fields 的 id 即命名空间里的字段名(路径只有一段)。
-const CARDS = [
-  {
-    namespace: "shell",
-    title: "plug.bashTitle",
-    description: "plug.bashDescription",
-    fields: [
-      { id: "timeoutMs", label: "plug.bashTimeoutMs", hint: "plug.bashTimeoutMsHint", kind: "number" },
-      { id: "maxOutputBytes", label: "plug.bashMaxOutputBytes", hint: "plug.bashMaxOutputBytesHint", kind: "number" }
-    ]
-  },
-  {
-    namespace: "agent-loop",
-    title: "plug.agentLoopTitle",
-    description: "plug.agentLoopDescription",
-    fields: [
-      { id: "maxParallelToolCalls", label: "plug.agentLoopMaxParallel", hint: "plug.agentLoopMaxParallelHint", kind: "number" }
-    ]
-  }
-];
 
 const PHASE_TEXT = {
   pending: "inv.pending",
@@ -54,15 +36,29 @@ function moduleShortName(moduleName) {
   return raw;
 }
 
-export function createPluginsPane({ host, deps, settingsService, showToast, pluginActions }) {
-  let activeTab = "configurable";
-  // 每张卡片一份暂存态,按命名空间存;切 tab 不该丢掉正在编辑的草稿(Mac D.D29)。
-  const forms = new Map();
-  const expanded = new Set();
+export function createPluginsPane({ host, sheet, deps, settingsService, showToast, pluginActions, settingsDialog }) {
+  let activeTab = "marketplace";
+  // 市场里点开的配置卡片;为空时市场列表就是根视图(Mac 的 route)。
+  let openedCard = null;
   let describe = null;
   let loadingCards = true;
   let cardsError = null;
   let cardsLoadGeneration = 0;
+  // 凭证状态:按 ref 缓存 {configured, writable},草稿值按卡片存 —— 密钥原文
+  // 只在用户刚输入的那一刻存在内存里,提交后立刻清掉。
+  const credentialCache = {
+    state: new Map(),
+    drafts: new Map(),
+    get(ref) { return this.state.get(ref) ?? null; },
+    async refresh(refs) {
+      const unique = [...new Set((refs ?? []).filter(Boolean))];
+      if (!unique.length) return;
+      try {
+        const value = await settingsService.describeCredentials(unique);
+        for (const ref of unique) this.state.set(ref, value?.[ref] ?? null);
+      } catch { /* 凭证是增强信息,读不到不该让整页失败 */ }
+    }
+  };
 
   let inventory = [];
   let inventoryError = null;
@@ -74,10 +70,7 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
   // 装 / 更 / 删经 daemon 代理。daemon 不可用(老版本、没跑、被关掉)时这些控件
   // 整体不渲染 —— 与"命名空间不被组装就不画卡片"同一条规则:一个点不动的按钮
   // 读起来像坏了,而不像"此部署没有它"。
-  // 状态放在一个对象里,好让 plugin-actions-ui 与本文件共享同一份,而不是各存一半。
   const actionState = { actionsAvailable: false, installName: "", actionBusy: null };
-  // render 在下面才定义,这里用一层间接调用把它晚绑定 —— 直接传 render 会捕获
-  // 到 undefined(函数声明会提升,但这行在模块工厂里先于赋值执行)。
   const actionsUi = createPluginActionsUi({
     host,
     pluginActions,
@@ -85,26 +78,39 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
     state: actionState,
     render: () => render()
   });
-  const saving = new Set();
-  const failed = new Set();
 
-  function availableCards() {
-    const namespaces = new Set((describe?.namespaces ?? []).map((entry) => entry.ns));
-    return CARDS.filter((card) => namespaces.has(card.namespace));
+  const describeNow = ({ refresh = false } = {}) => {
+    if (refresh) return refreshDescribe();
+    return describe;
+  };
+
+  const cards = createPluginCardViews({
+    host, deps, settingsService, showToast, describeNow, credentialCache,
+    // 卡片不拥有整块 host(那里还画着页签与市场),所以状态一变就请调用方重画。
+    requestRender: () => { if (activeTab === "marketplace") render(); }
+  });
+
+  const marketplace = createMarketplaceView({
+    host, sheet, deps, settingsService, showToast, settingsDialog,
+    cards: () => selectableCards(),
+    onOpenCard(card) { openedCard = card; render(); },
+    onInstalled() { loadInventory(); },
+    onChange() { if (activeTab === "marketplace") render(); }
+  });
+
+  // 0.1.6 的 plugin-manager/changed:宿主的插件启停/装载状态变了。市场与清单
+  // 都是实时视图,变化到达时必须重读。没打开过清单就不主动拉。
+  deps.sessions?.onPluginManagerChanged?.(() => {
+    marketplace.refresh({ keepNotices: true });
+    if (inventoryLoaded || inventoryLoading || activeTab === "inventory") loadInventory();
+  });
+
+  function namespacesSet() {
+    return new Set((describe?.namespaces ?? []).map((entry) => entry.ns));
   }
 
-  function formFor(card) {
-    let form = forms.get(card.namespace);
-    if (form) return form;
-    const namespace = (describe?.namespaces ?? []).find((entry) => entry.ns === card.namespace);
-    if (!namespace) return null;
-    form = createPluginSettingsState({
-      namespace,
-      writable: describe?.writable === true,
-      fields: Object.fromEntries(card.fields.map((field) => [field.id, field.kind]))
-    });
-    forms.set(card.namespace, form);
-    return form;
+  function selectableCards() {
+    return availableCards(PLUGIN_CARDS, namespacesSet());
   }
 
   function renderTabs() {
@@ -112,70 +118,33 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
       + ` type="button" role="tab" data-subtab="${id}" aria-selected="${activeTab === id}">`
       + `${escapeHtml(t(labelKey))}</button>`;
     return `<div class="set-subtabs" role="tablist" aria-label="${escapeHtml(t("plug.tabs"))}">`
-      + item("configurable", "plug.configurableTab")
-      + item("inventory", "plug.inventoryTab")
+      + item("marketplace", "plug.marketplaceTab")
+      + item("inventory", "plug.builtinTab")
       + `</div>`;
   }
 
-  function renderField(card, field) {
-    const form = formFor(card);
-    const state = form?.field(field.id) ?? { text: "", overridden: false, invalid: false };
-    const hint = state.invalid
-      ? `<span class="set-danger">${escapeHtml(t("plug.invalidNumber"))}</span>`
-      : escapeHtml(t(field.hint));
-    const label = escapeHtml(t(field.label)) + (state.overridden ? tag(t("plug.overridden")) : "");
-    return stackedRow({
-      label,
-      hint,
-      control: textInput({
-        id: `plug-${card.namespace}-${field.id}`,
-        value: state.text,
-        disabled: form?.writable !== true,
-        mono: field.kind === "number"
-      })
-      + (state.overridden
-        ? `<button class="set-link" type="button" id="plug-reset-${card.namespace}-${field.id}"`
-          + `${form?.writable ? "" : " disabled"}>${escapeHtml(t("plug.reset"))}</button>`
-        : "")
+  /// 配置卡片路由:面包屑 + 返回,卡片本体 + 本卡凭证状态的异步载入占位。
+  function renderConfigRoute() {
+    const card = openedCard;
+    if (!card) return "";
+    return section({
+      body: `<div class="set-crumb">${escapeHtml(t("plug.crumbRoot"))} / ${escapeHtml(t(card.title))}</div>`
+        + `<button class="set-link" type="button" id="plug-back">`
+        + `${lucideIconSvg("chevron-left", { size: 13 })} ${escapeHtml(t("plug.backToList"))}</button>`
+    }) + section({
+      header: t(card.title),
+      body: `<div class="set-card open"><div class="set-card-body">`
+        + cards.renderBody(card) + cards.renderFooter(card)
+        + `</div></div>`,
+      footer: escapeHtml(t(card.description))
     });
-  }
-
-  function renderCard(card) {
-    const form = formFor(card);
-    const open = expanded.has(card.namespace);
-    const isSaving = saving.has(card.namespace);
-    const dirty = form?.dirty === true;
-    const valid = form?.invalid === false;
-    const head = `<button class="set-disclosure${open ? " open" : ""}" type="button"`
-      + ` id="plug-head-${card.namespace}" aria-expanded="${open}">`
-      + `<span class="set-disclosure-caret" aria-hidden="true">${lucideIconSvg(open ? "chevron-down" : "chevron-right", { size: 13 })}</span>`
-      + `<span class="set-disclosure-text">`
-      + `<span class="set-row-label">${escapeHtml(t(card.title))}${dirty ? tag(t("plug.unsaved"), "accent") : ""}</span>`
-      + `<span class="set-row-hint">${escapeHtml(t(card.description))}</span>`
-      + `</span></button>`;
-    if (!open) return `<div class="set-card">${head}</div>`;
-    const body = (form?.writable === false ? notice(t("plug.readOnly"), "muted") : "")
-      + card.fields.map((field) => renderField(card, field)).join("")
-      + (failed.has(card.namespace) ? notice(t("plug.saveFailed")) : "")
-      + formFooter({
-        discardId: `plug-discard-${card.namespace}`,
-        saveId: `plug-save-${card.namespace}`,
-        dirty, valid, saving: isSaving
-      });
-    return `<div class="set-card">${head}<div class="set-card-body">${body}</div></div>`;
   }
 
   function renderConfigurable() {
     if (loadingCards) return spinner();
     if (cardsError) return section({ body: notice(cardsError) });
-    const cards = availableCards();
-    if (!cards.length) {
-      return section({ body: `<div class="set-empty">${escapeHtml(t("plug.empty"))}</div>` });
-    }
-    return section({
-      body: cards.map(renderCard).join(""),
-      footer: escapeHtml(t("plug.intro"))
-    });
+    if (openedCard) return renderConfigRoute();
+    return marketplace.render();
   }
 
   function filteredInventory() {
@@ -246,7 +215,7 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
 
   function render() {
     host.innerHTML = renderTabs()
-      + (activeTab === "configurable" ? renderConfigurable() : renderInventory());
+      + (activeTab === "marketplace" ? renderConfigurable() : renderInventory());
     bind();
   }
 
@@ -258,86 +227,16 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
         else render();
       });
     }
-    if (activeTab === "configurable") bindCards();
-    else bindInventory();
-  }
-
-  function bindCards() {
-    for (const card of availableCards()) {
-      host.querySelector(`#plug-head-${CSS.escape(card.namespace)}`)?.addEventListener("click", () => {
-        if (expanded.has(card.namespace)) expanded.delete(card.namespace);
-        else expanded.add(card.namespace);
+    if (activeTab === "marketplace") {
+      host.querySelector("#plug-back")?.addEventListener("click", () => {
+        openedCard = null;
         render();
       });
-      const form = formFor(card);
-      for (const field of card.fields) {
-        host.querySelector(`#plug-${CSS.escape(card.namespace)}-${CSS.escape(field.id)}`)
-          ?.addEventListener("input", (event) => {
-            form?.edit(field.id, event.target.value);
-            failed.delete(card.namespace);
-            // 只更新按钮态,避免重画让输入框失焦。
-            syncCardFooter(card);
-          });
-        host.querySelector(`#plug-reset-${CSS.escape(card.namespace)}-${CSS.escape(field.id)}`)
-          ?.addEventListener("click", () => {
-            form?.reset(field.id);
-            failed.delete(card.namespace);
-            render();
-          });
-      }
-      host.querySelector(`#plug-discard-${CSS.escape(card.namespace)}`)?.addEventListener("click", () => {
-        form?.discard();
-        failed.delete(card.namespace);
-        render();
-      });
-      host.querySelector(`#plug-save-${CSS.escape(card.namespace)}`)?.addEventListener("click", () => {
-        saveCard(card);
-      });
-    }
-  }
-
-  function syncCardFooter(card) {
-    const form = formFor(card);
-    const save = host.querySelector(`#plug-save-${CSS.escape(card.namespace)}`);
-    const discard = host.querySelector(`#plug-discard-${CSS.escape(card.namespace)}`);
-    const isSaving = saving.has(card.namespace);
-    if (save) save.disabled = !form?.dirty || form?.invalid === true || isSaving;
-    if (discard) discard.disabled = !form?.dirty || isSaving;
-  }
-
-  async function saveCard(card) {
-    const form = formFor(card);
-    const mutations = form?.mutations;
-    if (!form || !mutations?.length || saving.has(card.namespace)) return;
-    saving.add(card.namespace);
-    failed.delete(card.namespace);
-    render();
-    try {
-      const settled = await settingsService.mutate(
-        card.namespace, mutations, form.namespace?.revision
-      );
-      form.settle(settled);
-      if (form.dirty) failed.add(card.namespace);
-      // 重新 describe:命名空间 revision 变了,别的卡片也要跟上。
-      //
-      // 这次读取与 refresh() 抢同一个 describe/forms,所以必须共用同一个
-      // generation:期间若用户切走再切回(activate 会强制 refresh)或另一张卡
-      // 也保存完毕,较新的快照已经落地,这里的旧回包不能再覆盖它 ——
-      // 否则 formFor 会拿陈旧 revision 当 expectedRevision,下次保存必冲突。
-      const generation = ++cardsLoadGeneration;
-      const nextDescribe = await settingsService.describe();
-      if (generation !== cardsLoadGeneration) return;
-      describe = nextDescribe;
-      for (const [ns, staged] of forms) {
-        if (staged.dirty) continue;
-        forms.delete(ns);
-      }
-    } catch (error) {
-      failed.add(card.namespace);
-      showToast?.(deps.formatErrorDetails(error));
-    } finally {
-      saving.delete(card.namespace);
-      render();
+      // 市场列表的绑定点在它自己的模块里;配置路由里只有卡片本体。
+      if (openedCard) cards.bind(openedCard);
+      else marketplace.bindInto(host);
+    } else {
+      bindInventory();
     }
   }
 
@@ -356,7 +255,8 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
     host.querySelector("#inv-retry")?.addEventListener("click", () => loadInventory());
     for (const element of host.querySelectorAll("[data-inv]")) {
       element.addEventListener("click", () => {
-        inventoryExpanded = inventoryExpanded === element.dataset.inv ? null : element.dataset.inv;
+        const id = element.dataset.inv;
+        inventoryExpanded = inventoryExpanded === id ? null : id;
         render();
       });
     }
@@ -366,10 +266,6 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
   async function loadInventory() {
     const generation = ++inventoryLoadGeneration;
     inventoryLoading = true; inventoryError = null; render();
-    // 先探一次代理可用性,再决定要不要画那些按钮。清单本身来自 dsh web,
-    // 与代理是两条独立链路 —— 代理不可用不该让清单也读不出来。
-    await actionsUi.probe();
-    if (generation !== inventoryLoadGeneration) return;
     try {
       const value = await settingsService.pluginInventory();
       if (generation !== inventoryLoadGeneration) return;
@@ -385,25 +281,37 @@ export function createPluginsPane({ host, deps, settingsService, showToast, plug
     }
   }
 
-  async function refresh() {
+  /// describe 重读。市场与卡片共用同一份快照,所以两个 generation 必须同步推进
+  /// —— 否则陈旧的 revision 会被当成 expectedRevision,下一次保存必冲突。
+  async function refreshDescribe() {
     const generation = ++cardsLoadGeneration;
+    const next = await settingsService.describe();
+    if (generation !== cardsLoadGeneration) return describe;
+    describe = next;
+    // 凭证状态跟着重读(用户可能在别处改过)。
+    await credentialCache.refresh(selectableCards()
+      .filter((card) => card.credential)
+      .map((card) => card.credential.defaultRef));
+    cards.dropCleanDrafts();
+    return describe;
+  }
+
+  async function refresh() {
+    cardsLoadGeneration += 1;
     loadingCards = true; cardsError = null; render();
     try {
-      const nextDescribe = await settingsService.describe();
-      if (generation !== cardsLoadGeneration) return;
-      describe = nextDescribe;
-      // 干净的草稿丢弃重建,让卡片显示最新的宿主值;有未保存编辑的保留。
-      for (const [ns, staged] of forms) {
-        if (!staged.dirty) forms.delete(ns);
-      }
+      await actionsUi.probe();
+      await refreshDescribe();
+      // Subagent 的模型选择要目录数据:它是卡片的一部分,失败不阻塞保存,
+      // 卡片自己会显示"加载失败 + 重试"。
+      deps.models?.refresh?.().catch(() => {});
     } catch (error) {
-      if (generation !== cardsLoadGeneration) return;
       cardsError = deps.formatErrorDetails(error);
     } finally {
-      if (generation !== cardsLoadGeneration) return;
       loadingCards = false;
       render();
     }
+    await marketplace.refresh({ keepNotices: true });
   }
 
   return { refresh };

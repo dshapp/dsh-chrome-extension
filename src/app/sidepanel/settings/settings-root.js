@@ -2,6 +2,7 @@
 // 对齐 macos/.../Settings/SettingsRoot.swift 的 TabView:选中的 tab 记在
 // 本地存储里,下次打开设置页回到同一页(Mac 用 @AppStorage("settingsSection"))。
 import { t } from "../../../shared/i18n.js";
+import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import { createSettingsService } from "../../../features/settings/settings-service.js";
 import { createGeneralPane } from "./general-pane.js";
 import { createModelsPane } from "./models-pane.js";
@@ -14,7 +15,29 @@ import { createServerOps } from "../../../features/host-proxy/server-ops.js";
 import { createShortcutsPane } from "./shortcuts-pane.js";
 import { escapeHtml } from "./settings-ui.js";
 
+// 与 Mac SettingsRoot.swift 的差异(刻意保留,不是没做完):
+//   - Mac 有 8 个 tab(general/models/presets/plugins/mobile/browser/computerUse/server),
+//     这里只做 6 个 —— 不加 Mobile 配对、Browser 设置、Computer Use 三页(用户决定)。
+//   - Mac 的"快捷键"是独立的 ShortcutsWindow(⌘/ 打开);侧边栏是单窗口,
+//     索性把它做成第 6 个 tab,内容与 Mac 那张表同源(shortcutReference)。
+//   - Mac 通用页多一行"在编辑器中打开工作区"(靠 LaunchServices 枚举已装编辑器),
+//     浏览器扩展没有等价的系统 API,不提供。
+//   - Mac 通知行在权限被拒时给"前往系统设置"深链(macOS 专属),这里只显示一行说明。
+//   - Mac 服务端页的 pid/Node/pnpm/全局前缀几行依赖原生 supervisor,这里不提供;
+//     相应地也没有"停止并退出" —— 侧边栏不该替用户杀掉 dsh web。
 const TABS = ["general", "models", "presets", "plugins", "server", "shortcuts"];
+
+/// 页签图标:与 Mac 的 SettingsSection 一一对应(通用/模型/预设/插件/服务端/快捷键)。
+/// 名字取自 file-icons.js 的 lucide 集;缺一个就整体退化成"只有文字",
+/// 不会把某个页签画成空方块。
+const TAB_ICONS = {
+  general: "settings",
+  models: "cpu",
+  presets: "layers",
+  plugins: "puzzle",
+  server: "server",
+  shortcuts: "keyboard"
+};
 const TAB_STORAGE_KEY = "dsh_settings_tab";
 
 /// 设置页里共用的模态。Mac 用 .sheet 挂在 Settings 窗口上,这里用一个 <dialog>
@@ -77,7 +100,9 @@ function createSheet(dialog) {
 /// 第二个参数曾是 onBackendChanged(换后端后重连)。服务端 pane 去掉地址
 /// 输入框后就没有任何入口能换后端了,所以它被移除而不是留成一个永不触发的
 /// 回调 —— 留着会让调用方以为"改地址仍会重连"。
-export function mountSettings(deps, { onModelsChanged } = {}) {
+/// onStartCreatorDraft:预设页"用创造模式创作"落到会话里的动作。它必须由 shell
+/// 提供 —— 新建会话、选中预设、离开设置页这三件事都只有 app 能做。
+export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {}) {
   const view = document.querySelector("#view-settings");
   const openButton = document.querySelector("#hdr-settings");
   const backButton = view.querySelector("#settings-back");
@@ -111,12 +136,15 @@ export function mountSettings(deps, { onModelsChanged } = {}) {
       }
     }),
     presets: createPresetsPane({
-      host: view.querySelector("#settings-pane-presets"), sheet, deps, settingsService, showToast
+      host: view.querySelector("#settings-pane-presets"), sheet, deps, settingsService, showToast,
+      onStartCreatorDraft
     }),
     plugins: createPluginsPane({
-      host: view.querySelector("#settings-pane-plugins"), deps, settingsService, showToast,
+      host: view.querySelector("#settings-pane-plugins"), sheet, settingsDialog: dialog,
+      deps, settingsService, showToast,
       // 装 / 更 / 删要跑 dsh plugin(即 pnpm),扩展做不到,经 daemon 代理。
       // 成功后用 settingsService 重拉清单,以宿主 reconcile 后的状态为准。
+      // 市场页走 pluginManager/*(dsh web),不需要这一路;它只服务内置页签。
       pluginActions: createPluginActions({
         client: hostProxy,
         onInventoryChanged: () => panes.plugins.refresh()
@@ -165,14 +193,25 @@ export function mountSettings(deps, { onModelsChanged } = {}) {
       const pane = view.querySelector(`#settings-pane-${tab}`);
       if (pane) pane.hidden = tab !== activeTab;
     }
-    // tab 文案跟随语言切换。
+    // tab 文案跟随语言切换。图标与文案分开两个节点:只换文字不动 <svg>,
+    // 否则每次 relabel 都要重建图标(语言切换与打开设置页都会走到这里)。
     const labels = {
       general: "set.tab.general", models: "set.tab.models", presets: "set.tab.presets",
       plugins: "set.tab.plugins", server: "set.tab.server", shortcuts: "set.tab.shortcuts"
     };
     for (const [tab, key] of Object.entries(labels)) {
       const button = tabBar.querySelector(`[data-tab="${tab}"]`);
-      if (button) button.textContent = t(key);
+      if (!button) continue;
+      const label = button.querySelector(".settings-tab-label") ?? button;
+      label.textContent = t(key);
+      // 首帧建一次图标;之后的 relabel 复用已有节点。
+      if (!button.querySelector(".settings-tab-icon")) {
+        const icon = document.createElement("span");
+        icon.className = "settings-tab-icon";
+        icon.setAttribute("aria-hidden", "true");
+        icon.innerHTML = lucideIconSvg(TAB_ICONS[tab] ?? "settings", { size: 13 });
+        button.prepend(icon);
+      }
     }
   }
 

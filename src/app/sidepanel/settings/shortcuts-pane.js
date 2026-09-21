@@ -4,6 +4,11 @@
 //
 // 键位按平台显示当前平台那一档:两个平台的键位是独立设计的(见 command-table.js),
 // 同时列出两套只会让用户去读不属于自己的那一半。
+//
+// 与 Mac ShortcutsWindow 的差异(刻意保留):和弦在这里渲染成 <kbd> 键帽,
+// Mac 用等宽文本。侧栏窄、键帽更好扫读,而 mac 的修饰键字形本身连写
+// (⌃⌘L),等宽排版也换不来对齐。Mac 的独立窗口形态同样不照搬 ——
+// 扩展把它做成只读分页,用户已确认不加新窗口。
 import { t } from "../../../shared/i18n.js";
 import { section, row, escapeHtml } from "./settings-ui.js";
 import { platformOf, shortcutReference } from "../../../features/shortcuts/command-table.js";
@@ -32,11 +37,16 @@ export function createShortcutsPane({ host, platform }) {
         label: escapeHtml(t(item.titleKey)),
         control: item.keys.length
           ? `<span class="sc-chord">${renderChord(item.keys, kind === "mac" ? "mac" : "win")}</span>`
-          : `<span class="sc-chord-note">${escapeHtml(t(item.literalKey))}</span>`
+          // Mac 对没有快捷键的命令打印"仅菜单";命令表里少数几个自带说明
+          // (如历史列表的"先按历史和弦再按数字"),有说明就用它,信息更多。
+          : `<span class="sc-chord-note">${escapeHtml(item.literalKey ? t(item.literalKey) : t("sc.noChord"))}</span>`
       })).join("")
     })).join("");
 
-    host.innerHTML = `<div class="sc-hint">${escapeHtml(t("sc.platformHint", { platform: platformName }))}</div>` + body;
+    // Mac ShortcutsWindow 顶部的说明:每个操作都有菜单项,快捷键只是加速。
+    host.innerHTML = `<div class="sc-hint">${escapeHtml(t("sc.menuOnlyNote"))}</div>`
+      + `<div class="sc-hint dim">${escapeHtml(t("sc.platformHint", { platform: platformName }))}</div>`
+      + body;
   }
 
   return {

@@ -5,6 +5,8 @@
 // 这一层只做协议搬运与纯计算(路径读写、脏值折算、校验),不碰 DOM —— 设置页的
 // 渲染在 src/app/sidepanel/settings/ 下,两边通过这些返回值对接。
 import { RPC } from "../../platform/dsh/rpc-methods.js";
+import { createPluginManagerService } from "./plugin-manager-service.js";
+import { createPresetService } from "./preset-service.js";
 
 /// 取嵌套值;任一段缺失即 undefined。对齐 Swift jsonValue(at:in:)。
 export function jsonValueAt(path, root) {
@@ -319,21 +321,11 @@ export function createSettingsService(connection) {
     async pluginInventory() {
       return connection.call(RPC.pluginInventoryList, {});
     },
-    async presetList() {
-      return connection.call(RPC.agentPresetList, {});
-    },
-    async presetRead(agentPreset) {
-      return connection.call(RPC.agentPresetRead, { agentPreset });
-    },
-    async presetCopy(from, agentPreset, name) {
-      return connection.call(RPC.agentPresetCopy, { from, id: agentPreset });
-    },
-    async presetRemove(agentPreset) {
-      return connection.call(RPC.agentPresetRemove, { id: agentPreset });
-    },
-    async presetOpenDocument(agentPreset) {
-      return connection.call(RPC.agentPresetOpenDocument, { agentPreset });
-    },
+
+    // ---- 插件市场(pluginManager/*)。实现在 plugin-manager-service.js。 ----
+    ...createPluginManagerService(connection),
+    // ---- Agent preset(agentPreset/*)。实现在 preset-service.js。 ----
+    ...createPresetService(connection),
 
     /// provider × settings 命名空间的联结,等价于 Mac ModelProviderSettingsController.load。
     /// 凭证是"增强信息":读失败不该让整页变成错误页,只记 credentialError。

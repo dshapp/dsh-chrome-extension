@@ -17,18 +17,38 @@ export function findModel(models, provider, modelId) {
 
 export function createModelService(connection) {
   let catalog = [];
+  let groups = [];
+  let failures = [];
+  // 目录的加载状态。Subagent 模型选择要按它决定"加载中 / 加载失败给重试 / 列候选",
+  // 只靠 catalog 是否为空分不清"还没拉"和"拉了但一个都没有"。
+  let status = "idle";
   let refreshGeneration = 0;
   const listeners = new Set();
 
   return {
     get catalog() { return catalog; },
+    /// 未拍平的 groups([{id, name, models}]):Subagent 模型选择要 provider 的
+    /// 显示名,拍平后只剩 groupId/groupName 拼在每一行里,分组还得自己重拼。
+    get catalogGroups() { return groups; },
+    get catalogFailures() { return failures; },
+    get catalogStatus() { return status; },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     async refresh() {
       const generation = ++refreshGeneration;
-      const value = await connection.call(RPC.sessionModels, {});
-      if (generation !== refreshGeneration) return catalog;
-      catalog = flattenModelGroups(value.groups);
-      for (const listener of listeners) listener(catalog, value.failures);
+      status = "loading";
+      try {
+        const value = await connection.call(RPC.sessionModels, {});
+        if (generation !== refreshGeneration) return catalog;
+        groups = value.groups ?? [];
+        catalog = flattenModelGroups(groups);
+        failures = value.failures ?? [];
+        status = "ready";
+      } catch (error) {
+        if (generation !== refreshGeneration) throw error;
+        status = "error";
+        throw error;
+      }
+      for (const listener of listeners) listener(catalog, failures);
       return catalog;
     },
     // 当前会话模型状态:{current, routable, groups, failures}

@@ -29,7 +29,7 @@ chrome.sidePanel
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create(
     // 菜单文案跟随浏览器 UI 语言(_locales),与侧栏内的语言偏好相互独立。
-    { id: MENU_ID, title: chrome.i18n.getMessage("openSidepanel") || "Open DSH AI side panel", contexts: ["page", "selection"] },
+    { id: MENU_ID, title: chrome.i18n.getMessage("openSidepanel") || "Open Deepseek Harness APP side panel", contexts: ["page", "selection"] },
     // Re-running the installer would otherwise reject on the existing id.
     () => void chrome.runtime.lastError,
   );

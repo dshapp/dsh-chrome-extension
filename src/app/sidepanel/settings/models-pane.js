@@ -5,7 +5,7 @@
 import { t } from "../../../shared/i18n.js";
 import {
   section, row, textInput, button, iconButton,
-  tag, statusLine, notice, spinner, escapeHtml
+  tag, iconStatusLine, notice, spinner, escapeHtml, selectorEscape
 } from "./settings-ui.js";
 import { providerKeyState, addableProviders, deriveKeyRef } from "../../../features/settings/settings-service.js";
 import { openProviderEditor } from "./provider-editor-sheet.js";
@@ -18,6 +18,9 @@ const KEY_STATE_TEXT = {
   missing: "prov.keyMissing"
 };
 const KEY_STATE_KIND = { configured: "ok", notRequired: "muted", missing: "warn" };
+// Mac 的提供方副标题是 Label(text, systemImage:)—— 状态用彩色符号表达,
+// 比一个 6px 的圆点更容易在缩进的行里扫到。
+const KEY_STATE_ICON = { configured: "check", notRequired: "minus", missing: "triangle-alert" };
 
 export function createModelsPane({ host, sheet, deps, settingsService, showToast, onModelsChanged }) {
   let state = null;
@@ -37,18 +40,21 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
 
   function renderProviderRow(entry) {
     const keyState = providerKeyState(entry);
-    const label = escapeHtml(entry.entry.displayName || entry.entry.provider)
+    const name = entry.entry.displayName || entry.entry.provider;
+    const label = escapeHtml(name)
       + (entry.entry.declared === true ? tag(t("prov.customTag")) : "");
+    // Mac 的整行本体就是那个按钮,雪佛龙只是装饰符号;删除是行内唯一的独立控件,
+    // 所以点击处理器挂在行上,删除按钮自己 stopPropagation。
     const trailing = (entry.removable
       ? iconButton({ id: `prov-del-${entry.entry.provider}`, icon: "trash-2", title: t("prov.remove"), kind: "danger" })
       : "")
-      + iconButton({ id: `prov-edit-${entry.entry.provider}`, icon: "chevron-right", title: entry.entry.displayName });
+      + `<span class="set-chevron" aria-hidden="true">${lucideIconSvg("chevron-right", { size: 14 })}</span>`;
     return row({
       label,
-      hint: statusLine(t(KEY_STATE_TEXT[keyState]), KEY_STATE_KIND[keyState]),
+      hint: iconStatusLine(t(KEY_STATE_TEXT[keyState]), KEY_STATE_KIND[keyState], KEY_STATE_ICON[keyState]),
       control: trailing,
       id: `prov-row-${entry.entry.provider}`
-    });
+    }).replace('<div class="set-row"', `<div class="set-row clickable" role="button" aria-label="${escapeHtml(name)}"`);
   }
 
   function renderProviderSection() {
@@ -84,10 +90,19 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
         + `${state?.writable ? "" : " disabled"}>${escapeHtml(entry.displayName || entry.provider)}</button>`
       )).join("")
       + (!candidates.length && needle ? `<span class="set-row-hint">${escapeHtml(t("prov.addNoMatches"))}</span>` : "");
+    // Mac 的搜索框在非空时右侧有一个显式清除按钮;原生 type="search" 的取消叉
+    // 在侧栏窄宽度下几乎点不到,而且各平台外观不一致。
+    const clear = addSearch
+      ? `<button class="set-search-clear" type="button" id="prov-search-clear"`
+        + ` title="${escapeHtml(t("prov.searchClear"))}" aria-label="${escapeHtml(t("prov.searchClear"))}">`
+        + `${lucideIconSvg("x", { size: 13 })}</button>`
+      : "";
     return section({
       body: `<div class="set-row stacked"><div class="set-row-control wide">`
-        + textInput({ id: "prov-add-search", type: "search", value: addSearch, placeholder: t("prov.searchPlaceholder") })
-        + `</div></div><div class="set-chips">${tags}</div>`,
+        + `<div class="set-search">`
+        + textInput({ id: "prov-add-search", value: addSearch, placeholder: t("prov.searchPlaceholder") })
+        + clear
+        + `</div></div></div><div class="set-chips">${tags}</div>`,
       footer: escapeHtml(t("prov.addFooter"))
     });
   }
@@ -120,24 +135,44 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     bind();
   }
 
+  /// 清除按钮:清空搜索并整页重画(输入框会被重建,但这是用户主动点的,
+  /// 不存在"正在打字时失焦"的问题)。
+  function bindClear() {
+    host.querySelector("#prov-search-clear")?.addEventListener("click", () => {
+      addSearch = "";
+      render();
+    });
+  }
+
   function bind() {
+    bindClear();
     const search = host.querySelector("#prov-add-search");
     search?.addEventListener("input", (event) => {
       addSearch = event.target.value;
-      // 只重画标签云,避免每敲一个字就让搜索框失焦。
+      // 只重画标签云与清除按钮,避免每敲一个字就让搜索框失焦;
+      // 输入框本身原地保留,所以光标与 IME 组合状态都不会丢。
       const cloud = host.querySelector(".set-chips");
       if (!cloud) return;
       const container = document.createElement("div");
       container.innerHTML = renderAddSection();
       const fresh = container.querySelector(".set-chips");
       if (fresh) { cloud.replaceWith(fresh); bindChips(); }
+      const searchWrap = host.querySelector(".set-search");
+      const freshClear = container.querySelector(".set-search-clear");
+      const existingClear = host.querySelector("#prov-search-clear");
+      if (freshClear && !existingClear) { searchWrap?.append(freshClear); bindClear(); }
+      else if (!freshClear && existingClear) existingClear.remove();
     });
     bindChips();
     for (const entry of configuredRows()) {
-      host.querySelector(`#prov-edit-${CSS.escape(entry.entry.provider)}`)
+      host.querySelector(`#prov-row-${selectorEscape(entry.entry.provider)}`)
         ?.addEventListener("click", () => editProvider(entry.entry));
-      host.querySelector(`#prov-del-${CSS.escape(entry.entry.provider)}`)
-        ?.addEventListener("click", () => confirmRemove(entry));
+      host.querySelector(`#prov-del-${selectorEscape(entry.entry.provider)}`)
+        ?.addEventListener("click", (event) => {
+          // 行本体也是按钮:删除不能被行点击吞掉。
+          event.stopPropagation();
+          confirmRemove(entry);
+        });
     }
   }
 

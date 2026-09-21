@@ -5,15 +5,17 @@
 // 已安装应用并读取其图标,扩展在浏览器沙箱里既枚举不到应用也拿不到图标 ——
 // 画一个只有假选项的下拉只会误导,所以整行不渲染(已与使用者确认)。
 import { t, getLang } from "../../../shared/i18n.js";
-import { section, row, select, toggle, button, notice, escapeHtml } from "./settings-ui.js";
+import { section, row, select, toggle, button, notice, escapeHtml, themeCubes } from "./settings-ui.js";
 import { presetMenuLabel } from "../composer-dock.js";
+import { confirmFullAccess, isFullAccessOption } from "../permission-confirm.js";
 
-/// 权限预设的内建选项,与 composer 的「访问模式」一致。宿主 schema 也报同一
-/// 组联合值,但静态列表让这一行在没有会话时也能渲染。
+/// 权限预设的内建选项。宿主 0.1.6 的可选列表来自进程级 permissionPresets/catalog,
+/// 由会话运行时按进程缓存并投影到 snapshot.permissions.options;没有会话(或旧版
+/// 只在投影里带 options)时回落到这份静态表,让这一行始终画得出来。
 const PERMISSION_OPTIONS = [
-  { value: "read-only", labelKey: "access.readOnly" },
-  { value: "workspace-write", labelKey: "access.workspaceWrite" },
-  { value: "danger-full-access", labelKey: "access.full" }
+  { value: "read-only" },
+  { value: "workspace-write" },
+  { value: "danger-full-access" }
 ];
 
 const ENTER_BEHAVIORS = [
@@ -21,11 +23,17 @@ const ENTER_BEHAVIORS = [
   { value: "steer", labelKey: "set.enterBehavior.steer" }
 ];
 
-const THEME_PREFERENCES = [
-  { value: "system", labelKey: "set.appearance.system" },
-  { value: "light", labelKey: "set.appearance.light" },
-  { value: "dark", labelKey: "set.appearance.dark" }
-];
+/// 权限值 → 本地化名。内置 id 用本地文案(宿主给的 name 就是 id 本身,直接显示
+/// 不可读),认不出的自定义预设才用宿主 name。与 composer 底栏同一口径。
+function permissionLabel(option, value) {
+  switch (value) {
+    case "read-only": return t("perm.readOnly");
+    case "workspace-write": return t("perm.workspaceWrite");
+    case "danger-full-access": return t("perm.fullAccess");
+    case "custom": return t("perm.custom");
+    default: return option?.name || value;
+  }
+}
 
 /// 读一个命名空间的某个字段;命名空间缺席返回 undefined,让调用方决定是否隐藏该行。
 function namespaceField(namespaces, ns, field) {
@@ -38,7 +46,9 @@ function namespaceField(namespaces, ns, field) {
 export function createGeneralPane({ host, deps, settingsService, showToast }) {
   let snapshot = { namespaces: new Map(), writable: false, hasDocument: false };
   let presets = [];
+  let pickerEnabled = true;
   let busy = false;
+  let documentError = null;
   let loadGeneration = 0;
 
   /// 写一个 ui-* 命名空间的单个字段,并就地刷新。宿主是权威:写完重新 describe,
@@ -71,11 +81,22 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
       selected: preset.id === current
     }));
     if (!options.length) options.push({ value: "", label: t("set.selectPreset"), selected: true });
+    // Mac 的 presetsEnableToSetDefault:模式选择关掉之后宿主要忽略这个默认值,
+    // 与其写进去被静默丢弃,不如当场禁用并说明为什么。
+    const disabled = !presets.length || !snapshot.writable || !pickerEnabled;
     return row({
       label: escapeHtml(t("set.agentPreset")),
-      hint: escapeHtml(t("set.agentPresetHint")),
-      control: select({ id: "set-agent-preset", options, disabled: !presets.length || !snapshot.writable })
+      hint: escapeHtml(pickerEnabled ? t("set.agentPresetHint") : t("pset.pickerEnableToSetDefault")),
+      control: select({ id: "set-agent-preset", options, disabled })
     });
+  }
+
+  /// 可选权限:优先用会话运行时那份(它合并了进程级目录,顺序与药丸菜单一致),
+  /// 没有会话时回落到静态三条。
+  function permissionOptions() {
+    const live = deps.sessions?.getRuntimeSnapshot?.()?.permissions?.options;
+    const options = Array.isArray(live) && live.length ? live : PERMISSION_OPTIONS;
+    return options.filter((option) => option?.value !== "custom");
   }
 
   function renderPermissionRow() {
@@ -86,9 +107,9 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
       hint: escapeHtml(t("set.permissionHint")),
       control: select({
         id: "set-permission",
-        options: PERMISSION_OPTIONS.map((option) => ({
+        options: permissionOptions().map((option) => ({
           value: option.value,
-          label: t(option.labelKey),
+          label: permissionLabel(option, option.value),
           selected: option.value === current
         })),
         disabled: !snapshot.writable
@@ -113,26 +134,21 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
     });
   }
 
+  /// 外观:Mac 用三块 ThemeCube 色板而不是下拉。选中项写 ui-theme.preference,
+  /// 并就地应用到侧栏 —— 宿主是权威,但界面不该等一次往返才变色。
   function renderAppearanceRow() {
     if (!snapshot.namespaces.has("ui-theme")) return "";
     const current = namespaceField(snapshot.namespaces, "ui-theme", "preference") ?? "system";
     return row({
       label: escapeHtml(t("set.appearance")),
-      control: select({
-        id: "set-theme",
-        options: THEME_PREFERENCES.map((preference) => ({
-          value: preference.value,
-          label: t(preference.labelKey),
-          selected: preference.value === current
-        })),
-        disabled: !snapshot.writable
-      })
+      control: themeCubes({ id: "set-theme", value: current, disabled: !snapshot.writable })
     });
   }
 
   function renderNotificationsRow(notificationsEnabled) {
     return row({
       label: escapeHtml(t("settings.notifications")),
+      hint: escapeHtml(t("set.notificationsHint")),
       control: toggle({
         id: "set-notifications",
         checked: notificationsEnabled,
@@ -160,11 +176,13 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
   }
 
   /// 配置文件:只有宿主报告 hasDocument 才给按钮 —— 没有文档时按钮点了必然失败。
+  /// Mac 的 OpenConfigFileButton 失败时就地显示一行错误,不只弹 toast。
   function renderConfigFileSection() {
     if (!snapshot.hasDocument) return "";
     return section({
       body: row({
         label: escapeHtml(t("set.configFile")),
+        extra: documentError ? notice(documentError) : "",
         control: button({ id: "set-open-document", label: t("set.openDocument") })
       })
     });
@@ -190,12 +208,26 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
     host.querySelector("#set-agent-preset")?.addEventListener("change", (event) => {
       writeField("agent-presets", "default", event.target.value);
     });
-    host.querySelector("#set-permission")?.addEventListener("change", (event) => {
-      writeField("permission", "defaultPreset", event.target.value);
+    host.querySelector("#set-permission")?.addEventListener("change", async (event) => {
+      const value = event.target.value;
+      // full-access 授予的是"不再询问"的权力,和 composer 走同一道确认。
+      // 取消就把宿主值读回来画(不写、也不留一个假的选中态)。
+      if (isFullAccessOption(value) && !(await confirmFullAccess(deps.permConfirm))) {
+        await refresh();
+        return;
+      }
+      await writeField("permission", "defaultPreset", value);
     });
-    host.querySelector("#set-theme")?.addEventListener("change", (event) => {
-      writeField("ui-theme", "preference", event.target.value);
-    });
+    for (const cube of host.querySelectorAll("[data-theme-cube]")) {
+      cube.addEventListener("click", async () => {
+        const value = cube.dataset.themeCube;
+        // 先落到本地:主题是立刻可见的东西,等宿主往返会闪一下。宿主写成功后
+        // refresh() 会用权威值再纠一次;写失败也照样纠回来。
+        deps.theme?.setPreference?.(value);
+        deps.settings?.setThemePreference?.(value).catch(() => {});
+        await writeField("ui-theme", "preference", value);
+      });
+    }
     host.querySelector("#set-enter-behavior")?.addEventListener("change", (event) => {
       // 先同步给 composer,让插队快捷键的语义立刻跟上;宿主写入仍是权威,
       // 失败时下一次 describe 会把值纠回来。
@@ -217,12 +249,15 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
     host.querySelector("#set-open-document")?.addEventListener("click", async (event) => {
       const target = event.currentTarget;
       target.disabled = true;
+      documentError = null;
       try {
         await settingsService.openDocument();
       } catch {
-        showToast?.(t("set.openDocumentError"));
+        documentError = t("set.openDocumentError");
+        showToast?.(documentError);
       } finally {
         target.disabled = false;
+        if (documentError) await render(await deps.settings.getNotificationsEnabled());
       }
     });
   }
@@ -243,6 +278,14 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
         hasDocument: describe?.hasDocument === true
       };
       presets = presetList?.presets ?? [];
+      pickerEnabled = presetList?.modeSelectionEnabled !== false;
+      // 宿主是主题的权威:每次刷新都把它的偏好灌回本地镜像与界面,
+      // 别的客户端(Mac 端、编辑器)改过之后这里也能收敛。
+      const hostTheme = namespaceField(snapshot.namespaces, "ui-theme", "preference");
+      if (hostTheme) {
+        deps.theme?.setPreference?.(hostTheme);
+        deps.settings?.setThemePreference?.(hostTheme).catch(() => {});
+      }
     } catch (error) {
       if (generation !== loadGeneration) return;
       // 宿主读不到时仍要让扩展本地项(通知/语言)可用,所以只把宿主段落降级为提示。

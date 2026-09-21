@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DSH</title>
+  <title>Deepseek Harness APP</title>
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/foundation.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/conversation.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/tools.css">
@@ -326,19 +326,22 @@
       <button id="settings-back" aria-label="Back"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
       <span id="settings-title">设置</span>
     </div>
+    <!-- 文案与图标分开:文案在 .settings-tab-label 里由 JS 按语言填,图标在同一按钮
+         里由 JS 建一次(svg 不能靠 textContent 换)。两者缺一都只是少画一部分,
+         不影响切换。 -->
     <div id="settings-tabs" role="tablist" aria-label="设置分区">
       <button class="settings-tab" type="button" role="tab" id="settings-tab-general"
-              data-tab="general" aria-controls="settings-pane-general" aria-selected="true">通用设置</button>
+              data-tab="general" aria-controls="settings-pane-general" aria-selected="true"><span class="settings-tab-label">通用设置</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-models"
-              data-tab="models" aria-controls="settings-pane-models" aria-selected="false">模型</button>
+              data-tab="models" aria-controls="settings-pane-models" aria-selected="false"><span class="settings-tab-label">模型</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-presets"
-              data-tab="presets" aria-controls="settings-pane-presets" aria-selected="false">Agent 预设</button>
+              data-tab="presets" aria-controls="settings-pane-presets" aria-selected="false"><span class="settings-tab-label">Agent 预设</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-plugins"
-              data-tab="plugins" aria-controls="settings-pane-plugins" aria-selected="false">插件</button>
+              data-tab="plugins" aria-controls="settings-pane-plugins" aria-selected="false"><span class="settings-tab-label">插件</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-server"
-              data-tab="server" aria-controls="settings-pane-server" aria-selected="false">服务端</button>
+              data-tab="server" aria-controls="settings-pane-server" aria-selected="false"><span class="settings-tab-label">DSH Server</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-shortcuts"
-              data-tab="shortcuts" aria-controls="settings-pane-shortcuts" aria-selected="false">快捷键</button>
+              data-tab="shortcuts" aria-controls="settings-pane-shortcuts" aria-selected="false"><span class="settings-tab-label">快捷键</span></button>
     </div>
     <div id="settings-body">
       <!-- 通用:照搬 Mac 通用 pane 的行序,整段由 JS 渲染。

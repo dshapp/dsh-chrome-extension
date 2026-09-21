@@ -1135,7 +1135,14 @@
   border-radius: 7px;
   white-space: nowrap;
   cursor: pointer;
+  /* 图标 + 文案:图标由 JS 建一次,文案换语言时只换 label。 */
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
+.settings-tab-icon { display: inline-flex; flex-shrink: 0; opacity: 0.85; }
+.settings-tab-icon svg { display: block; }
+.settings-tab.active .settings-tab-icon { opacity: 1; }
 .settings-tab:hover { background: var(--border-soft); color: var(--text); }
 .settings-tab.active { background: var(--accent); color: var(--bg); font-weight: 600; }
 .settings-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1487,6 +1494,9 @@
   padding: 10px 14px; border-top: 1px solid var(--border); flex-shrink: 0;
 }
 .set-sheet-actions:empty { display: none; }
+.set-sheet-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.set-sheet-field .set-input { width: 100%; }
+.set-sheet-label { font-size: 12px; color: var(--text-dim); }
 .set-sheet-text { font-size: 12.5px; line-height: 1.55; color: var(--text-dim); margin: 0 0 10px; }
 .set-sheet-error { font-size: 12px; color: var(--danger); min-height: 15px; }
 .set-code {
@@ -1499,6 +1509,88 @@
   color: var(--text-dim);
   user-select: text;
 }
+
+/* ── 插件市场 / 分组 / 卡片(对齐 Mac PluginsPage)── */
+.set-group-header {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-dim);
+}
+.set-group-title { letter-spacing: 0.02em; }
+.set-group-count {
+  min-width: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--border-soft); color: var(--text-faint);
+  font-size: 10.5px; font-weight: 600; text-align: center;
+}
+/* 可点击的行:整行是目标(Shazam 的卡片行),hover 给一层底,聚焦给描边。 */
+.set-row.clickable { cursor: pointer; }
+.set-row.clickable:hover { background: var(--border-soft); }
+.set-row.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.set-chevron { display: inline-flex; color: var(--text-faint); }
+.set-chevron svg { display: block; }
+
+/* 配置卡片路由:面包屑 + 返回。 */
+.set-crumb {
+  font-size: 11.5px; color: var(--text-faint);
+  padding: 2px 0 6px;
+}
+
+/* 搜索框(提供方目录):输入框 + 行尾清除按钮。 */
+.set-search { position: relative; display: flex; align-items: center; gap: 6px; }
+.set-search .set-input { flex: 1; min-width: 0; }
+.set-search-clear { display: inline-flex; flex-shrink: 0; }
+
+/* 带图标的行内状态(已配置 / 缺少密钥),对齐 Mac 的彩色符号 + 文字。 */
+.set-icon-status { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-dim); }
+.set-icon-status svg { display: block; flex-shrink: 0; }
+.set-icon-status.ok { color: var(--ok); }
+.set-icon-status.warn { color: var(--warn); }
+.set-icon-status.err { color: var(--danger); }
+.set-icon-status.muted { color: var(--text-faint); }
+
+/* 外观三块色板(ThemeCube)。 */
+.set-theme-cubes { display: flex; gap: 10px; }
+.set-theme-cube {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 4px; border: 1px solid transparent; border-radius: 9px;
+  background: transparent; color: var(--text-dim); font: inherit;
+  font-size: 11px; cursor: pointer;
+}
+.set-theme-cube:hover:not(:disabled) { background: var(--border-soft); }
+.set-theme-cube.active { border-color: var(--accent); color: var(--text); }
+.set-theme-cube:disabled { opacity: 0.5; cursor: default; }
+.set-theme-cube-swatch {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; border-radius: 7px;
+  border: 1px solid var(--border);
+}
+.set-theme-cube-swatch svg { display: block; }
+/* 浅色块画浅底深图,深色块反过来 —— 色板本身要能读出"选了会变什么样"。 */
+.set-theme-cube-swatch.light { background: #ffffff; color: #3c3c43; }
+.set-theme-cube-swatch.dark { background: #1c1c1e; color: #f2f2f7; }
+.set-theme-cube-swatch.system { background: linear-gradient(100deg, #ffffff 0 50%, #1c1c1e 50% 100%); color: #8a8a8e; }
+
+/* Subagent 模型选择的候选清单:按提供方分组,不可用的一组排最后。 */
+.set-model-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 2px; }
+.set-model-group { display: flex; flex-direction: column; gap: 2px; }
+.set-model-group-title { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+.set-model-candidate {
+  display: flex; align-items: flex-start; gap: 7px;
+  padding: 3px 0; font-size: 12px; color: var(--text); cursor: pointer;
+}
+.set-model-candidate.unavailable { color: var(--text-faint); }
+.set-model-candidate-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.set-model-candidate .set-row-hint { margin: 0; }
+
+/* 安装日志:等宽、限高、可滚动 —— 长输出不能把弹窗撑爆。 */
+.set-install-log { max-height: 160px; overflow-y: auto; margin-top: 8px; }
+
+/* 快捷键页的"仅菜单"说明:比正文再淡一档。 */
+.sc-hint.dim { color: var(--text-faint); }
+
+/* 服务端页的地址链接:等宽、可点,长地址要能折行。 */
+a.srv-url { text-decoration: none; word-break: break-all; }
+a.srv-url:hover { text-decoration: underline; }
+
 /* ── 子代理目录入口(header chip + 树形 popover)── */
 .subagent-dot {
   inline-size: 8px; block-size: 8px; border-radius: 50%;

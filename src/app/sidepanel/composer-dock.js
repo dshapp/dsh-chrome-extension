@@ -3,13 +3,11 @@
 import { t } from "../../shared/i18n.js";
 import { renderMenuItems } from "./sidepanel-overlays.js";
 import { RPC } from "../../platform/dsh/rpc-methods.js";
+// full-access 的识别与确认框都在这里:设置页的"默认权限"行也要走同一道确认,
+// 两个入口必须问同一个问题、给同一个对话框。
+import { confirmFullAccess as askFullAccess, isFullAccessOption } from "./permission-confirm.js";
 
-/// 需要二次确认的权限值。宿主用不同命名发过同样的语义,所以按子串识别。
-const FULL_ACCESS_PATTERN = /(full[-_ ]?access|danger|bypass|yolo)/i;
-
-export function isFullAccessOption(value) {
-  return FULL_ACCESS_PATTERN.test(String(value ?? ""));
-}
+export { isFullAccessOption };
 
 /// 预设的展示名(对齐 Mac agentPresetDisplayText)。
 ///
@@ -131,34 +129,9 @@ export function createComposerDock({ elements, deps, state, showToast, format })
     }
   }
 
-  /// full-access 二次确认对话框。返回用户是否确认。
+  /// full-access 二次确认对话框(实现见 permission-confirm.js)。返回用户是否确认。
   function confirmFullAccess() {
-    const dialog = elements.permConfirm;
-    if (!dialog) return Promise.resolve(true);
-    const acknowledge = dialog.querySelector("#perm-confirm-ack");
-    const enable = dialog.querySelector("#perm-confirm-enable");
-    const cancel = dialog.querySelector("#perm-confirm-cancel");
-    acknowledge.checked = false;
-    enable.disabled = true;
-
-    return new Promise((resolve) => {
-      const onAck = () => { enable.disabled = !acknowledge.checked; };
-      const finish = (value) => {
-        acknowledge.removeEventListener("change", onAck);
-        enable.removeEventListener("click", onEnable);
-        cancel.removeEventListener("click", onCancel);
-        dialog.removeEventListener("close", onCancel);
-        dialog.close();
-        resolve(value);
-      };
-      const onEnable = () => finish(true);
-      const onCancel = () => finish(false);
-      acknowledge.addEventListener("change", onAck);
-      enable.addEventListener("click", onEnable);
-      cancel.addEventListener("click", onCancel);
-      dialog.addEventListener("close", onCancel);
-      dialog.showModal();
-    });
+    return askFullAccess(elements.permConfirm);
   }
 
   /// 当前模型的展示名:groups[].models[] 里按 id 命中就用 name,否则退回 model id。

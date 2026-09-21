@@ -4,8 +4,9 @@
 // 与 Mac 的差别只在能做到的范围:那边能重启 App 本体,扩展不能起进程,
 // 所以末段只重启 dsh web,文案也如实写成「重启服务」。
 //
-// 这一页刻意**不**提供后端地址输入框、本地启动器测试与宿主代理开关:
-// 版式以视觉稿为准,那三样不在稿里。启动器由一键安装器维护。
+// 这一页刻意**不**提供后端地址输入框与宿主代理开关:版式以视觉稿为准。
+// 本地启动器则补了一行 —— 装了但没跑起来时,用户需要有个地方能让它再试一次,
+// 而一键安装器只管装、不管"现在没起来"。
 //
 // 「服务地址」是只读的一行,这一点不只是版式取舍 —— 它的权威方向常被记反:
 // 地址的源头是**扩展**(settings.getBackendUrl,默认 127.0.0.1:3080),
@@ -20,6 +21,7 @@ import { section, row, button, statusLine, escapeHtml } from "./settings-ui.js";
 import { RPC } from "../../../platform/dsh/rpc-methods.js";
 import { probeHost } from "../../../platform/dsh/native-supervisor.js";
 import { createBridgeStatus } from "../bridge-settings.js";
+import { createServerLauncherRow } from "./server-launcher-row.js";
 
 /// 每秒复查一次连接状态。与 header 状态点同频:重连是后台发生的,
 /// 页面开着时状态必须自己走,而不是等用户切 tab 才更新。
@@ -64,6 +66,11 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   let dshRestartError = null;
   let dshUpdateError = null;
   let dshUpdateDone = false;
+  const launcherRow = createServerLauncherRow({
+    showToast,
+    formatErrorDetails: (error) => deps.formatErrorDetails?.(error) ?? String(error),
+    onChange: () => render()
+  });
   let refreshGeneration = 0;
   let dshLoadGeneration = 0;
 
@@ -167,18 +174,29 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   function infoSection() {
     const rows = [connectionRow()];
 
-    if (dsh?.current) {
+    // 「DSH 包」一行把两处事实并在一起:版本来自 pnpm(serverOps.version),
+    // 路径来自 native host 的 status(dsh 可执行文件)。分开画两行的话,
+    // 用户得自己把"版本"和"哪个 dsh"对上,而那正是这句话要回答的问题。
+    if (dsh?.current || launcher?.dsh) {
       rows.push(row({
-        label: escapeHtml(t("srv.serverVersion")),
-        control: '<span class="set-mono">' + escapeHtml(dsh.current) + '</span>'
+        label: escapeHtml(t("srv.dshPackage")),
+        hint: launcher?.dsh
+          ? '<span class="set-mono">' + escapeHtml(launcher.dsh) + '</span>'
+          : escapeHtml(t("srv.dshVersionHint")),
+        control: dsh?.current
+          ? '<span class="set-mono">' + escapeHtml(dsh.current) + '</span>'
+          : ""
       }));
     }
 
+    // 地址是可点的:它就是要连的那个服务,点开即在新标签里看真实界面 ——
+    // 侧栏里再放一个"打开"按钮只是同一件事多一个按钮。
     const url = deps.connection.baseUrl;
     if (url) {
       rows.push(row({
         label: escapeHtml(t("srv.serverUrl")),
-        control: '<span class="set-mono srv-url">' + escapeHtml(url) + '</span>'
+        control: '<a class="set-link srv-url" href="' + escapeHtml(url) + '"'
+          + ' target="_blank" rel="noreferrer noopener">' + escapeHtml(url) + '</a>'
       }));
     }
 
@@ -241,13 +259,14 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   }
 
   function render() {
-    host.innerHTML = updateRow() + infoSection() + restartSection();
+    host.innerHTML = updateRow() + infoSection() + launcherRow.render() + restartSection();
     bind();
   }
 
   function bind() {
     host.querySelector("#srv-dsh-restart")?.addEventListener("click", () => runDshAction("restart"));
     host.querySelector("#srv-dsh-update")?.addEventListener("click", () => runDshAction("update"));
+    launcherRow.bind(host);
     host.querySelector("#srv-reveal-home")?.addEventListener("click", () => openPath(hostInfo?.home));
     host.querySelector("#srv-view-log")?.addEventListener("click", () => openPath(logPath()));
   }
@@ -343,6 +362,7 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
     if (generation !== refreshGeneration) return;
     hostInfo = nextHostInfo;
     launcher = nextLauncher;
+    launcherRow.setStatus(nextLauncher);
     render();
     if (!timer) timer = setInterval(paintConnection, POLL_INTERVAL_MS);
     // 桥自己按秒轮询 service worker;首次结果回来时 onChange 会触发一次重画。

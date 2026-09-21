@@ -10,10 +10,21 @@ export function escapeHtml(text) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+/// 选择器里的 id 片段转义。
+///
+/// 大部分环境有 CSS.escape,但 jsdom 下 globalThis.CSS 不存在 —— 而这里拼的
+/// id 里本来就只有 bundle 名/预设 id 这类字符,所以自带一份实现比依赖全局更稳。
+export function selectorEscape(value) {
+  return String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, (char) => "\\" + char);
+}
+
 /// 一个分组(Mac Section):可选表头与表尾说明。
-export function section({ header, footer, body, id } = {}) {
+/// header 走转义,headerHtml 原样插入 —— 分组标题要带数量徽标(groupHeader),
+/// 那已经是一段 HTML,再转义一次就会把标签显示成文字。
+export function section({ header, headerHtml, footer, body, id } = {}) {
+  const head = headerHtml ?? (header ? escapeHtml(header) : "");
   return `<div class="set-section"${id ? ` id="${escapeHtml(id)}"` : ""}>`
-    + (header ? `<div class="set-section-header">${escapeHtml(header)}</div>` : "")
+    + (head ? `<div class="set-section-header">${head}</div>` : "")
     + `<div class="set-section-body">${body ?? ""}</div>`
     + (footer ? `<div class="set-section-footer">${footer}</div>` : "")
     + `</div>`;
@@ -21,8 +32,9 @@ export function section({ header, footer, body, id } = {}) {
 
 /// 一行(Mac LabeledContent):左侧标题 + 副标题,右侧控件。
 /// control 为空时整行只是说明文字。
-export function row({ label, hint, control, id, extra } = {}) {
-  return `<div class="set-row"${id ? ` id="${escapeHtml(id)}"` : ""}>`
+export function row({ label, hint, control, id, extra, clickable } = {}) {
+  return `<div class="set-row${clickable ? " clickable" : ""}"${id ? ` id="${escapeHtml(id)}"` : ""}`
+    + `${clickable ? ' role="button" tabindex="0"' : ""}>`
     + `<div class="set-row-text">`
     + (label ? `<div class="set-row-label">${label}</div>` : "")
     + (hint ? `<div class="set-row-hint">${hint}</div>` : "")
@@ -87,6 +99,42 @@ export function tag(text, kind = "") {
 /// 带状态点的一行状态文字(已配置 / 需要密钥 / 无需密钥)。
 export function statusLine(text, kind) {
   return `<span class="set-status ${kind}"><i aria-hidden="true"></i>${escapeHtml(text)}</span>`;
+}
+
+/// 带图标的一行状态文字(Mac 的 Label(text, systemImage:))。提供方行的
+/// "已配置 / 无需密钥 / 缺少密钥"在 Mac 那边是彩色符号 + 文字,不是色点。
+export function iconStatusLine(text, kind, icon) {
+  return `<span class="set-icon-status ${kind}">${icon ? lucideIconSvg(icon, { size: 12 }) : ""}${escapeHtml(text)}</span>`;
+}
+
+/// 外观的三块色板(Mac 的 ThemeCube)。每块是一张 48×48 的方形预览 + 名称,
+/// 选中态靠 `.active` 描边;预览块本身用半色/全色区分浅色与深色,
+/// 跟随系统画成左浅右深的一刀切。
+const THEME_CUBES = [
+  { value: "light", icon: "sun", swatch: "light" },
+  { value: "dark", icon: "moon", swatch: "dark" },
+  { value: "system", icon: "circle-half", swatch: "system" }
+];
+
+export function themeCubes({ id, value, disabled }) {
+  const cubes = THEME_CUBES.map((cube) => {
+    const label = t("set.appearance." + cube.value);
+    return `<button class="set-theme-cube${cube.value === value ? " active" : ""}" type="button"`
+      + ` data-theme-cube="${cube.value}"${disabled ? " disabled" : ""}`
+      + ` aria-pressed="${cube.value === value}" title="${escapeHtml(label)}">`
+      + `<span class="set-theme-cube-swatch ${cube.swatch}" aria-hidden="true">`
+      + `${lucideIconSvg(cube.icon, { size: 14 })}</span>`
+      + `<span class="set-theme-cube-label">${escapeHtml(label)}</span>`
+      + `</button>`;
+  }).join("");
+  return `<div class="set-theme-cubes"${id ? ` id="${escapeHtml(id)}"` : ""}>${cubes}</div>`;
+}
+
+/// 一个带数量徽标的分组标题(Mac PluginsPage 的 group(title:count:) )。
+export function groupHeader(title, count, id) {
+  return `<div class="set-group-header"${id ? ` id="${escapeHtml(id)}"` : ""}>`
+    + `<span class="set-group-title">${escapeHtml(title)}</span>`
+    + `<span class="set-group-count">${escapeHtml(String(count))}</span></div>`;
 }
 
 /// 段落级错误 / 提示条。

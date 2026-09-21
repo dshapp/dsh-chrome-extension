@@ -7,7 +7,7 @@
 // 本模块只管「画按钮 + 跑动作」,不持有清单数据:状态由调用方(plugins-pane)
 // 保管并在每次 render 时传入,避免同一份数据出现两个副本。
 import { t } from "../../../shared/i18n.js";
-import { section, row, button, textInput, escapeHtml } from "./settings-ui.js";
+import { section, row, button, textInput, escapeHtml, selectorEscape } from "./settings-ui.js";
 
 /// 一个清单条目对应的 npm 包名,没有则返回 null。
 ///
@@ -111,10 +111,10 @@ export function createPluginActionsUi({ host, pluginActions, showToast, state, r
     for (const entry of inventory) {
       const name = packageNameOf(entry);
       if (!name) continue;
-      host.querySelector(`#plug-update-${CSS.escape(name)}`)?.addEventListener("click", () =>
+      host.querySelector(`#plug-update-${selectorEscape(name)}`)?.addEventListener("click", () =>
         runAction(name, t("plug.updating"), () => pluginActions.update(name))
       );
-      host.querySelector(`#plug-remove-${CSS.escape(name)}`)?.addEventListener("click", () =>
+      host.querySelector(`#plug-remove-${selectorEscape(name)}`)?.addEventListener("click", () =>
         runAction(name, t("plug.removing"), () => pluginActions.remove(name))
       );
     }
