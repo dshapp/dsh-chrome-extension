@@ -19,6 +19,7 @@ import { projectDraft, reconcileEdit, reconcileDraft, renderChipMirror, insertRe
 import { collectElements } from "./sidepanel-elements.js";
 import { mountAttachmentControls } from "./composer-attachments.js";
 import { createSessionShortcutController, getSessionShortcutLabels } from "../../features/sessions/session-shortcuts.js";
+import { visibleSessions } from "../../features/sessions/sidebar-sections.js";
 import { mountGoalBar, mountTodoPanel, mountStatsBar, activeGoal } from "../../features/docks/session-docks.js";
 import { mountTrajectoryPane } from "../../features/trajectory/index.js";
 import { mountJobList } from "../../features/docks/job-list.js";
@@ -70,7 +71,6 @@ export function createSidepanelApp(root, deps, options = {}) {
         producedPaths: (turn) => snap?.producedPathsByTurn?.get?.(turn) ?? [],
         presentedFiles: (turn) => snap?.presentedByTurn?.get?.(turn) ?? [],
         deliverablesRevision: snap?.deliverablesRevision ?? null,
-        // 行内 mention / 产出 chip / 交付卡点击:侧栏是扩展页,file: 打不开,
         // 本轮改动文件卡(web ChangedFiles / mac ChangedFilesCard):耐久事件只公告
         // turn 与 seq,清单与逐文件 diff 要按 seq 去宿主读;读到的结果由服务缓存,
         // 所以重渲染不会重复拉取。
@@ -79,13 +79,14 @@ export function createSidepanelApp(root, deps, options = {}) {
         loadChangesSummary: (seq) => deps.changes?.loadSummary?.(snap?.sessionId, seq) ?? null,
         changesDiff: (seq, index) => deps.changes?.diff?.(snap?.sessionId, seq, index) ?? null,
         loadChangesDiff: (seq, index) => deps.changes?.loadDiff?.(snap?.sessionId, seq, index) ?? null,
+        // 行内 mention / 产出 chip / 交付卡点击:侧栏是扩展页,file: 打不开,
         // 统一走宿主 openPath。打开失败不再静默吞:宿主对不存在的路径会回错,
         // 用户看到 toast 才知道"点了没反应"是路径问题而不是按钮坏了。
         onOpenPath: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
         onOpenFile: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
-        onRevealPath: (path) => { void deps.workspaces.revealPath(path).catch((error) => showToast(format(error))); },
         // 气泡里的会话引用胶囊:点了就切到被引用的那个会话(可跨工作区)。
         onOpenSession: (sessionId) => { void openSession(sessionId).catch((error) => showToast(format(error))); },
+        onRevealPath: (path) => { void deps.workspaces.revealPath(path).catch((error) => showToast(format(error))); },
         // 历史图片只有 attachmentId,按需回读字节(web historical-images)。
         readAttachment: (attachmentId) => deps.sessions.readAttachment?.(snap?.sessionId, attachmentId) ?? null
       };
@@ -1264,13 +1265,24 @@ export function createSidepanelApp(root, deps, options = {}) {
       return true;
     } catch { return false; }
   }
+  /// 上一个/下一个会话走的是**会话列表当前画出来的那个顺序**(置顶区在前,
+  /// 然后按当前分组/排序档),这样 ⌘[ / ⌘] 与眼睛看到的列表永远一致。
+  /// 抽屉还没画过(冷启动、从没打开过)时回落到整册名册,过滤规则与列表相同。
+  function sidebarOrderIds() {
+    const rendered = historyDrawer?.renderedOrder?.() ?? [];
+    if (rendered.length) return rendered;
+    return visibleSessions(deps.sessions.listStore.get(), {
+      archivedIds: deps.workspaces?.archivedSessionIds ?? [],
+      activeSessionId: state.sessionId
+    }).map((item) => item.sessionId);
+  }
   function stepSession(delta) {
-    const list = sessionsInActiveWorkspace(deps.sessions.listStore.get());
+    const list = sidebarOrderIds();
     if (!list.length) return false;
-    const idx = list.findIndex((item) => item.sessionId === state.sessionId);
+    const idx = list.indexOf(state.sessionId);
     const next = idx === -1 ? (delta > 0 ? 0 : list.length - 1)
       : (idx + delta + list.length) % list.length;
-    const target = list[next]?.sessionId;
+    const target = list[next];
     if (!target || target === state.sessionId) return false;
     void openSession(target).catch((error) => showToast(format(error)));
     return true;
@@ -1407,8 +1419,8 @@ export function createSidepanelApp(root, deps, options = {}) {
       try {
         await deps.sessions.archive(sessionId);
         await deps.sessions.refreshList().catch(() => {});
-        const rest = sessionsInActiveWorkspace(deps.sessions.listStore.get())
-          .map((item) => item.sessionId).filter((id) => id !== sessionId);
+        // 接替谁:与列表同一个顺序里的下一行(与 ⌘[ / ⌘] 同源)。
+        const rest = sidebarOrderIds().filter((id) => id !== sessionId);
         if (rest.length) await openSession(rest[0]);
         else await newSession();
       } catch (error) { showToast(format(error)); }
@@ -1524,6 +1536,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     elements.shortcutHistory.textContent = shortcutLabels.history;
     elements.hdrNew.title = `${t("new_session")} (${shortcutLabels.newSession})`;
     elements.hdrTitleWrap.title = `${t("history")} (${shortcutLabels.history})`;
+    elements.hdrTitleWrap.setAttribute("aria-label", t("history.label"));
     const controller = createSessionShortcutController({
       platform,
       onHintsChange: (visible) => document.body.classList.toggle("shortcut-hints-visible", visible),
@@ -1570,6 +1583,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     }
     dock.refreshModelMenu();
     void dock.refreshPresetMenu();
+    historyDrawer?.relabel?.();
     historyDrawer?.refresh?.();
   }
 
@@ -1593,15 +1607,21 @@ export function createSidepanelApp(root, deps, options = {}) {
       // 所以 Git 入口也要跟着重判 —— 否则头部会一边写着新目录名,一边显示上一个
       // 仓库的分支。
       onChange: () => {
-        historyDrawer?.refresh({ showLoading: true });
+        // 会话列表不再按目录过滤(分组取代了它),所以这里只是顺手刷新一下名册,
+        // 不再整块转圈重拉 —— 换目录改变的只是"下一个会话建在哪"。
+        historyDrawer?.refresh();
         refreshGitEntry();
       }
     });
     historyDrawer = mountHistoryDrawer(deps, openSession, newSession, shortcutLabels, {
-      workspacePath: () => workspaceMenu?.activePath() ?? null,
-      workspaceSessionIds: () => workspaceMenu?.activeSessionIds() ?? null,
-      workspaceId: () => workspaceMenu?.activeWorkspaceId() ?? null,
+      // 抽屉按工作区分组(对齐 Mac 左侧栏),所以它要的是整份 workspace 名单
+      // 与归档名单,而不再是"当前选中目录"那一个过滤条件。
+      workspaces: () => deps.workspaces?.workspaces ?? [],
+      archivedIds: () => deps.workspaces?.archivedSessionIds ?? [],
       orderStore: deps.sessions?.orderStore ?? null,
+      pinnedStore: deps.pinnedStore ?? null,
+      // 分区标题右侧的「添加目录」:与工作目录菜单里的那一项同一条路径。
+      onAddWorkspace: () => workspaceMenu?.addDirectory?.(),
       showToast
     });
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。

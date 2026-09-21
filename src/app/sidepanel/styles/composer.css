@@ -1796,32 +1796,17 @@ a.srv-url:hover { text-decoration: underline; }
 }
 .drop-overlay-card svg { color: var(--accent); }
 
-/* ── 历史列表:排序下拉 + 拖拽落点提示 ── */
-/* 住在搜索行最右侧,与左端的工作目录 chip 成对。
-   窄侧栏(约 340px)里这一行要塞下四样:工作目录 chip、搜索图标、搜索框、
-   排序钮。实测三者都不肯让步时搜索框会被压到 45px —— 已经没法用了。
-   所以这里让排序钮**只显示图标**,文字标签藏起来:当前档位仍由菜单里的
-   选中态表达,而搜索框拿回它需要的宽度。 */
-#history-order-btn {
+/* ── 会话列表:视图选项 + 拖拽落点提示 ── */
+/* 视图选项与「添加目录」住在分区标题行的右端(对齐 Mac 的 section header)。
+   两颗都只画图标:窄侧栏里这一行还要放"工作区/会话"标题,加上文字标签会把
+   标题挤没 —— 当前选中的分组/排序档由菜单里的勾表达。 */
+#history-view-btn,
+#history-add-workspace {
   flex-shrink: 0;
-  gap: 3px;
-  font-size: 12px;
-  color: var(--text-dim);
+  color: var(--text-faint);
 }
-#history-order-btn:hover { color: var(--text); }
-#history-order-label {
-  white-space: nowrap;
-  /* 空间够时才显示文字。阈值取 380px:低于它就退成纯图标钮。 */
-  display: none;
-}
-@container history-search (min-width: 380px) {
-  #history-order-label { display: inline; }
-}
-/* 容器查询要有个 container 才生效;搜索行自己就是那个容器。 */
-#history-search-wrap {
-  container-type: inline-size;
-  container-name: history-search;
-}
+#history-view-btn:hover,
+#history-add-workspace:hover { color: var(--text); }
 /* 拖拽中的行淡出,落点用一条线提示。线用 box-shadow 画而不是 border:
    border 会改变行高,列表在拖动过程中会上下抖动。 */
 .history-item.dragging { opacity: 0.4; }

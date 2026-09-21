@@ -2,14 +2,15 @@
 import { createSettings } from "../../platform/storage/settings.js";
 import { createDshConnection, DshStreamState } from "../../platform/dsh/dsh-connection.js";
 import { createSessionService } from "../../features/sessions/session-service.js";
+import { createPinnedStore } from "../../features/sessions/pinned-store.js";
 import { createBackgroundNotifier } from "../../features/notifications/background-notifier.js";
 import { createPendingSessionOpen } from "../../features/notifications/notification-click.js";
 import { createModelService } from "../../features/models/model-service.js";
 import { createSkillService } from "../../features/skills/skill-service.js";
 import { createCommandService } from "../../features/commands/command-service.js";
 import { createWorkspaceService } from "../../features/workspaces/workspace-service.js";
-import { createReferenceService } from "../../features/references/reference-service.js";
 import { createChangesService } from "../../features/changes/changes-service.js";
+import { createReferenceService } from "../../features/references/reference-service.js";
 import { createGoalService } from "../../features/goals/goal-service.js";
 import { createAttachmentTray } from "../../features/attachments/attachments.js";
 import { setLang, getLang } from "../../shared/i18n.js";
@@ -45,17 +46,20 @@ export function createSidepanelDependencies(options = {}) {
     settings,
     connection,
     sessions,
+    // 会话置顶账本(浏览器本地)。宿主没有"置顶"这个概念,与手动顺序同理:
+    // 它是"我这台机器上我习惯的样子"(对齐 Mac 的 pinnedSessionOrder)。
+    pinnedStore: options.pinnedStore || createPinnedStore(),
     models: options.models || createModelService(connection),
     skills: options.skills || createSkillService(connection),
     commands: options.commands || createCommandService(connection),
     workspaces,
     references: options.references || createReferenceService(connection),
+    // 本轮改动文件的摘要与逐文件对比(宿主 workspace-changes 插件的鉴权 GET 路由)。
+    changes: options.changes || createChangesService(connection),
     goals: options.goals || createGoalService(connection),
     // '@' 浮层的额外候选来源(可插拔契约,见 trigger-menu.js 的 extraSources)。
     mentionSources: options.mentionSources || [],
     attachments: options.attachments || createAttachmentTray({
-    // 本轮改动文件的摘要与逐文件对比(宿主 workspace-changes 插件的鉴权 GET 路由)。
-    changes: options.changes || createChangesService(connection),
       // 非图片文件走 session/uploadFileBinary 真上传。上传需要当前会话 id,
       // 拿不到时抛 attach.noSession,由 addFile 的上层转 toast。
       uploadFile: async (file) => {

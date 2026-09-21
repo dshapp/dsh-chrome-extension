@@ -83,11 +83,12 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
   }
 
   function paint() {
-    const text = label();
     const current = selected();
     const title = current ? current.path : orphanCwd || t("workspace.title");
-    elements.hdrWorkspaceLabel.textContent = text;
-    elements.hdrWorkspace.title = title;
+    // 头部那颗过滤 chip 已经不存在了(会话列表改成按工作区分组,不再按目录过滤),
+    // 但这段代码仍要能在"有 chip"的宿主页面里跑 —— 所以两处都按可选处理。
+    if (elements.hdrWorkspaceLabel) elements.hdrWorkspaceLabel.textContent = label();
+    if (elements.hdrWorkspace) elements.hdrWorkspace.title = title;
     // 标题里的工作目录前缀:与上面同一份选择,只是永远按"会话归属"的说法呈现。
     // 只写自己这个 span,会话标题由历史浮层的 setActive 独立写。
     if (elements.hdrWorkspacePrefix) {
@@ -226,7 +227,7 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
     });
   }
   markTrigger(elements.heroWorkspace, true);
-  markTrigger(elements.hdrWorkspace, false);
+  markTrigger(elements.hdrWorkspace, false);   // 头部 chip 已移除时为 undefined,markTrigger 自己会跳过
 
   deps.workspaces?.subscribe?.((next) => {
     workspaces = next ?? [];
@@ -240,6 +241,10 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
   });
 
   return {
+    /// 走一次系统目录选择器并建 workspace。会话抽屉分区标题右侧那颗「添加目录」
+    /// 直接复用这条路径 —— 选中/持久化/失败提示都已经在里面了,菜单里那一项与
+    /// 抽屉那颗按钮因此不会走岔。
+    addDirectory,
     // 等待 workspace/follow baseline 并恢复上次选择；失败时退化为只有「全部」。
     async refresh() {
       try {

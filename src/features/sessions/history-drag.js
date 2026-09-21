@@ -12,19 +12,26 @@
 const DRAG_MIME = "application/x-dsh-session";
 
 /**
- * 给历史列表挂上拖拽重排。
+ * 给会话列表挂上拖拽重排。
+ *
+ * **一次拖拽不跨组。** 列表现在分成置顶区、各 workspace 组与未分组桶,每组的
+ * 顺序写进不同的账本(置顶账本 / 宿主 insertSessionBefore / 浏览器本地手动序)。
+ * 跨组落下没有"要写哪本"的答案,所以直接不接受 —— 与 Mac 的 `.onMove` 只在
+ * 同一个 ForEach 内生效是同一条规矩。
  *
  * @param {Element} list 承载 .history-item 行的 <ul>。
  * @param {object} options
- * @param {() => boolean} options.enabled 当前是否允许拖拽(状态排序档要关掉)。
+ * @param {(groupId: string|null) => boolean} options.enabled 这一组当前是否允许拖拽
+ *        (状态排序档要关掉,置顶区例外)。
  * @param {() => string[]} options.visibleIds 当前渲染出来的行 id,按显示顺序。
- * @param {(movedId: string, overId: string|null, after: boolean) => void} options.onDrop
+ * @param {(movedId: string, overId: string|null, after: boolean, groupId: string|null) => void} options.onDrop
  *        落下时回调,由调用方去解析锚点并提交。
  * @returns {() => void} 卸载函数。
  */
 export function mountHistoryDrag(list, { enabled, visibleIds, onDrop }) {
   if (!list) return () => {};
   let draggingId = null;
+  let draggingGroupId = null;
 
   /// 事件发生在哪一行上。行内的按钮(分叉/重命名/归档)也要能命中所属的行。
   const rowOf = (target) => target?.closest?.(".history-item") ?? null;
@@ -38,10 +45,11 @@ export function mountHistoryDrag(list, { enabled, visibleIds, onDrop }) {
   }
 
   function onDragStart(event) {
-    if (!enabled()) return;
     const row = rowOf(event.target);
     if (!row) return;
+    if (!enabled(row.dataset.groupId ?? null)) return;
     draggingId = row.dataset.sessionId || null;
+    draggingGroupId = row.dataset.groupId ?? null;
     if (!draggingId) return;
     event.stopPropagation();
     row.classList.add("dragging");
@@ -62,6 +70,8 @@ export function mountHistoryDrag(list, { enabled, visibleIds, onDrop }) {
     clearMarkers();
     list.querySelector(`.history-item[data-session-id="${CSS.escape(draggingId)}"]`)?.classList.add("dragging");
     if (!row || row.dataset.sessionId === draggingId) return;
+    // 跨组不给落点提示:那条线会让人以为松手能把会话搬到别的工作区里去。
+    if ((row.dataset.groupId ?? null) !== draggingGroupId) return;
     // 落在行的上半还是下半,决定插到它前面还是后面。
     const box = row.getBoundingClientRect();
     const after = event.clientY > box.top + box.height / 2;
@@ -70,8 +80,8 @@ export function mountHistoryDrag(list, { enabled, visibleIds, onDrop }) {
 
   /// 提交一次落下。只在被拖的行确实还在当前可见集合里时才上报 ——
   /// 拖拽过程中列表可能被后台帧重画过。
-  function commit(movedId, overId, after) {
-    if (visibleIds().includes(movedId)) onDrop(movedId, overId, after);
+  function commit(movedId, overId, after, groupId) {
+    if (visibleIds().includes(movedId)) onDrop(movedId, overId, after, groupId);
   }
 
   function handleDrop(event) {
@@ -80,19 +90,24 @@ export function mountHistoryDrag(list, { enabled, visibleIds, onDrop }) {
     event.preventDefault();
     const row = rowOf(event.target);
     const moved = draggingId;
+    const group = draggingGroupId;
     draggingId = null;
+    draggingGroupId = null;
     clearMarkers();
-    // 落在列表空白处 = 移到末尾。
-    if (!row) { commit(moved, null, false); return; }
+    // 落在列表空白处 = 移到本组末尾。
+    if (!row) { commit(moved, null, false, group); return; }
+    // 跨组落下不提交(见函数头的说明)。
+    if ((row.dataset.groupId ?? null) !== group) return;
     const overId = row.dataset.sessionId || null;
     if (!overId || overId === moved) return;
     const box = row.getBoundingClientRect();
-    commit(moved, overId, event.clientY > box.top + box.height / 2);
+    commit(moved, overId, event.clientY > box.top + box.height / 2, group);
   }
 
   function onDragEnd(event) {
     event.stopPropagation();
     draggingId = null;
+    draggingGroupId = null;
     clearMarkers();
   }
 

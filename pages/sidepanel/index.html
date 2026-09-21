@@ -16,9 +16,24 @@
 </head>
 <body>
 
-  <!-- ── Header(对齐原 extension:状态点 + 新建 + 标题下拉历史 + 设置) ── -->
+  <!-- ── Header(会话列表入口 + 新建 在最左,其余动作靠右) ── -->
   <div id="header">
-    <div id="hdr-status" title=""></div>
+    <!-- 会话列表入口:就是原来那颗带标题的按钮,只是挪到了最左,并且现在拉开的是
+         左侧抽屉而不是顶部下拉 —— 所以前导图标用 panel-left,不再是向下的 chevron。 -->
+    <button id="hdr-title-wrap" type="button" aria-haspopup="dialog" aria-expanded="false"
+            aria-controls="session-drawer">
+      <!-- lucide: panel-left -->
+      <svg class="hdr-entry-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect width="18" height="18" x="3" y="3" rx="2"/>
+        <path d="M9 3v18"/>
+      </svg>
+      <!-- "工作目录 / 会话标题"。两段分别由 workspace-menu 与会话抽屉写入,
+           所以拆成两个 span —— 合成一个字符串会让两个写入方互相覆盖。
+           分隔符是 CSS ::after 画的,目录名为空时随前缀一起隐藏。 -->
+      <span id="hdr-workspace-prefix"></span>
+      <span id="hdr-title">New Chat</span>
+      <kbd class="shortcut-hint" id="shortcut-history" aria-hidden="true"></kbd>
+    </button>
     <button class="hdr-btn" id="hdr-new" aria-label="New Chat" title="新建会话">
       <!-- lucide: square-pen -->
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -27,17 +42,8 @@
       </svg>
       <kbd class="shortcut-hint" id="shortcut-new" aria-hidden="true"></kbd>
     </button>
-    <button id="hdr-title-wrap" type="button" aria-haspopup="dialog" aria-expanded="false">
-      <!-- "工作目录 / 会话标题"。两段分别由 workspace-menu 与历史浮层写入,
-           所以拆成两个 span —— 合成一个字符串会让两个写入方互相覆盖。
-           分隔符是 CSS ::after 画的,目录名为空时随前缀一起隐藏。 -->
-      <span id="hdr-workspace-prefix"></span>
-      <span id="hdr-title">New Chat</span>
-      <svg id="hdr-title-chevron" class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="m6 9 6 6 6-6"/>
-      </svg>
-      <kbd class="shortcut-hint" id="shortcut-history" aria-hidden="true"></kbd>
-    </button>
+    <!-- 入口与新建之后的空白:把余下的工具按钮推到右端。 -->
+    <span class="hdr-spacer" aria-hidden="true"></span>
     <!-- 子代理目录入口:对齐 Mac SubagentCatalogAction —— 有子代理后代的会话才显示 -->
     <button class="hdr-btn" id="subagent-catalog-btn" type="button" popovertarget="subagent-catalog-menu" hidden aria-haspopup="dialog">
       <span class="subagent-dot" aria-hidden="true"></span>
@@ -67,6 +73,9 @@
         <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
       </svg>
     </button>
+    <!-- 连接状态点:平时不显示,只有连接中/断开才现身。放在右侧工具簇里,
+         这样它出现与否都不会把最左边的会话列表入口顶开。 -->
+    <div id="hdr-status" title=""></div>
     <button class="hdr-btn" id="hdr-settings" type="button" aria-label="Settings" title="设置">
       <!-- lucide: ellipsis-vertical -->
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -75,36 +84,11 @@
         <circle cx="12" cy="19" r="1"/>
       </svg>
     </button>
-
-    <!-- 历史浮层(下拉 popover,对齐原 extension) -->
-    <div id="history-popover" role="dialog" aria-label="History">
-      <div id="history-search-wrap">
-        <!-- 工作目录下拉:决定历史过滤范围与新建会话归属,所以贴着历史搜索框放 -->
-        <button class="hdr-btn" id="hdr-workspace" type="button" popovertarget="workspace-menu"
-                aria-label="Workspace" title="切换工作目录">
-          <!-- lucide: folder -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
-          </svg>
-          <span id="hdr-workspace-label">全部</span>
-          <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="m6 9 6 6 6-6"/>
-          </svg>
-        </button>
-        <!-- lucide: search -->
-        <svg id="history-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m21 21-4.34-4.34"/>
-          <circle cx="11" cy="11" r="8"/>
-        </svg>
-        <input id="history-search" type="text" placeholder="搜索历史…" autocomplete="off" spellcheck="false" />
-      </div>
-      <ul id="history-list-inner" role="list"></ul>
-    </div>
   </div>
 
-  <!-- 工作目录菜单:头部那颗 chip 与新建会话页的 hero chip 共用同一个 popover。
-       它必须留在 #history-popover 之外 —— 那层平时是 display:none,菜单若做它的
-       子节点,历史浮层没打开时整棵子树都不渲染,hero chip 点了就毫无反应。 -->
+  <!-- 工作目录菜单:新建会话页的 hero chip 打开它(决定下一个会话建在哪)。
+       留在 body 层而不是任何会被 display:none 的容器里 —— 否则容器没展开时
+       整棵子树都不渲染,chip 点了就毫无反应。 -->
   <div id="workspace-menu" popover="auto" aria-label="Workspace"></div>
 
   <!-- 子代理目录树 popover(随 chip 打开) -->
@@ -301,6 +285,31 @@
 
   <!-- 会话 turn 轨道:浮在消息区右缘的轮次刻度,由 turn-rail-view 渲染 -->
   <div id="turn-rail" hidden aria-label="轮次导航"></div>
+
+  <!-- ── 会话抽屉(从左侧滑入,对齐 Mac 的左侧栏) ──
+       住在 body 层而不是 header 里:它要盖住整个侧栏的高度,而 header 只有 42px,
+       做它的子节点就只能在那条窄带里滑动。遮罩单独一层,点它即关。 -->
+  <div id="session-drawer-scrim" hidden></div>
+  <aside id="session-drawer" role="dialog" aria-label="会话" aria-modal="false">
+    <div id="history-search-wrap">
+      <!-- lucide: search -->
+      <svg id="history-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m21 21-4.34-4.34"/>
+        <circle cx="11" cy="11" r="8"/>
+      </svg>
+      <input id="history-search" type="text" placeholder="搜索历史…" autocomplete="off" spellcheck="false" />
+      <button class="hdr-btn" id="session-drawer-close" type="button" aria-label="关闭会话列表" title="关闭会话列表">
+        <!-- lucide: panel-left-close 的简化:一条竖线 + 左箭头 -->
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+        </svg>
+      </button>
+    </div>
+    <!-- 置顶区 / 分区标题(含视图选项与添加目录)/ 分组 / 会话行,全部由
+         session-drawer-view.js 画进这一个 <ul> —— 它们共享同一条滚动与
+         同一套键盘导航,拆成几个容器反而会把滚动切成几段。 -->
+    <ul id="history-list-inner" role="list"></ul>
+  </aside>
 
   <div id="toast" hidden></div>
 

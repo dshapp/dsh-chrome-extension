@@ -1,95 +1,102 @@
-// 侧栏浮层与覆盖层:历史 popover(搜索/分叉/重命名)+ popover 菜单。
-// 设置页已独立到 ./settings/(五个 tab),不再由本文件承载。
+// 左侧会话抽屉:开关与动画、搜索、键盘导航、行操作、分组折叠与拖拽接线。
+//
+// 列表的**派生**在 features/sessions/sidebar-sections.js(纯函数),**渲染**在
+// ./session-drawer-view.js,**视图选项/折叠态/拖拽提交**在 ./history-view-options.js。
+// 这里只做编排 —— 三块分开是因为它们的变更理由不同,合在一处也会把本文件顶过
+// 400 行的硬上限。
+//
+// 抽屉从左侧滑入(对齐 Mac 的左侧栏),入口是顶栏最左那颗带标题的按钮。
 import { t } from "../../shared/i18n.js";
-import { escapeHtml } from "../../shared/md-to-html.js";
-import {
-  resolveSessionRowTrailing, formatRelativeTime,
-  SessionRowTrailingKind, SessionAwaitingKind
-} from "../../features/sessions/session-row-trailing.js";
-import {
-  resolveSessionRowStatus, shouldShowSessionRowStatus, SessionRowStatus
-} from "../../features/sessions/session-row-status.js";
-import { mountHistoryOrdering } from "./history-ordering.js";
-import { HISTORY_ACTION_ICONS } from "./history-icons.js";
-
-// 行首状态灯的无障碍/tooltip 文案。warning 一档不会真的渲染
-//(shouldShowSessionRowStatus 会挡掉它,因为 trailing 已经把话说了),
-// 但表里留着它,保持与 SessionRowStatus 同形、日后不会漏。
-const STATUS_HELP_KEY = Object.freeze({
-  [SessionRowStatus.ongoing]: "session.stateOngoing",
-  [SessionRowStatus.error]: "session.stateError",
-  [SessionRowStatus.done]: "session.stateCompleted",
-  [SessionRowStatus.warning]: "session.awaitingApprovalHelp"
-});
+import { buildSidebarSections } from "../../features/sessions/sidebar-sections.js";
+import { renderSections, renderResultRows, renderLoading, SECTION_HEAD_ID } from "./session-drawer-view.js";
+import { mountHistoryViewOptions } from "./history-view-options.js";
 
 export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, {
-  workspacePath = () => null,
-  workspaceSessionIds = () => null,
-  workspaceId = () => null,
+  // 宿主的 workspace 名单(分组模式按它划分),以及已归档 id(永远不进列表)。
+  workspaces = () => [],
+  archivedIds = () => [],
   orderStore = null,
+  pinnedStore = null,
+  // 分区标题右侧那颗「添加目录」:复用工作目录菜单里的同一条 pickAndCreate 路径。
+  onAddWorkspace = null,
   // deps 是纯组装层,没有 toast —— 与设置页同样由 app 就地补进来。
   showToast = null
 } = {}) {
   // 挂起请求/草稿的权威来源 —— session.list 的摘要里没有这两样。
   const listStore = deps.sessions?.listStore ?? null;
-  // 排序控制器。在下面才创建(它要用到 render/filterItems),而 filterItems
-  // 又要问它当前是哪一档 —— 所以这里先留个引用,由那些函数在**调用时**读取,
-  // 而不是在定义时捕获。未就绪前按默认档,首帧不会因此出错。
-  let ordering = null;
-  const popover = document.querySelector("#history-popover");
-  const titleWrap = document.querySelector("#hdr-title-wrap");
-  const list = popover.querySelector("#history-list-inner");
-  const search = popover.querySelector("#history-search");
+  // 视图选项控制器。在下面才创建(它要用到 paint),而 paint 又要问它当前是
+  // 哪两根轴 —— 所以这里先留个引用,由那些函数在**调用时**读取。
+  let viewOptions = null;
+  const drawer = document.querySelector("#session-drawer");
+  const scrim = document.querySelector("#session-drawer-scrim");
+  const entry = document.querySelector("#hdr-title-wrap");
+  const list = drawer.querySelector("#history-list-inner");
+  const search = drawer.querySelector("#history-search");
+  const closeButton = drawer.querySelector("#session-drawer-close");
   const title = document.querySelector("#hdr-title");
   let activeSessionId = null;
   // 正在跑 fork/rename/archive 的会话 id:同一行的操作按钮在往返期间禁用。
   const rowBusy = new Set();
   let allItems = [];
   let renderedItems = [];
+  let sections = [];
   // 键盘导航的高亮行下标(-1 = 无选中)。与 activeSessionId(当前打开的会话)是两回事:
   // 前者是"光标在哪",后者是"哪个会话是当前的"。
   let selectedIndex = -1;
 
-  /// 打开浮层:清空上一次的搜索词、渲染列表,并把光标放进搜索框。
-  /// 抽成函数是因为 show() 也要走同一套 —— 否则用 show() 开出来的浮层
-  /// 不聚焦,得多点一下才能打字。
+  function isOpen() { return drawer.classList.contains("open"); }
+
+  /// 打开抽屉:清空上一次的搜索词、渲染列表,并把光标放进搜索框。
   function open() {
-    popover.classList.add("open");
-    titleWrap.setAttribute("aria-expanded", "true");
+    drawer.classList.add("open");
+    scrim.hidden = false;
+    // 遮罩要先出现在 DOM 里,下一帧再上色,否则 opacity 过渡不会跑。
+    requestAnimationFrame(() => scrim.classList.add("open"));
+    document.body.classList.add("session-drawer-open");
+    entry.setAttribute("aria-expanded", "true");
     search.value = "";
-    // listStore 一直被 host 实时帧维护着,打开浮层直接渲染这份 warm 快照即可,
+    // listStore 一直被 host 实时帧维护着,打开抽屉直接渲染这份 warm 快照即可,
     // 不再先清空成 loading 去等一次全量 session/list RPC(对齐 Web 端侧栏直接读
     // snapshot store 的做法)。只有冷启动还没有任何基线时才落 loading。
-    // 高亮落到第一行,这样浮层一开回车就能开首条。
+    // 高亮落到第一行,这样抽屉一开回车就能开首条。
     allItems = listStore?.get?.() ?? allItems;
-    if (allItems.length) render(filterItems(""), { resetSelection: true });
-    else renderLoading();
+    if (allItems.length) paint({ resetSelection: true });
+    else renderLoading(list);
     // 后台静默刷新:single-flight,会和启动/重连的在途拉取合并;回包后整体替换。
     void refresh({ resetSelection: true });
-    // 浮层刚从 display:none 切出来,同一帧里 focus() 在部分浏览器上不生效。
+    // 抽屉刚开始滑入,同一帧里 focus() 在部分浏览器上不生效。
     requestAnimationFrame(() => search.focus());
   }
 
-  titleWrap.addEventListener("click", () => {
-    if (popover.classList.contains("open")) {
-      popover.classList.remove("open");
-      titleWrap.setAttribute("aria-expanded", "false");
-      return;
-    }
-    open();
+  function hide({ restoreFocus = false } = {}) {
+    if (!isOpen()) return;
+    drawer.classList.remove("open");
+    scrim.classList.remove("open");
+    document.body.classList.remove("session-drawer-open");
+    entry.setAttribute("aria-expanded", "false");
+    // 遮罩淡出后才移出可交互层,否则它会在过渡期间吃掉点击。
+    setTimeout(() => { if (!isOpen()) scrim.hidden = true; }, 200);
+    if (restoreFocus) entry.focus();
+  }
+
+  entry.addEventListener("click", () => {
+    if (isOpen()) hide();
+    else open();
   });
+  scrim.addEventListener("click", () => hide({ restoreFocus: true }));
+  closeButton?.addEventListener("click", () => hide({ restoreFocus: true }));
+
   // 搜索:优先用宿主的全文索引(能搜到正文);索引未开启时回退到本地标题过滤。
   let searchToken = 0;
   let searchDebounceTimer = null;
-  // 历史浮层一次性渲染的行数上限,超出部分折叠为提示行(见 render)。
+  // 一次性渲染的行数上限,超出部分折叠为提示行(搜索结果与单列表都吃这条)。
   const MAX_RENDERED_ROWS = 500;
   search.addEventListener("input", () => {
     const query = search.value.trim();
     const token = ++searchToken;
     // 搜索词一变,结果集就是新的 —— 高亮统一回到第一行。
-    if (!query) { render(filterItems(""), { resetSelection: true }); return; }
-    // 先用本地结果即时反馈,避免输入时列表空白。
-    render(filterItems(query), { resetSelection: true });
+    paint({ resetSelection: true });
+    if (!query) return;
     // 远端全文搜索按 250ms 防抖:连续输入只发最后一次请求。
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
@@ -108,197 +115,122 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       const merged = hits
         .map((hit) => byId.get(hit.sessionId) ?? { sessionId: hit.sessionId, updatedAt: hit.updatedAt })
         .filter(Boolean);
-      if (merged.length) render(merged, { resetSelection: true });
+      if (merged.length) renderRows(merged, { resetSelection: true });
     } catch { /* 搜索失败不打断输入 */ }
   }
-  // 工作目录菜单是独立的原生 popover,渲染在 top layer 里,不是 #history-popover
-  // 的 DOM 子节点 —— 点它会被判成"点在历史浮层之外"而把历史关掉,连带菜单一起消失。
-  const workspaceMenu = document.querySelector("#workspace-menu");
+
+  // 抽屉之外的点击关掉它。抽屉内的 popover(视图选项)虽然画在 top layer 里,
+  // 但仍是抽屉的 DOM 子节点,composedPath 能命中,所以不需要额外的例外分支。
   document.addEventListener("click", (event) => {
-    if (popover.contains(event.target) || titleWrap.contains(event.target)) return;
-    // 菜单项点击会触发 handleSelect → renderMenu,而 renderMenu 重建 innerHTML,
-    // 把被点的按钮从 DOM 里摘掉 —— 冒泡到这里时 event.target 已 disconnect,
-    // workspaceMenu.contains(event.target) 会误判 false 从而连历史浮层一起关掉。
-    // composedPath 在事件产生时就固定了传播路径,不依赖 target 仍挂在树上。
-    if (workspaceMenu && event.composedPath().includes(workspaceMenu)) return;
-    popover.classList.remove("open");
-    titleWrap.setAttribute("aria-expanded", "false");
+    if (!isOpen()) return;
+    const path = event.composedPath();
+    if (path.includes(drawer) || path.includes(entry) || path.includes(scrim)) return;
+    hide();
   });
 
-  function itemTitle(item) {
-    // session.list 的标题在 projections.values.title;无标题回退到去掉 "session-" 前缀的短 id。
-    return item.projections?.values?.title
-      || `session ${String(item.sessionId).replace(/^session-/, "").slice(0, 8)}`;
-  }
-
-  function filterItems(query) {
-    // 先按工作目录收窄,再按搜索词。
-    // 选中具体 workspace 时,优先用宿主给的 sessionIds(权威成员名单)过滤;
-    // 只比对 item.cwd === path 太脆 —— cwd 可能缺失,也可能与 workspace 的
-    // canonical 路径拼写不一致(symlink/尾斜杠),导致切目录后列表整片消失。
-    // 「临时目录」(未挂 workspace)没有 sessionIds,仍按 cwd === path 过滤。
-    const sessionIds = workspaceSessionIds();
-    const path = workspacePath();
-    let scoped;
-    if (sessionIds) {
-      const members = new Set(sessionIds);
-      scoped = allItems.filter((item) => members.has(item.sessionId) || (path != null && item.cwd === path));
-    } else if (path) {
-      scoped = allItems.filter((item) => item.cwd === path);
-    } else {
-      scoped = allItems;
-    }
+  /// 搜索词过滤(本地标题匹配)。分组/排序由 buildSidebarSections 负责,
+  /// 所以这里只管"哪些行参与"。
+  function matchingItems(query) {
     const q = query.trim().toLowerCase();
-    const matched = q
-      ? scoped.filter((item) => (item.projections?.values?.title || item.sessionId).toLowerCase().includes(q))
-      : scoped;
-    // 排序放在过滤之后:手动序与状态序都只对**当前可见的这批**行成立
-    //(见 session-order-store 的"交集安全")。
-    return listStore?.sortBy
-      ? listStore.sortBy(matched, ordering?.orderBy(), sessionIds)
-      : matched;
+    if (!q) return allItems;
+    return allItems.filter((item) =>
+      (item.projections?.values?.title || item.sessionId).toLowerCase().includes(q));
   }
 
-  /// 列表正在刷新:显示加载态。冷启动还没有任何基线、或切换工作目录时,旧列表
-  /// 不再适用,与其让用户盯着一片空白或上个目录的残留行,不如明确告诉他在加载。
-  /// 普通打开浮层不走这里 —— 那份 warm 快照会被直接渲染。
-  function renderLoading() {
-    selectedIndex = -1;
-    renderedItems = [];
-    list.innerHTML = `<li class="history-loading" role="status" aria-live="polite"><span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>${escapeHtml(t("sessions.loading"))}</li>`;
+  /// 行渲染上下文:实时状态都从 listStore 现取,置顶态从账本现取。
+  function rowContext() {
+    return {
+      listStore,
+      pinnedStore,
+      activeSessionId,
+      selectedIndex,
+      shortcutLabels,
+      draggable: viewOptions?.isDraggable() ?? true
+    };
+  }
+
+  /// 画一串没有分区的行(搜索结果)。
+  function renderRows(items, { resetSelection = false } = {}) {
+    const visible = items.length > MAX_RENDERED_ROWS ? items.slice(0, MAX_RENDERED_ROWS) : items;
+    sections = [];
+    clampSelection(visible.length, resetSelection);
+    renderedItems = renderResultRows(list, {
+      items: visible,
+      overflow: items.length - visible.length,
+      ctx: rowContext()
+    });
+  }
+
+  function clampSelection(count, resetSelection) {
+    if (resetSelection) selectedIndex = 0;
+    if (selectedIndex >= count) selectedIndex = count - 1;
+    if (selectedIndex < 0) selectedIndex = count ? 0 : -1;
+  }
+
+  /// 重画整份列表。搜索态走结果行,否则走分区(置顶 + 分组/单列表)。
+  function paint({ resetSelection = false } = {}) {
+    // 视图选项菜单开着时不重建列表:菜单是分区标题行的子节点,innerHTML 一换
+    // 它就被摘出 top layer 当场消失。攒着,等菜单关上再画。
+    if (viewOptions?.isMenuOpen?.()) { viewOptions.deferRepaint({ resetSelection }); return; }
+    const query = search.value.trim();
+    if (query) { renderRows(matchingItems(query), { resetSelection }); return; }
+    const built = buildSidebarSections({
+      sessions: allItems,
+      workspaces: workspaces() ?? [],
+      archivedIds: archivedIds() ?? [],
+      pinnedIds: pinnedStore?.order ?? [],
+      groupBy: viewOptions?.groupBy(),
+      orderBy: viewOptions?.orderBy(),
+      collapsedGroupIds: viewOptions?.collapsedIds() ?? [],
+      expandedGroupIds: viewOptions?.expandedIds() ?? [],
+      activeSessionId,
+      sortRows: listStore?.sortBy ? (rows, orderBy, ids) => listStore.sortBy(rows, orderBy, ids) : null
+    });
+    sections = built.sections;
+    clampSelection(built.renderedIds.length, resetSelection);
+    renderedItems = renderSections(list, {
+      sections: built.sections,
+      groupBy: viewOptions?.groupBy(),
+      ctx: rowContext()
+    });
+    // 常驻的视图选项与「添加目录」搬回刚画出来的分区标题行(搬而不是重建:
+    // popover 的锚点与事件绑定都挂在那几个节点上)。
+    viewOptions?.mountInto(list.querySelector(`#${SECTION_HEAD_ID} .history-section-actions`));
   }
 
   async function refresh({ resetSelection = false, showLoading = false } = {}) {
-    if (showLoading) renderLoading();
+    if (showLoading) renderLoading(list);
     try {
       allItems = await deps.sessions.refreshList();
-      render(filterItems(search.value), { resetSelection });
+      paint({ resetSelection });
     } catch {
       // 后端不可达时保留旧列表(若刚显示过 loading,用旧 allItems 恢复)。
-      if (showLoading) render(filterItems(search.value), { resetSelection });
+      if (showLoading) paint({ resetSelection });
     }
   }
 
-  // ── 排序切换条与行拖拽。整块住在 history-ordering.js:
-  // 本文件在这项功能之前就已经 409 行,再内联进来会超过 400 行的硬上限。
-  ordering = mountHistoryOrdering({
-    popover,
+  viewOptions = mountHistoryViewOptions({
     list,
     orderStore,
-    workspaceId,
+    pinnedStore,
     workspaces: deps.workspaces,
-    visibleRows: () => renderedItems,
-    fullRows: () => filterItems(search.value),
-    rerender: (options) => render(filterItems(search.value), options)
+    sections: () => sections,
+    rerender: (options) => paint(options),
+    onAddWorkspace
   });
 
   // 实时同步:后台帧的偷看只写 listStore(运行状态点、待审批/草稿徽章、
-  // 标题投影、活跃排序),浮层开着时跟着重画,不用等下一次 open()。
+  // 标题投影、活跃排序),抽屉开着时跟着重画,不用等下一次 open()。
   // 关着时跳过 —— open() 反正会全量 refresh,省得白渲染。
   // 不 resetSelection:后台刷新不该把用户已移动的键盘光标顶回第一行。
   listStore?.subscribe?.(() => {
-    if (!popover.classList.contains("open")) return;
+    if (!isOpen()) return;
     allItems = listStore.get();
-    render(filterItems(search.value));
+    paint();
   });
-
-  /// @param resetSelection 列表内容整体换了(打开浮层/改搜索词)时传 true —— 高亮回到第一行,
-  ///        这样搜完直接敲回车就能开首条结果,不必先按一下方向键。
-  ///        仅仅是后台刷新(refresh)时传 false,以免把用户已经移动到的光标顶回去。
-  /// 把 resolve 出来的尾部内容渲染成 HTML。徽章用文字而不是警示三角:
-  /// 三角只会说「看这里」,用户仍得点开才知道是要回答还是要授权 ——
-  /// 而「待审批」和「待回答」是两件不同的事(对齐 macOS 的取舍)。
-  function trailingHtml(trailing) {
-    switch (trailing.kind) {
-      case SessionRowTrailingKind.awaitingUser: {
-        const keys = {
-          [SessionAwaitingKind.approval]: ["session.awaitingApproval", "session.awaitingApprovalHelp"],
-          [SessionAwaitingKind.planReview]: ["session.awaitingPlanReview", "session.awaitingPlanReviewHelp"],
-          [SessionAwaitingKind.question]: ["session.awaitingQuestion", "session.awaitingQuestionHelp"]
-        };
-        const [labelKey, helpKey] = keys[trailing.awaiting] ?? keys[SessionAwaitingKind.question];
-        const label = t(labelKey);
-        const help = t(helpKey);
-        return `<span class="h-badge h-badge-warn" title="${escapeHtml(help)}" aria-label="${escapeHtml(help)}">${escapeHtml(label)}</span>`;
-      }
-      case SessionRowTrailingKind.draft: {
-        // 单独一个词,免得读成上面那类通知:这是用户自己没写完的句子,
-        // 不是会话向他发出的请求。
-        const help = t("session.hasDraftHelp");
-        return `<span class="h-badge h-badge-warn" title="${escapeHtml(help)}" aria-label="${escapeHtml(help)}">${escapeHtml(t("session.hasDraft"))}</span>`;
-      }
-      case SessionRowTrailingKind.time:
-        return `<span class="h-when">${escapeHtml(formatRelativeTime(trailing.updatedAt, t))}</span>`;
-      default:
-        return "";
-    }
-  }
-
-  /// 行首状态槽位。永远渲染一个等宽的 span,即使不点灯 ——
-  /// 有灯和没灯的行标题必须左对齐,否则列表会随状态变化左右跳动
-  /// (对齐 macOS 用 Color.clear 占住 statusSlotWidth 的做法)。
-  function statusHtml(status, show) {
-    if (!show) return '<span class="h-state h-state-idle" aria-hidden="true"></span>';
-    const help = t(STATUS_HELP_KEY[status] ?? "session.stateOngoing");
-    const safe = escapeHtml(help);
-    return `<span class="h-state h-state-${status}" role="img" title="${safe}" aria-label="${safe}"></span>`;
-  }
-
-  function render(items, { resetSelection = false } = {}) {
-    const visible = items.length > MAX_RENDERED_ROWS ? items.slice(0, MAX_RENDERED_ROWS) : items;
-    const overflow = items.length - visible.length;
-    renderedItems = visible;
-    if (resetSelection) selectedIndex = 0;
-    // 列表内容变了,旧的下标可能越界 —— 夹回合法范围而不是留着悬空。
-    if (selectedIndex >= visible.length) selectedIndex = visible.length - 1;
-    if (selectedIndex < 0) selectedIndex = 0;
-    if (!visible.length) {
-      selectedIndex = -1;
-      list.innerHTML = `<li class="history-empty">${escapeHtml(t("sessions.empty"))}</li>`;
-      return;
-    }
-    // 状态档的顺序是算出来的,拖了也会被下一次渲染算回去 —— 索性不让拖。
-    const draggable = ordering?.isDraggable() ?? true;
-    list.innerHTML = visible.map((item, index) => {
-      const hint = shortcutLabels && index < 9 ? shortcutLabels.historyItem(index + 1) : "";
-      const trailing = resolveSessionRowTrailing({
-        awaitingUser: listStore?.awaitingUser(item.sessionId) ?? null,
-        isSelected: item.sessionId === activeSessionId,
-        isArchived: Boolean(item.archived),
-        isBlank: Boolean(item.blank),
-        hasDraft: listStore?.hasDraft(item.sessionId) ?? false,
-        updatedAt: item.updatedAt ?? Date.now()
-      });
-      // 行首状态灯的判定全在 session-row-status.js 里,与 macOS 同一份语义:
-      // 挂起 > 失败 > 自身在跑 > 子代理在跑 > 空闲,且徽章已报「卡住」时不点灯。
-      const status = resolveSessionRowStatus({
-        awaitingUser: listStore?.awaitingUser(item.sessionId) ?? null,
-        running: Boolean(item.running),
-        errored: listStore?.isErrored?.(item.sessionId) ?? false,
-        runningSubagentRoot: listStore?.isRunningSubagentRoot?.(item.sessionId) ?? false
-      });
-      const showStatus = shouldShowSessionRowStatus({
-        status,
-        completed: listStore?.isCompleted?.(item.sessionId) ?? false,
-        trailing,
-        isArchived: Boolean(item.archived),
-        isBlank: Boolean(item.blank)
-      });
-      return [
-        `<li class="history-item${item.sessionId === activeSessionId ? " active" : ""}${index === selectedIndex ? " selected" : ""}" data-session-id="${escapeHtml(item.sessionId)}" data-index="${index}"${draggable ? ' draggable="true"' : ""}>`,
-        statusHtml(status, showStatus),
-        `<span class="h-title" title="${escapeHtml(itemTitle(item))}">${escapeHtml(itemTitle(item))}</span>`,
-        `<span class="h-when-row"><kbd class="shortcut-hint hist-shortcut-hint" aria-hidden="true">${escapeHtml(hint)}</kbd>${trailingHtml(trailing)}</span>`,
-        `<span class="h-actions">`,
-        `<button type="button" data-action="fork" title="${escapeHtml(t("fork"))}" aria-label="${escapeHtml(t("fork"))}">${HISTORY_ACTION_ICONS.fork}</button>`,
-        `<button type="button" data-action="rename" title="${escapeHtml(t("rename"))}" aria-label="${escapeHtml(t("rename"))}">${HISTORY_ACTION_ICONS.rename}</button>`,
-        `<button type="button" data-action="archive" title="${escapeHtml(t("session.archive"))}" aria-label="${escapeHtml(t("session.archive"))}">${HISTORY_ACTION_ICONS.archive}</button>`,
-        `</span></li>`
-      ].join("");
-    }).join("") + (overflow > 0
-      ? '<li class="history-more">' + escapeHtml(t("sessions.more", { n: String(overflow) })) + '</li>'
-      : "");
-  }
+  // workspace 的增删改与组内顺序同样会改变分组视图。
+  deps.workspaces?.subscribe?.(() => { if (isOpen()) paint(); });
+  pinnedStore?.subscribe?.(() => { if (isOpen()) paint(); });
 
   /// 移动高亮行。步进后在两端循环 —— 列表短的时候按到底再按一下能绕回开头,
   /// 比卡在最后一行更符合下拉菜单的手感(和 trigger-menu 的 menuMove 一致)。
@@ -324,7 +256,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
 
   /// 供搜索框与全局快捷键复用。返回 true 表示按键已被消费。
   function handleKeyDown(event) {
-    if (!popover.classList.contains("open")) return false;
+    if (!isOpen()) return false;
     // 输入法组字确认候选时也会派发 Enter/上下键:那是选字,不是操作列表。
     if (event.isComposing) return false;
     switch (event.key) {
@@ -338,7 +270,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         openSession(item.sessionId);
         return true;
       }
-      case "Escape": event.preventDefault(); hide(); return true;
+      case "Escape": event.preventDefault(); hide({ restoreFocus: true }); return true;
       default: return false;
     }
   }
@@ -355,6 +287,12 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   });
 
   list.addEventListener("click", async (event) => {
+    // 分组标题 / 「展开其余 N 个」:只改视图状态,不碰宿主。
+    const groupHead = event.target.closest(".history-group");
+    if (groupHead) { viewOptions.toggleCollapsed(groupHead.dataset.groupId); return; }
+    const moreRow = event.target.closest(".history-more-row");
+    if (moreRow) { viewOptions.toggleExpanded(moreRow.dataset.groupId); return; }
+
     const actionButton = event.target.closest("button[data-action]");
     const row = event.target.closest("[data-session-id]");
     if (!row) return;
@@ -364,9 +302,15 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       openSession(sessionId);
       return;
     }
-    // fork / archive 都会改变会话集合,且宿主往返期间 popover 保持打开、
-    // 按钮仍可点。没有在途标记的话,连点两下会 fork 出两个子会话,或在归档
-    // 当前会话时多建一个空白会话。整行按钮一起禁用并给出进行中样式。
+    // 置顶只改浏览器本地账本,没有往返,也就不需要在途标记。
+    if (actionButton.dataset.action === "pin") {
+      pinnedStore?.setPinned?.(sessionId, !pinnedStore.isPinned(sessionId));
+      paint();
+      return;
+    }
+    // fork / archive 都会改变会话集合,且宿主往返期间抽屉保持打开、按钮仍可点。
+    // 没有在途标记的话,连点两下会 fork 出两个子会话,或在归档当前会话时多建
+    // 一个空白会话。整行按钮一起禁用并给出进行中样式。
     if (rowBusy.has(sessionId)) return;
     rowBusy.add(sessionId);
     setRowBusy(row, true);
@@ -383,7 +327,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         await deps.sessions.archive(sessionId);
         if (sessionId === activeSessionId) {
           // 当前转录已经不属于活动列表；继续停在这里会留下一个标题仍选中、
-          // 但历史里找不到的幽灵会话。与 Mac 一致，归档当前项后进入新会话。
+          // 但列表里找不到的幽灵会话。与 Mac 一致，归档当前项后进入新会话。
           hide();
           await newSession();
         } else {
@@ -407,15 +351,15 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     for (const button of row.querySelectorAll("button[data-action]")) button.disabled = busy;
   }
 
-  function hide() {
-    popover.classList.remove("open");
-    titleWrap.setAttribute("aria-expanded", "false");
-  }
-
   return {
-    show() { open(); },
+    show() { if (!isOpen()) open(); },
     hide,
     refresh,
+    /// 语言切换后重画菜单与列表。
+    relabel() {
+      viewOptions?.relabel();
+      if (isOpen()) paint();
+    },
     setActive(sessionId, sessionTitle) {
       activeSessionId = sessionId;
       title.textContent = sessionTitle || t("new_session");
@@ -425,17 +369,20 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       // listStore 自己判断有没有真的清掉东西,没变就不会白 notify。
       listStore?.setSelected?.(sessionId);
     },
-    // 快捷键(⌘K)复用标题下拉的开关逻辑,保证搜索框聚焦/列表刷新行为一致。
-    toggle() { titleWrap.click(); },
-    // 浮层开着时把上下键/回车/Esc 交给列表;返回 true 表示已消费。
+    // 快捷键(⌘K)复用入口按钮的开关逻辑,保证搜索框聚焦/列表刷新行为一致。
+    toggle() { entry.click(); },
+    // 抽屉开着时把上下键/回车/Esc 交给列表;返回 true 表示已消费。
     handleKeyDown,
-    // 快捷键(⌘K + 数字)按当前可见(已按搜索过滤)列表的序号打开会话。
+    // 快捷键(⌘K + 数字)按当前渲染序打开会话。
     selectByIndex(index) {
       const item = renderedItems[index];
       if (!item) return;
       hide();
       openSession(item.sessionId);
-    }
+    },
+    /// 当前渲染序(置顶 → 分组/单列表,含折叠与截断的结果)。
+    /// ⌘[ / ⌘] 与归档后的接替选择都走它,所以永远只指向屏幕上真有的行。
+    renderedOrder: () => renderedItems.map((item) => item.sessionId)
   };
 }
 

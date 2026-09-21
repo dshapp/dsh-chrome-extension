@@ -26,9 +26,9 @@ export function applyStaticLabels(root) {
   setAttr(root, "#hdr-open-folder", "title", t("hdr.openFolderHint"));
   setAttr(root, "#hdr-settings", "aria-label", t("settings"));
   setAttr(root, "#hdr-settings", "title", t("settings"));
-  setAttr(root, "#history-popover", "aria-label", t("history.label"));
-  setAttr(root, "#hdr-workspace", "aria-label", t("workspace.label"));
-  setAttr(root, "#hdr-workspace", "title", t("workspace.switchHint"));
+  setAttr(root, "#session-drawer", "aria-label", t("history.label"));
+  setAttr(root, "#session-drawer-close", "aria-label", t("history.close"));
+  setAttr(root, "#session-drawer-close", "title", t("history.close"));
   setPlaceholder(root, "#history-search", t("history.searchPlaceholder"));
 
   // 工作目录菜单 / 弹层

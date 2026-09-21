@@ -9,7 +9,11 @@ import { lucideIconSvg } from "../../features/chat/file-icons.js";
 // popover 菜单构建(模型/权限/技能共用)。
 /// @param onReorder 给出后,标了 draggable 的条目可拖拽重排,回调形如
 ///        (movedId, beforeId|null)。不给则完全维持原有行为(不加任何属性、不绑事件)。
-export function renderMenuItems(container, entries, { selectedId, onSelect, groupBy, emptyText, onReorder }) {
+/// @param selectedIds 一个菜单里有**多根轴**时用它(会话列表的视图选项:分组 + 排序
+///        各选一项)。与 selectedId 并存,两者命中任意一个就打勾。
+export function renderMenuItems(container, entries, {
+  selectedId, selectedIds, onSelect, groupBy, emptyText, onReorder
+}) {
   if (!entries.length) {
     container.innerHTML = emptyText
       ? `<div class="menu-empty">${escapeHtml(emptyText)}</div>`
@@ -17,6 +21,8 @@ export function renderMenuItems(container, entries, { selectedId, onSelect, grou
     container.onclick = null;
     return;
   }
+  const marked = new Set(selectedIds ?? []);
+  const isSelected = (id) => id === selectedId || marked.has(id);
   const groups = new Map();
   for (const entry of entries) {
     const key = groupBy ? groupBy(entry) : "";
@@ -26,7 +32,7 @@ export function renderMenuItems(container, entries, { selectedId, onSelect, grou
   container.innerHTML = [...groups.entries()].map(([group, items]) => (
     (group ? `<div class="menu-group-label">${escapeHtml(group)}</div>` : "")
     + items.map((item) => (
-      `<button type="button" class="menu-item${item.id === selectedId ? " selected" : ""}" data-item-id="${escapeHtml(item.id)}"${onReorder && item.draggable ? ' draggable="true"' : ""}>`
+      `<button type="button" class="menu-item${isSelected(item.id) ? " selected" : ""}" data-item-id="${escapeHtml(item.id)}"${onReorder && item.draggable ? ' draggable="true"' : ""}>`
       + (item.icon ? `<span class="menu-item-icon">${lucideIconSvg(item.icon, { size: 14 })}</span>` : "")
       + `<span>${escapeHtml(item.label)}</span>${item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}`
       + `</button>`

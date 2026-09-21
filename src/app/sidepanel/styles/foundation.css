@@ -130,26 +130,8 @@ a { color: var(--link); }
 body:has(#empty-hint:not([hidden])) #hdr-new,
 body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
 
-/* 工作目录下拉:住在历史浮层的搜索行里,长目录名截断,给搜索框留出空间 */
-#hdr-workspace {
-  flex-shrink: 0;
-  /* 目录名长短不一:不再用 7rem 硬截断,按搜索行自适应,让 label 尽量
-     完整展开,搜索框拿剩余空间;超长目录名仍由 label 省略兜底。
-     上限从 60% 收到 45%:这一行现在多了一颗排序钮,60% 会把搜索框挤到
-     70px 上下(实测),连一个词都显示不全。 */
-  max-width: min(45%, 16rem);
-  font-size: 13px;
-  gap: 3px;
-  anchor-name: --workspace-trigger;
-}
-#hdr-workspace-label {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-/* 触发钮已移进历史浮层的搜索行,不再是固定的 header 位置:
-   回退位按搜索行的实际高度给(header 42px + 搜索行约 36px)。 */
+/* 工作目录菜单的触发钮如今只剩新建会话页的 hero chip(会话列表不再按目录过滤,
+   分组取代了它);不支持锚点定位时按 hero chip 的大致位置给一组回退坐标。 */
 #workspace-menu {
   position: fixed;
   inset: auto;
@@ -165,45 +147,37 @@ body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
    两颗 chip(头部 / 新建会话页)共用这一个 popover,各自声明锚点名;
    下面按"当前哪颗是打开它的那颗"切 position-anchor,菜单才会贴对地方。 */
 @supports (position-area: block-end) {
+  /* hero chip 是这个菜单唯一的触发钮。 */
+  #hero-workspace { anchor-name: --workspace-hero-trigger; }
   #workspace-menu {
-    position-anchor: --workspace-trigger;
+    position-anchor: --workspace-hero-trigger;
     position-area: block-end span-inline-end;
     position-try-fallbacks: flip-block, flip-inline;
     top: auto;
     left: auto;
     margin-block-start: 4px;
   }
-  /* hero chip 打开时改锚到它自己;两颗 chip 不会同时可见,所以直接按
-     "hero 是否在场"切换即可。 */
-  #hero-workspace { anchor-name: --workspace-hero-trigger; }
-  body:has(#empty-hint:not([hidden])) #workspace-menu {
-    position-anchor: --workspace-hero-trigger;
-  }
-  /* 历史浮层开着时,头部那颗才是真正的触发钮,锚点切回去。 */
-  body:has(#history-popover.open) #workspace-menu {
-    position-anchor: --workspace-trigger;
-  }
 }
-/* 排序下拉。与 #workspace-menu 同一套路数:先给一组硬编码回退位,
-   支持锚点定位的浏览器再吸附到触发钮下方。它靠搜索行右端,所以
+/* 视图选项(分组 + 排序)下拉。与 #workspace-menu 同一套路数:先给一组硬编码
+   回退位,支持锚点定位的浏览器再吸附到触发钮下方。它靠分区标题行的右端,所以
    回退位从右边量(right),否则窄侧栏里会溢出到视口外。 */
-#history-order-menu {
+#history-view-menu {
   position: fixed;
   inset: auto;
   margin: 0;
-  top: 78px;
+  top: 96px;
   right: 18px;
   left: auto;
-  min-inline-size: 7rem;
+  min-inline-size: 8rem;
   inline-size: max-content;
-  max-inline-size: 12rem;
+  max-inline-size: 14rem;
 }
 @supports (position-area: block-end) {
-  #history-order-btn { anchor-name: --history-order-trigger; }
-  #history-order-menu {
-    position-anchor: --history-order-trigger;
+  #history-view-btn { anchor-name: --history-view-trigger; }
+  #history-view-menu {
+    position-anchor: --history-view-trigger;
     /* span-inline-start:菜单向左展开,右缘与触发钮对齐 —— 触发钮本身
-       已经贴在搜索行最右侧,向右展开会顶出浮层。 */
+       已经贴在这一行最右侧,向右展开会顶出抽屉。 */
     position-area: block-end span-inline-start;
     position-try-fallbacks: flip-block, flip-inline;
     top: auto;
@@ -263,15 +237,21 @@ body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
 }
 #hdr-workspace-prefix:empty { display: none; }
 
-/* 目录前缀与会话标题现在同住这里,两段的宽度竞争在本容器内部解决(见各自的
-   flex-shrink),所以这里回到 flex:1 吃满剩余宽度即可。 */
+/* 会话列表入口:顶栏最左那颗。它同时是当前会话的标题,所以内容可长可短 ——
+   用 flex:0 1 auto 让它按自然宽度展开、只在放不下时才收缩(超长由内部两段
+   各自省略),右边的 .hdr-spacer 负责把工具按钮推到另一端;若这里是 flex:1,
+   短标题也会把"新建"顶到屏幕中间去。
+   刻意不设 max-width:目录名 + 会话标题本来就长,硬性上限会在右边还空着
+   一大片时就把两段都打上省略号。让位顺序由 flex-shrink 决定:右侧那排工具
+   钮一概不缩(见下),放不下时只有这里让。 */
 #hdr-title-wrap {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 4px;
+  padding: 5px 6px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -279,6 +259,18 @@ body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
   border-radius: 7px;
 }
 #hdr-title-wrap:hover { background: var(--border-soft); }
+/* 前导图标:抽屉从左边来,所以是 panel-left 而不是向下的 chevron。 */
+.hdr-entry-icon {
+  width: 15px; height: 15px;
+  flex: none;
+  color: var(--text-dim);
+}
+#hdr-title-wrap:hover .hdr-entry-icon { color: var(--text); }
+/* 入口与新建之后的弹性空白。 */
+.hdr-spacer { flex: 1 1 auto; min-width: 0; }
+/* 顶栏右侧那排工具钮不参与收缩:它们是图标(或已经自带截断上限的 git 入口),
+   缩了只会变糊。宽度不够时让标题入口去省略,那里省略的代价最小。 */
+#header > .hdr-btn, #hdr-status { flex: none; }
 /* 打开工作目录按钮:空间紧张时保持图标不塌缩。 */
 #hdr-open-folder { flex-shrink: 0; }
 /* 会话标题是主体信息:空间不够时先压前缀(shrink:2),它自己后让(shrink:1)。 */
@@ -326,73 +318,52 @@ button > svg, .act-btn svg, .chip-icon svg, .thinking-icon svg, .goal-glyph svg,
 body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
 .shortcut-hint:empty { display: none !important; }
 
-/* ── 历史浮层 ── */
-#history-popover {
-  display: none;
-  position: absolute;
-  /* 紧贴 header 底边:100% 就是 header 的下沿(#header 是 position:relative
-     的定位父级)。之前多加的 6px 会在两者之间留一条缝,浮层看起来像浮在
-     半空,而不是从标题栏里拉下来的。 */
-  top: 100%;
-  left: 10px;
-  right: 10px;
-  max-height: 60vh;
-  overflow: hidden auto;
-  background: var(--bg-overlay);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--border);
-  /* 顶部两角拉直:浮层现在与 header 底边严丝合缝,留着圆角会在贴合处
-     露出两个小豁口,把下面的内容透出来。 */
-  border-radius: 0 0 12px 12px;
-  /* 上边框省掉:header 自己已经有一条 border-bottom,两条叠在一起是 2px。 */
-  border-top: none;
+/* ── 会话抽屉(从左侧滑入)── */
+/* 遮罩:抽屉是覆盖层而不是把主区推开 —— 侧栏本来就窄(常见 400px),
+   推开会把对话挤成一条缝。遮罩同时承担"点外面关掉"的热区。 */
+#session-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .28);
+  opacity: 0;
+  transition: opacity .18s ease;
+  z-index: 40;
+}
+#session-drawer-scrim.open { opacity: 1; }
+#session-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: min(88%, 340px);
+  display: flex;
+  flex-direction: column;
+  /* 关着时整体推到视口左侧之外。用 transform 而不是 display:none:
+     后者没有过渡可言,抽屉会"啪"地出现。visibility 跟着一起切,
+     免得关着的时候里面的按钮仍能被 Tab 走到。 */
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform .18s ease, visibility .18s ease;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
   box-shadow: var(--shadow-pop);
-  z-index: 30;
-  /* 顶部不留内边距:sticky 搜索行自带上留白。留了的话滚动内容会在行的
-     上方多出一条同高的缝,条目正好从那儿穿过去。 */
-  padding: 0 6px 6px;
-  /* 系统默认那条 17px 的经典滚动条紧贴右边缘,会一路盖到右下角的
-     12px 圆角上("穿模")—— 圆角裁的是 border box,而滚动条画在
-     padding box 里,不受 border-radius 约束。
-     换成细滚动条并自定义配色,再配合下面的 ::-webkit-scrollbar 让滑块
-     用 background-clip 留出内缩边距,滑块就退到圆角弧线以内了。 */
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  z-index: 41;
 }
-#history-popover.open { display: block; }
-/* WebKit/Blink:轨道透明,滑块靠 border + background-clip 造出内缩效果 ——
-   直接给 margin 会让滑块与轨道错位,而透明 border 是唯一能让滑块本身
-   变窄、同时保持点击热区的做法。底部再多留 12px,正好避开右下圆角。 */
-#history-popover::-webkit-scrollbar { width: 10px; }
-#history-popover::-webkit-scrollbar-track {
-  background: transparent;
-  margin-block-end: 12px;
+#session-drawer.open { transform: translateX(0); visibility: visible; }
+/* 动画敏感的用户直接切换,不做位移。 */
+@media (prefers-reduced-motion: reduce) {
+  #session-drawer, #session-drawer-scrim { transition: none; }
 }
-#history-popover::-webkit-scrollbar-thumb {
-  background: var(--border);
-  background-clip: content-box;
-  border: 2px solid transparent;
-  border-radius: 999px;
-}
-#history-popover::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
-/* 搜索行钉在浮层顶部:列表滚动时它保持可见。
-   top 必须是 0 而不是 -6px —— 负值会在行的上方留出一条 6px 的窗口,
-   滚动中的条目正好从那里穿过去(实测能看到半截标题)。
-   配合 margin-top:-6px 把行拉到容器内边距之上,视觉上仍贴着顶。 */
+/* 搜索行钉在抽屉顶部:列表滚动时它保持可见。 */
 #history-search-wrap {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 左右负外边距把底色铺满浮层整宽;顶部不再负值,否则会与 top:0 之间留缝。 */
-  margin: 0 -6px 4px;
-  padding: 10px 14px 8px;
-  /* 不透明底色:--bg-overlay 带 0.98 alpha,滚动内容会从背后透出来。 */
+  padding: 10px 10px 8px 12px;
+  /* 不透明底色:滚动内容不能从背后透出来。 */
   background: var(--bg);
   border-bottom: 1px solid var(--border-soft);
 }
+#session-drawer-close { flex: none; padding: 4px; }
 #history-search-icon { width: 14px; height: 14px; color: var(--text-faint); flex-shrink: 0; }
 #history-search {
   flex: 1;
@@ -405,7 +376,82 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
   font-size: 13px;
   outline: none;
 }
-#history-list-inner { list-style: none; }
+/* 列表本体:抽屉里唯一会滚动的区域(置顶区、分区标题、分组与行共享同一条
+   滚动 —— 拆成几个容器会把滚动切成几段,键盘导航也要跟着分家)。
+   细滚动条 + background-clip 内缩滑块,与旧浮层同一套处理。 */
+#history-list-inner {
+  list-style: none;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto;
+  padding: 4px 6px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+#history-list-inner::-webkit-scrollbar { width: 10px; }
+#history-list-inner::-webkit-scrollbar-track { background: transparent; }
+#history-list-inner::-webkit-scrollbar-thumb {
+  background: var(--border);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+#history-list-inner::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
+
+/* 分区标题(已置顶 / 工作区 / 会话):对齐 Mac 的 sidebar section header ——
+   三级文字、无大写变形、与下面的分组标题同一条左缘。 */
+.history-section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 2px 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.history-section + .history-section { margin-top: 2px; }
+.history-section-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-section-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.history-section-actions .hdr-btn { padding: 3px 4px; }
+.history-section-actions svg { width: 14px; height: 14px; }
+
+/* 分组标题:整行可点折叠,chevron 随折叠态翻转(对齐 Mac 的原生 disclosure)。 */
+.history-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* 与会话行同一个左内边距:组名的起点因此正对着行首状态灯槽的起点,
+     一列"分组标题 → 状态灯"的图标/文字左缘从上到下是同一条竖线。 */
+  padding: 5px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+}
+.history-group:hover { background: var(--border-soft); }
+.history-group-chevron { display: inline-flex; color: var(--text-faint); flex: none; }
+.history-group-chevron svg { display: block; }
+.history-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-group-count { flex: none; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+/* 分组标题与组内会话行共用同一个左内边距(8px)。
+   会话行的行首永远占着一个 12px 的状态灯槽,所以对齐的是**两者的左缘**:
+   组名的第一个字正对着状态灯槽的起点,会话标题则在槽之后缩进一格 ——
+   这正好表达了"行属于这个组"。原先额外给组内行加的 20px 缩进已经去掉:
+   那让会话文字比组名右了 32px,窄侧栏里看着像被推到了右边。 */
+.history-item.in-group { padding-left: 8px; }
+
+/* 「展开其余 N 个会话」/「收起」。整行水平居中(对齐 Mac ShowMoreButton 的
+   maxWidth:.infinity + alignment:.center):它讲的是这一组的整体状态,不属于
+   某一行会话,所以不跟着行文字的左缘走。 */
+.history-more-row {
+  padding: 5px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 12px;
+  text-align: center;
+}
+.history-more-row:hover { background: var(--border-soft); color: var(--text-dim); }
 /* 单行布局:标题左侧(超长省略),时间/快捷键提示固定在同一行最右侧,不换行 —
    对齐原 extension 的 .hist-item 单行样式,而不是标题、时间上下堆叠两行。 */
 .history-item {
@@ -488,6 +534,15 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 }
 /* 空闲行:只占位,不画任何东西。 */
 .history-item .h-state-idle { background: none; }
+/* 置顶且没有状态要报的行:图钉占住同一个槽位(对齐 Mac 的做法 ——
+   行高固定,而"正在跑"比"被置顶"更值得那一个槽位)。 */
+.history-item .h-state-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+.history-item .h-state-pin svg { display: block; width: 10px; height: 10px; }
 .history-item .h-actions {
   position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
   display: none; gap: 2px;
@@ -501,6 +556,8 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 }
 /* 图标按 13px 渲染:比行高小一档,不喧宾夺主。 */
 .h-actions button svg { width: 13px; height: 13px; display: block; }
+/* 四颗按钮(置顶/分叉/重命名/归档)在窄侧栏里要贴得更紧一些。 */
+.h-actions button { padding: 3px; }
 .h-actions button:hover { color: var(--text); background: var(--bg-raised); }
 .history-empty { color: var(--text-faint); text-align: center; padding: 20px 0; font-size: 13px; }
 /* 列表加载态:三点 wave 复用 conversation.css 的 .typing-dots,这里只有行内布局。 */
