@@ -14,7 +14,15 @@ const RUNNING_KEY = "dsh_running_sessions";
 export async function pollSessionStatuses(api, notifier) {
   const value = await api.call(RPC.sessionList, { _request: {} });
   for (const item of value?.items ?? []) {
-    notifier.observeStatus(item.sessionId, item.running);
+    // 子代理的 running→idle 是父轮内部的一步,不是"用户的任务跑完了":
+    // 会话行上的 origin 是权威判定(与 Mac 的 subject.isSubagent 同源)。
+    // 标题也从同一行取,完成通知的标题才能是具体任务内容而非通用文案。
+    notifier.observeStatus(
+      item.sessionId,
+      item.running,
+      item.origin === "subagent",
+      item.projections?.values?.title ?? null
+    );
   }
 }
 
@@ -46,7 +54,21 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
     area.set({ [RUNNING_KEY]: [...running] }).catch(() => {});
   }
 
-  async function notify(sessionId, titleKey, messageKey, params) {
+  // 通知标题的上限:会话标题由模型按首条用户消息生成,偶尔很长,直接塞进
+  // 通知气泡会溢出;与失败详情一样按字符截断。
+  const MAX_TITLE_CHARS = 80;
+
+  /// 通知标题优先用会话标题 —— 它是具体任务内容,原样展示(不翻译);
+  /// 会话还没有标题时(冷启动、模型尚未生成)才退回通用文案。
+  function notificationTitle(title, fallbackKey) {
+    const trimmed = typeof title === "string" ? title.trim() : "";
+    if (!trimmed) return t(fallbackKey);
+    return trimmed.length > MAX_TITLE_CHARS
+      ? `${trimmed.slice(0, MAX_TITLE_CHARS)}…`
+      : trimmed;
+  }
+
+  async function notify(sessionId, { title, fallbackKey, messageKey, params }) {
     // 非扩展环境(dev web 模式、测试)没有 notifications API:静默跳过。
     if (!notifications?.create) return;
     if (!(await settings.getNotificationsEnabled())) return;
@@ -57,7 +79,7 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
     // id 携带会话 id:点击通知时 service worker 靠它定位要打开的会话。
     notifications.create(notificationIdForSession(sessionId), {
       type: "basic",
-      title: t(titleKey),
+      title: notificationTitle(title, fallbackKey),
       message: t(messageKey, params),
       iconUrl: globalThis.chrome?.runtime?.getURL?.("icons/icon128.png")
     });
@@ -66,7 +88,15 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
   return {
     loadRunning,
     // 轮询喂入:running=true 进入运行集合;false 且曾在集合 → 完成通知。
-    observeStatus(sessionId, isRunning) {
+    // 第三个参数 subagent=true 时只清账、不通知:子代理的结束从来不是用户的
+    // 任务的结束(对齐 Mac AgentNotificationCenter 的 isSubagent 闸门)。
+    observeStatus(sessionId, isRunning, subagent = false, title = null) {
+      if (subagent) {
+        // 仍然从集合里摘掉:持久化的运行集合可能还留着修复前写进去的子代理 id,
+        // 不清就永远留着,worker 每次重启都要白读一遍。
+        if (running.delete(sessionId)) persistRunning();
+        return;
+      }
       if (isRunning) {
         if (!running.has(sessionId)) {
           running.add(sessionId);
@@ -74,15 +104,24 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
         }
       } else if (running.delete(sessionId)) {
         persistRunning();
-        notify(sessionId, "notif.running_title", "notif.finished");
+        // 标题取本次名单里的具体任务名;拿不到才退回通用文案。
+        notify(sessionId, {
+          title,
+          fallbackKey: "notif.running_title",
+          messageKey: "notif.finished"
+        });
       }
     },
     /// 后台会话的轮以错误结束:由侧栏帧偷看驱动(轮询只报"完成",区分不了失败)。
     /// 丢帧策略下这是失败信息唯一的出口,详情截断防止通知气泡溢出。
-    reportFailure(sessionId, detail) {
+    reportFailure(sessionId, detail, title = null) {
       const trimmed = detail ? String(detail).slice(0, 160) : "";
-      if (trimmed) notify(sessionId, "notif.error_title", "notif.failedWithDetail", { detail: trimmed });
-      else notify(sessionId, "notif.error_title", "notif.failed");
+      notify(sessionId, {
+        title,
+        fallbackKey: "notif.error_title",
+        messageKey: trimmed ? "notif.failedWithDetail" : "notif.failed",
+        params: { detail: trimmed }
+      });
     },
     reset() {
       running.clear();

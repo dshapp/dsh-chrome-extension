@@ -35,7 +35,7 @@ export function createSidepanelDependencies(options = {}) {
     onArchivedChange: (ids) => sessions?.setArchivedSessionIds?.(ids)
   });
   sessions ||= (lifecycle.sessions = createSessionService(connection, {
-    onBackgroundTurnFailure: (sessionId, message) => notifier.reportFailure(sessionId, message)
+    onBackgroundTurnFailure: (sessionId, message, title) => notifier.reportFailure(sessionId, message, title)
   }));
   lifecycle.sessions ||= sessions;
   sessions.setArchivedSessionIds?.(workspaces.archivedSessionIds ?? []);
