@@ -104,6 +104,10 @@ export const BROWSER_RESERVED_WIN = [
   chord("pageup", MOD.primary | MOD.shift), chord("pagedown", MOD.primary | MOD.shift),
   chord("enter", MOD.primary | MOD.shift),
   chord("f4", MOD.primary), chord("escape", MOD.shift),
+  // Windows 开始菜单。系统级热键,页面收不到 —— 微软官方键位表:
+  // "Ctrl+Esc: Open the Start menu."。所以 mac 端 ⌘Esc 的 Ctrl 对位在 win
+  // 不可用,stopGenerating 的 win 列保持裸 Esc(见 command-table.js)。
+  chord("escape", MOD.primary),
   // DevTools
   chord("i", MOD.primary | MOD.shift), chord("c", MOD.primary | MOD.shift),
   // manifest 全局 command:open_sidepanel

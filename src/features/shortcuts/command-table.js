@@ -85,8 +85,15 @@ export const COMMANDS = [
     mac: chord("enter", MOD.primary | MOD.alt), win: chord("enter", MOD.primary | MOD.alt), existing: true
   },
   {
+    // mac 与 AppCommand.swift 的 `case .stopGenerating: CommandChord(.escape, .command)`
+    // 逐字对齐:⌘Esc。带上主修饰键而不是裸 Esc,和 mac 端同一个理由 —— 裸 Esc
+    // 是"就地取消"的公共资源(sheet/浮层/卡片都在用),带上 ⌘ 才能成为一个
+    // 不被任何人抢走的独立命令。
+    // win 侧不跟着换成 Ctrl+Esc:Ctrl+Esc 是 Windows 开始菜单(系统级,页面
+    // 收不到,见 browser-reserved.js),换了等于把这个命令变成不可达。mac 端
+    // 是这条命令唯一的参照实现,Windows 没有对应端,所以维持原键位不变。
     id: "stopGenerating", section: "composer", titleKey: "sc.stopGenerating",
-    mac: chord("escape", MOD.none), win: chord("escape", MOD.none)
+    mac: chord("escape", MOD.primary), win: chord("escape", MOD.none)
   },
   {
     id: "focusComposer", section: "composer", titleKey: "sc.focusComposer",
