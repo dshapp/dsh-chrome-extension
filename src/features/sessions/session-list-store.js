@@ -344,6 +344,13 @@ export function createSessionListStore() {
       }
       return walkSubagentChildren(subagentCache, rootId);
     },
+    /// 会话标题(具体任务内容)。宿主标题投影的落点与列表行一致;还没有标题
+    /// 时返回 null,调用方据此回退通用文案。
+    titleOf: (sessionId) => (sessionId ? byId.get(sessionId)?.projections?.values?.title || null : null),
+    /// 这个 id 是不是子代理会话。origin == "subagent" 是名单里的权威判定
+    /// (与会话头部的 origin 同源,见 host 的 listFields)。通知这条路上要用它
+    /// 挡掉子代理:子代理跑完只是父轮里的一个步骤,不是用户的task结束。
+    isSubagent: (sessionId) => Boolean(sessionId) && byId.get(sessionId)?.origin === "subagent",
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

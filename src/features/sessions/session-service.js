@@ -47,6 +47,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   const historyCursors = new Map();
   // 每会话已加载窗口的左边界与是否还有更早历史(session/page 的 beforeSeq/hasMore)。
   const historyBounds = new Map();
+  // 0.1.5 的待发队列快照(session/control 基线的 queues 块与 queue 帧)。
+  // 0.1.6 删掉了这两者,队列改走 projections 里的 inbox 投影;这里保留缓存只为
+  // 老宿主,0.1.6 上它永远是空的 —— 所以恢复时必须以"有没有这一项"为条件,
+  // 不能用 ?? [] 把投影折出来的队列清掉。
   const controlQueues = new Map();
   const controlJobs = new Map();
   const controlProjections = new Map();
@@ -81,6 +85,51 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   function notifyRuntime() {
     const snapshot = store.getSnapshot();
     for (const listener of runtimeListeners) listener(snapshot);
+  }
+
+  // ---- 权限目录(0.1.6) ----
+  //
+  // 0.1.6 起 permissions 投影只带 currentValue,可选预设改由进程级
+  // permissionPresets/catalog 发布,并在变化时发一条无 payload 的
+  // permission-presets/catalog-changed。0.1.5 没有这个命名空间(RPC 以
+  // endpoint-unknown 失败),那时保留 null,由投影自带的 options 兜底 ——
+  // 所以失败必须静默,不能把权限入口整块弄没。
+  let permissionCatalogGeneration = 0;
+
+  function refreshPermissionCatalog() {
+    const generation = ++permissionCatalogGeneration;
+    return connection.call(RPC.permissionPresetsCatalog, {}).then((value) => {
+      // 迟到的回包不能覆盖新一次读取;断线期间发出的请求尤其容易乱序。
+      if (generation !== permissionCatalogGeneration) return null;
+      // 目录的唯一持有者是 store:它按进程存活,不随会话 reset 清掉。
+      store.setPermissionCatalog(value);
+      notifyRuntime();
+      return value;
+    }).catch(() => null);
+  }
+
+  // 插件启停/装载变更(0.1.6 plugin-manager/changed)。设置页的插件市场与清单
+  // 都是实时视图 —— 变更事件到达时必须重读,否则页面停在旧状态直到用户手动
+  // 切走再回来。订阅方自行决定要不要拉。
+  const pluginManagerListeners = new Set();
+  // 安装进度(plugin-manager/install-state 与 install-log)。带 requestId 的流式
+  // 事件:只有发起了那次安装的界面认这个 id,别的订阅者直接丢弃。
+  const pluginInstallListeners = new Set();
+
+  function isObject(value) {
+    return value != null && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function notifyPluginManagerChanged() {
+    for (const listener of pluginManagerListeners) {
+      try { listener(); } catch { /* 订阅方自己处理失败,不拖垮帧分发 */ }
+    }
+  }
+
+  function notifyPluginInstall(channel, payload) {
+    for (const listener of pluginInstallListeners) {
+      try { listener(channel, payload); } catch { /* 同上 */ }
+    }
   }
 
   function ensureStore(sessionId) {
@@ -204,7 +253,11 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   }
 
   function applyCachedControl(sessionId) {
-    store.setQueue(controlQueues.get(sessionId) ?? []);
+    // 只在宿主真的给过队列快照(0.1.5 基线/queue 帧)时覆盖。0.1.6 上没有这一项,
+    // 用 ?? [] 会把 follow 快照里 inbox 投影折出的队列又清空 —— 那正是排队面板
+    // 在 0.1.6 上恒为空的根因。
+    const cachedQueue = controlQueues.get(sessionId);
+    if (cachedQueue !== undefined) store.setQueue(cachedQueue);
     store.setJobs(controlJobs.get(sessionId) ?? []);
     const projections = controlProjections.get(sessionId);
     for (const [key, value] of Object.entries(projections?.values ?? {})) {
@@ -328,6 +381,19 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       return () => runtimeListeners.delete(listener);
     },
     get currentSessionId() { return currentSessionId; },
+
+    /// 订阅插件启停/装载变更(0.1.6 plugin-manager/changed)。返回退订函数。
+    onPluginManagerChanged(listener) {
+      pluginManagerListeners.add(listener);
+      return () => pluginManagerListeners.delete(listener);
+    },
+
+    /// 订阅插件安装进度。listener(channel, payload):channel 为 "state" 时的
+    /// payload 是 {requestId, phase},为 "log" 时是 {requestId, chunk}。
+    onPluginInstallProgress(listener) {
+      pluginInstallListeners.add(listener);
+      return () => pluginInstallListeners.delete(listener);
+    },
 
     setArchivedSessionIds(ids) {
       archivedSessionIds = new Set(Array.isArray(ids) ? ids : []);
@@ -692,6 +758,22 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           else if (event === "api-session/status") service.handleHostFrame({ payload: { type: "host/session-status", sessionId: args[0], running: args[1] } });
           else if (event === "api-session/activity") listStore.recordActivity(args[0], args[1]);
           else if (event === "api-session/error") service.handleHostFrame({ payload: { type: "host/agent-error", sessionId: args[0], message: args[1] } });
+          // 0.1.6 新增的两条转发事件。都不带状态:一条只是让客户端重读完整
+          // 快照(catalog / 插件清单),所以这里只把它折算成本地通知往下传,
+          // 由持有那两处界面的模块决定拉什么。
+          else if (event === "permission-presets/catalog-changed") {
+            service.handleHostFrame({ payload: { type: HOST.permissionCatalogChanged } });
+          } else if (event === "plugin-manager/changed") {
+            service.handleHostFrame({ payload: { type: HOST.pluginManagerChanged } });
+          }
+          // 安装进度是流式的,但**不是**状态:它只在一次 installBundle 的往返期间
+          // 有意义,所以不进 store,直接按 requestId 转给那次安装的发起方(设置页的
+          // 添加插件弹窗)。落在这里而不是默认分支,是为了把"接但不过 store"记在代码里。
+          else if (event === "plugin-manager/install-state") {
+            notifyPluginInstall("state", args[0] ?? null);
+          } else if (event === "plugin-manager/install-log") {
+            notifyPluginInstall("log", args[0] ?? null);
+          }
         } else if (payload.type === "waterfall") {
           const sessionId = payload.agentId;
           pendingEventSessions.set(payload.eventId, sessionId);
@@ -740,6 +822,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
             notifyRuntime();
           }
         } else {
+          // 0.1.6 不再发布 queue 帧(队列改走 inbox 投影);0.1.5 仍以它为权威的
+          // 瞬时队列,所以两条路都留着 —— 帧里的 item 形状与投影折出的一致。
           if (payload.type === "queue") controlQueues.set(payload.sessionId, payload.items ?? []);
           else if (payload.type === "jobs") controlJobs.set(payload.sessionId, payload.jobs ?? []);
           else if (payload.type === "projection") {
@@ -811,7 +895,14 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
             const reason = event.data?.reason;
             if (reason?.kind === "error") {
               listStore.setErrored(sessionId, true);
-              onBackgroundTurnFailure?.(sessionId, reason.error?.message ?? "");
+              // 子代理的失败是父轮里的一个步骤,不是用户的后台任务:不进系统通知。
+              // 行上的红点照旧(它仍然是"你没看过的一次失败"),只是不弹卡片。
+              if (!listStore.isSubagent(sessionId)) {
+                // 带上具体任务标题,完成/失败通知都展示"哪个任务",而不是通用文案。
+                onBackgroundTurnFailure?.(
+                  sessionId, reason.error?.message ?? "", listStore.titleOf(sessionId)
+                );
+              }
             }
           }
           if (event.type === "user/message") listStore.recordActivity(sessionId, event.time);
@@ -863,12 +954,22 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       pendingInteractions.clear();
       for (const item of listStore.get()) listStore.setAwaitingUser(item.sessionId, null);
       store.setApproval(null); store.setQuestion(null); notifyRuntime();
+      // 进程级目录不随会话走,但可能随进程换过(重启、热装)。重连后重读一次,
+      // 失败无所谓:0.1.5 没有这个命名空间,投影自带的 options 仍然可用。
+      void refreshPermissionCatalog();
     },
 
     // ---- host 帧 ----
     handleHostFrame(frame) {
       const payload = frame.payload;
       switch (payload.type) {
+        // 两条 0.1.6 转发事件的落点(见上面 $events 的 emit 分支)。
+        case HOST.permissionCatalogChanged:
+          void refreshPermissionCatalog();
+          break;
+        case HOST.pluginManagerChanged:
+          notifyPluginManagerChanged();
+          break;
         case HOST.sessionStatus:
           listStore.setStatus(payload.sessionId, payload.running);
           // 当前时间线的运行态只由 durable turn/start、turn/end 驱动。
@@ -906,7 +1007,16 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
             notifyRuntime();
           } else {
             listStore.setErrored(payload.sessionId, true);
-            onBackgroundTurnFailure?.(payload.sessionId, payload.message ?? "");
+            // host 的 api-session/error 是全局事件:任何 agent 出错都会广播(含子
+            // 代理,见 host 的 ctx.on("agent/error"))。子代理不是用户的任务,系统
+            // 通知必须跳过它 —— 对齐 Mac AgentNotificationCenter 的
+            // "guard !subject.isSubagent else return"(AppModel 用
+            // summary.origin == "subagent" 喂那个 subject)。
+            if (!listStore.isSubagent(payload.sessionId)) {
+              onBackgroundTurnFailure?.(
+                payload.sessionId, payload.message ?? "", listStore.titleOf(payload.sessionId)
+              );
+            }
           }
           break;
         default:

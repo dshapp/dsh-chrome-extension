@@ -47,8 +47,84 @@ function str(value) {
   return typeof value === "string" ? value : null;
 }
 
+/// 0.1.6 的 `inbox` 投影 → 待发队列行。
+///
+/// 0.1.6 删掉了 session/control 基线里的 queues 块与 queue 帧,队列改由这个
+/// 投影发布。投影值是两个有序列表;行形状沿用旧 SessionQueuedItem
+/// (`{id, placement, rpcId?, message:{id, content}}`),placement 由消息落在
+/// 哪个列表推导 —— 这正是宿主删掉的那段 queueItemsFromInbox 的语义。
+///
+/// 纯函数,导出便于用真实投影值做单测,不必起完整 store。
+export function inboxQueues(value) {
+  const target = isObject(value) ? value : {};
+  const list = (key) => (Array.isArray(target[key]) ? target[key] : []);
+  const row = (message, placement) => {
+    const source = isObject(message) ? message.source : null;
+    const rpcId = source?.kind === "user" ? str(source.rpcId) : null;
+    return {
+      id: str(message?.id) ?? "",
+      placement,
+      ...(rpcId === null ? {} : { rpcId }),
+      message: {
+        id: str(message?.id) ?? "",
+        role: str(message?.role) ?? "user",
+        content: Array.isArray(message?.content) ? message.content : [],
+        source: source ?? null
+      }
+    };
+  };
+  return [
+    ...list("next-turn").map((message) => row(message, "queued")),
+    // next-step 里用户自己写的才是插队(steering);插件注入的上下文不是,
+    // 混为一谈会让用户以为它能被删。
+    ...list("next-step").map((message) => {
+      const source = isObject(message) ? message.source : null;
+      return row(message, source?.kind === "user" ? "steering" : "context");
+    })
+  ];
+}
+
+/// 合并 `permissions` 投影与进程级目录,得到 UI 读的一份选择。
+///
+/// 0.1.6 的投影只剩 currentValue,可选预设来自 permissionPresets/catalog;
+/// 0.1.5 的投影自带 options 且没有那个 RPC。目录优先:它一就位就覆盖投影里的
+/// 旧列表。两侧都空时返回 null —— 调用方据此整块隐藏权限入口(没有权限服务
+/// 被组装的部署)。
+export function mergePermissionSelection(projection, catalog) {
+  const value = isObject(projection) ? projection : null;
+  // 投影键缺失 = 这个部署没有组装权限服务,控件整块隐藏 —— 目录即使还在缓存
+  // 里(进程级)也不能把入口画出来。
+  if (value === null) return null;
+  const inline = Array.isArray(value.options) ? value.options : [];
+  const fromCatalog = Array.isArray(catalog?.options)
+    ? catalog.options.filter(isObject)
+    : [];
+  const options = fromCatalog.length ? fromCatalog : inline.filter(isObject);
+  return {
+    currentValue: str(value.currentValue) ?? "",
+    options
+  };
+}
+
 export function createSessionStore() {
   let state = blank();
+  // 进程级权限目录(0.1.6 permissionPresets/catalog)存在闭包而不是 state 上:
+  // 它属于进程,不属于某次会话 —— 放进 state 会被 reset 清掉,切回会话时权限
+  // 药丸就会空一拍。replayWindow 重折窗口也不用管它。
+  let permissionCatalog = null;
+  // 合并结果按输入 identity 缓存,见 snapshot()。
+  let permissionMemoProjection = null;
+  let permissionMemoCatalog = null;
+  let permissionMemoValue = null;
+
+  function permissionSelection() {
+    if (permissionMemoProjection !== state.permissions || permissionMemoCatalog !== permissionCatalog) {
+      permissionMemoProjection = state.permissions;
+      permissionMemoCatalog = permissionCatalog;
+      permissionMemoValue = mergePermissionSelection(state.permissions, permissionCatalog);
+    }
+    return permissionMemoValue;
+  }
 
   function blank() {
     return {
@@ -88,6 +164,9 @@ export function createSessionStore() {
       todos: [],
       goal: null,
       tokenUsage: null,
+      // 当前权限选择。0.1.5 的 permissions 投影自带可选预设,0.1.6 只剩
+      // currentValue 而目录改由进程级 RPC 发布;目录存在闭包里(见
+      // permissionCatalog),快照时与投影合并(mergePermissionSelection)。
       permissions: null,
       modelSelection: null,
       planMode: null,
@@ -1304,6 +1383,13 @@ export function createSessionStore() {
       case "permissions":
         state.permissions = isObject(value) ? value : null;
         break;
+      // 0.1.6 inbox 投影:待发队列的权威来源。0.1.5 的控制基线里那个 queues 块
+      // 已被删除,queue 帧也不再发布,所以这里必须自己折出队列行,否则排队面板
+      // 在 0.1.6 上恒为空。行形状与旧 SessionQueuedItem 完全一致(placement +
+      // message),只是 placement 由消息落在哪个列表推导(见 inboxQueues)。
+      case "inbox":
+        state.queue = isObject(value) ? inboxQueues(value) : [];
+        break;
       case "modelSelection":
         state.modelSelection = isObject(value) ? value : null;
         break;
@@ -1632,7 +1718,10 @@ export function createSessionStore() {
       todos: state.todos,
       goal: state.goal,
       tokenUsage: state.tokenUsage,
-      permissions: state.permissions,
+      // 两版合并后的权限选择:0.1.5 取投影自带的 options,0.1.6 取目录 RPC。
+      // 同一对输入复用同一个对象:快照每帧都会产出,而菜单渲染读的是 identity,
+      // 每个快照都换新对象会让打开的权限菜单在流式输出期间被反复重建。
+      permissions: permissionSelection(),
       modelSelection: state.modelSelection,
       planMode: state.planMode,
       contextPressure: state.contextPressure,
@@ -1677,6 +1766,11 @@ export function createSessionStore() {
       if (state.historyError) state.running = false;
     },
     setCwd(cwd) { state.cwd = cwd ?? null; },
+    /// 进程级权限目录(0.1.6 permissionPresets/catalog)。目录与投影是两条
+    /// 独立的来源,各存一份、快照时才合并。
+    setPermissionCatalog(catalog) {
+      permissionCatalog = isObject(catalog) ? catalog : null;
+    },
     // RPC 写回没有 projection seq，只更新派生标题，不能伪造一个无限大的
     // projection 版本；否则宿主后续真实 title 投影会被永久判成旧帧。
     setTitle(title) { if (typeof title === "string" && title) state.title = title; },

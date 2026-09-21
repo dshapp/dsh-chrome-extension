@@ -42,6 +42,8 @@ export const RPC = Object.freeze({
   agentPresetCopy: "agentPresets/copy",
   agentPresetRemove: "agentPresets/deletePreset",
   agentPresetOpenDocument: "settings/openAgentPresetDirectory",
+  // 宿主桌面上能不能打开预设目录 —— 设置页据此决定要不要画"打开目录"动作。
+  settingsCanOpenAgentPresetDirectory: "settings/canOpenAgentPresetDirectory",
   // ---- goal ----
   goalCreate: "goals/create",
   goalClear: "goals/clear",
@@ -65,8 +67,24 @@ export const RPC = Object.freeze({
   credentialsUnset: "credentials/unset",
   // ---- 模型发现 ----
   llmDiscoverModels: "llm/discoverModels",
+  // ---- 权限预设目录(0.1.6) ----
+  // 0.1.6 把可选预设从 permissions 投影里搬到了进程级 RPC:catalog 返回
+  // {options:[{value,name}]},变更由 permission-presets/catalog-changed 通知。
+  // 0.1.5 没有这个命名空间,调用会以 endpoint-unknown 失败 —— 那时继续用投影
+  // 自带的 options(见 session-store 的 mergePermissionSelection)。
+  permissionPresetsCatalog: "permissionPresets/catalog",
   // ---- 插件清单(只读)。远端端点只收一个 args 对象,空参也要包装。 ----
-  pluginInventoryList: "pluginInventory/list"
+  pluginInventoryList: "pluginInventory/list",
+  // ---- 插件市场(0.1.6 pluginManager/*)。与 Mac PluginsPage 同一批端点:
+  // bundle 列表/启停/卸载、插件行启停、按 spec 检查与安装、取消安装。 ----
+  pluginManagerListBundles: "pluginManager/listBundles",
+  pluginManagerListPlugins: "pluginManager/listPlugins",
+  pluginManagerSetBundleEnabled: "pluginManager/setBundleEnabled",
+  pluginManagerSetPluginEnabled: "pluginManager/setPluginEnabled",
+  pluginManagerRemoveBundle: "pluginManager/removeBundle",
+  pluginManagerInspect: "pluginManager/inspect",
+  pluginManagerInstallBundle: "pluginManager/installBundle",
+  pluginManagerCancelInstall: "pluginManager/cancelInstall"
 });
 
 export const STREAM = Object.freeze({
@@ -80,7 +98,6 @@ export const STREAM = Object.freeze({
 export const MUX = Object.freeze({
   sessionEvent: "session/event",
   sessionSubscribed: "session/subscribed",
-  sessionQueue: "session/queue",
   sessionJobs: "session/jobs",
   sessionProjection: "session/projection",
   approvalRequested: "approval/requested",
@@ -100,6 +117,10 @@ export const HOST = Object.freeze({
   workspaceRemoved: "host/workspace-removed",
   workspaceOrderChanged: "host/workspace-order-changed",
   archivedSessionsChanged: "host/archived-sessions-changed",
+  // 0.1.6 新转发的宿主事件折算成两条内部通知(见 session-service 的 $events emit):
+  // 权限目录失效要重拉 catalog;插件启停/装载变更要让已打开的插件页重读清单。
+  permissionCatalogChanged: "host/permission-catalog-changed",
+  pluginManagerChanged: "host/plugin-manager-changed",
   remoteEvent: "host/remote-event",
   streamError: "stream/error"
 });

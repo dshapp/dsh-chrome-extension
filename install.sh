@@ -69,7 +69,13 @@ ALL_PKGS="$CHROME_PKG $KIMI_PKG"
 # 而这个安装器是无人值守跑的 —— 装到哪个版本必须可预期,不能取决于当天
 # latest 指向谁(尤其 latest 可能指向一个 rc)。
 # 升级就改这一行,让版本变更留在 git 历史里,而不是散在各台机器的安装时刻。
-DSH_VERSION="0.1.2-rc.1"
+#
+# 0.1.6-alpha.2:扩展侧协议适配的基准版本,与 Mac 端同一颗钉子
+# (DSHMacKit/Server/NpmGlobalPackages.dshVersion)。两条 0.1.6 的 wire 变化
+# 扩展已经跟上(session/control 基线不再带队列,队列改由 inbox 投影发布;
+# permissions 投影收窄为当前值,可选预设改由 permissionPresets/catalog 发布),
+# 所以这一行必须跟着抬 —— 钉在 0.1.2 会让扩展跑到一个它已经不适配的宿主上。
+DSH_VERSION="0.1.6-alpha.2"
 DSH_PKG="@deepseek-ai/dsh@$DSH_VERSION"
 
 RED=""; GREEN=""; YELLOW=""; BLUE=""; BOLD=""; RESET=""
