@@ -5,7 +5,10 @@ const DEFAULT_BACKEND_URL = "http://127.0.0.1:3080";
 const KEYS = Object.freeze({
   backendUrl: "dsh_backend_url",
   lang: "dsh_lang",
-  notificationsEnabled: "dsh_notifications_enabled"
+  notificationsEnabled: "dsh_notifications_enabled",
+  // ui-theme.preference 的本地镜像:侧栏要在宿主往返之前就画出正确颜色,
+  // 宿主值仍是权威,启动后 describe 会把它纠回来(见 sidepanel-app)。
+  themePreference: "dsh_theme_preference"
 });
 
 async function resolveArea() {
@@ -48,6 +51,15 @@ export function createSettings() {
     async setNotificationsEnabled(enabled) {
       const area = await resolveArea();
       await area.set({ [KEYS.notificationsEnabled]: Boolean(enabled) });
+    },
+    async getThemePreference() {
+      const area = await resolveArea();
+      const value = await area.get([KEYS.themePreference]);
+      return value?.[KEYS.themePreference] || "system";
+    },
+    async setThemePreference(preference) {
+      const area = await resolveArea();
+      await area.set({ [KEYS.themePreference]: preference });
     }
   };
 }

@@ -4,10 +4,12 @@ import { createSidepanelApp } from "../app/sidepanel/sidepanel-app.js";
 import { initTheme } from "../app/sidepanel/theme.js";
 import { setLang, t } from "../shared/i18n.js";
 
-initTheme();
+// 主题偏好的读写在 app 里(deps.settings),但首帧颜色要在此之前就定下来,
+// 否则冷启动会先闪一帧系统色再跳回用户选的那档。
+const theme = initTheme();
 
 const deps = createSidepanelDependencies();
-const app = createSidepanelApp(document.documentElement, deps);
+const app = createSidepanelApp(document.documentElement, deps, { theme });
 
 // 先取到语言偏好再启动:start() 会给静态 DOM 打首帧本地化,晚于 setLang 的
 // 话英文偏好在启动时会被中文默认值盖住(要等用户再改一次语言才纠正)。
