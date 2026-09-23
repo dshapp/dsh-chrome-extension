@@ -9,19 +9,35 @@ import { confirmFullAccess as askFullAccess, isFullAccessOption } from "./permis
 
 export { isFullAccessOption };
 
-/// 预设的展示名(对齐 Mac agentPresetDisplayText)。
-///
-/// 出厂预设(trust === "system")的已知 id 用本地化文案 —— 宿主发来的是英文
-/// 内部名(如 code),中文界面要显示"PTC 模式"。用户自建预设保留其自有 name,
-/// 不翻译:那是用户写的字。
-const SHIPPED_PRESETS = new Set(["standard", "code", "minimal", "cordis"]);
+/// 出厂预设 id。0.1.7 把 code 改名为 ptc;历史会话里可能还记着 code,一并认。
+const SHIPPED_PRESETS = new Set(["standard", "ptc", "code", "minimal", "cordis"]);
 
+/// 是否出厂预设(对齐宿主 isBuiltInPreset):出厂 id 且没有自带 name。
+/// 声明里给自己起了名字的预设,文案归它自己,不翻译。
+/// 0.1.6 及以前 roster 还带 trust 字段,那时以 trust === "system" 为准。
+export function isBuiltInPreset(preset) {
+  if (!preset) return false;
+  if (preset.trust !== undefined) return preset.trust === "system" && SHIPPED_PRESETS.has(preset.id);
+  return (preset.name === undefined || preset.name === null) && SHIPPED_PRESETS.has(preset.id);
+}
+
+function shippedKey(id) {
+  return id === "code" ? "ptc" : id;
+}
+
+/// 预设的展示名(对齐 Mac agentPresetDisplayText / 宿主 presetDisplayText)。
+/// 出厂预设用本地化文案;用户自建预设保留其自有 name,不翻译:那是用户写的字。
 export function presetDisplayName(preset) {
   if (!preset) return null;
-  if (preset.trust === "system" && SHIPPED_PRESETS.has(preset.id)) {
-    return t(`preset.${preset.id}`);
-  }
+  if (isBuiltInPreset(preset)) return t(`preset.${shippedKey(preset.id)}`);
   return preset.name || preset.id || null;
+}
+
+/// 预设说明:出厂预设用本地化说明,其余用声明里的 description。
+export function presetDescription(preset) {
+  if (!preset) return null;
+  if (isBuiltInPreset(preset)) return t(`preset.${shippedKey(preset.id)}Description`);
+  return preset.description ?? null;
 }
 
 /// 选择菜单里的标签:用户自建预设追加 "· 自定义" 标记 —— 它和它所引用的插件
@@ -29,7 +45,7 @@ export function presetDisplayName(preset) {
 export function presetMenuLabel(preset) {
   const name = presetDisplayName(preset);
   if (!name) return "";
-  return preset?.trust === "user" ? `${name} · ${t("preset.custom")}` : name;
+  return isBuiltInPreset(preset) ? name : `${name} · ${t("preset.custom")}`;
 }
 
 export function createComposerDock({ elements, deps, state, showToast, format }) {

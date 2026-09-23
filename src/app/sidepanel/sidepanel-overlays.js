@@ -302,7 +302,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       openSession(sessionId);
       return;
     }
-    // 置顶只改浏览器本地账本,没有往返,也就不需要在途标记。
+    // 置顶是乐观更新:账本立即变,0.1.7 宿主模式下的 RPC 在后台结算(失败回滚 + toast),
+    // 所以这里不需要在途标记。
     if (actionButton.dataset.action === "pin") {
       pinnedStore?.setPinned?.(sessionId, !pinnedStore.isPinned(sessionId));
       paint();
@@ -324,7 +325,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         if (name) { await deps.sessions.rename(sessionId, name); refresh(); }
       } else if (actionButton.dataset.action === "archive") {
         // 归档不是删除:宿主保留日志,只是从活动列表移出。
-        await deps.sessions.archive(sessionId);
+        const archived = await deps.sessions.archive(sessionId, { confirmStop: confirmArchiveActive });
+        if (archived === null) return;
         if (sessionId === activeSessionId) {
           // 当前转录已经不属于活动列表；继续停在这里会留下一个标题仍选中、
           // 但列表里找不到的幽灵会话。与 Mac 一致，归档当前项后进入新会话。
@@ -343,6 +345,11 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       setRowBusy(list.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`), false);
     }
   });
+
+  /// 归档一个还在跑的会话前的确认(0.1.7 workspace/session-active)。
+  function confirmArchiveActive() {
+    return Promise.resolve(window.confirm(t("session.archiveActiveConfirm")));
+  }
 
   /// 整行的操作按钮统一进入/退出在途态。
   function setRowBusy(row, busy) {

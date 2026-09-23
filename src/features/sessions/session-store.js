@@ -440,6 +440,11 @@ export function createSessionStore() {
     }
   }
 
+  function isCompactCheckpoint(source) {
+    if (!isObject(source)) return false;
+    return source.kind === "compact-checkpoint" || (source.kind === "plugin" && source.plugin === "compact");
+  }
+
   function decodeMessage(data) {
     if (!isObject(data)) return null;
     const message = isObject(data.message) ? data.message : data;
@@ -460,8 +465,9 @@ export function createSessionStore() {
     if (!msg) return;
     // replace 面属于 compaction 节点,不在这里成行。
     if (isReplacementSurface(event)) return;
-    // compact 插件产生的消息归 compaction 节点。
-    if (msg.sourcePlugin === "compact") return;
+    // 压缩检查点归 compaction 节点。v3 记作 {kind:"plugin", plugin:"compact"},
+    // v4(0.1.7)改成生产者自己的 kind:"compact-checkpoint"。
+    if (isCompactCheckpoint(msg.source)) return;
 
     let kind;
     if (msg.sourceKind === "user") {
@@ -484,12 +490,17 @@ export function createSessionStore() {
   }
 
   /// context 行的来源标签:插件名 / 工具名 / 泛化 "context"。
+  ///
+  /// v4(0.1.7)不再有 {kind:"plugin", plugin} 这层:kind 就是生产者名(如
+  /// "goal"、"agent-instructions"),未登记的第三方插件记作 "plugin:<name>" ——
+  /// 显示时去掉这个前缀。
   function contextProvenance(source) {
     if (!isObject(source)) return { label: null, role: "context" };
     const plugin = str(source.plugin);
     const tool = str(source.tool);
     const kind = str(source.kind) ?? "context";
-    return { label: plugin ?? tool ?? null, role: kind };
+    const producer = kind.startsWith("plugin:") ? kind.slice("plugin:".length) : null;
+    return { label: plugin ?? tool ?? producer ?? null, role: producer ?? kind };
   }
 
   // ---- assistant 流式 ----
@@ -795,6 +806,12 @@ export function createSessionStore() {
         content = Array.isArray(block.content) ? block.content : [];
         isError = block.isError;
         if (callId === "") callId = str(block.toolCallId) ?? "";
+      } else if (d.message.role === "tool") {
+        // 会话格式 v4(0.1.7):结果本身就是一条 role:"tool" 消息 —— 块直接在
+        // message.content,isError 与 toolCallId 挂在消息上,旧的 tool-result 包装块没了。
+        content = d.message.content;
+        if (typeof d.message.isError === "boolean") isError = d.message.isError;
+        if (callId === "") callId = str(d.message.toolCallId) ?? str(d.message.source?.callId) ?? "";
       }
     }
     const result = toolResult({

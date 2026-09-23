@@ -136,7 +136,7 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {
       }
     }),
     presets: createPresetsPane({
-      host: view.querySelector("#settings-pane-presets"), sheet, deps, settingsService, showToast,
+      host: view.querySelector("#settings-pane-presets"), deps, settingsService, showToast,
       onStartCreatorDraft
     }),
     plugins: createPluginsPane({

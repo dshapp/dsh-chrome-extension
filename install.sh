@@ -70,12 +70,18 @@ ALL_PKGS="$CHROME_PKG $KIMI_PKG"
 # latest 指向谁(尤其 latest 可能指向一个 rc)。
 # 升级就改这一行,让版本变更留在 git 历史里,而不是散在各台机器的安装时刻。
 #
-# 0.1.6-alpha.2:扩展侧协议适配的基准版本,与 Mac 端同一颗钉子
+# 0.1.7-alpha.2:当前适配基准,与 Mac 端同一颗钉子。0.1.7 的 wire 变化扩展已跟上:
+# 后台任务改走 job/list 流、tool/result 按 message.toolCallId 配对、压缩检查点
+# 改为 kind:"compact-checkpoint"、子代理目录改读 session/projections、预设
+# read/copy/delete 端点删除、设置命名空间改名(shell→bash-sandbox 等)、置顶改由
+# 宿主保存、归档活动会话需 stopActivity。
+#
+# 历史:0.1.6-alpha.2 时的基准,与 Mac 端同一颗钉子
 # (DSHMacKit/Server/NpmGlobalPackages.dshVersion)。两条 0.1.6 的 wire 变化
 # 扩展已经跟上(session/control 基线不再带队列,队列改由 inbox 投影发布;
 # permissions 投影收窄为当前值,可选预设改由 permissionPresets/catalog 发布),
 # 所以这一行必须跟着抬 —— 钉在 0.1.2 会让扩展跑到一个它已经不适配的宿主上。
-DSH_VERSION="0.1.6-alpha.2"
+DSH_VERSION="0.1.7-alpha.2"
 DSH_PKG="@deepseek-ai/dsh@$DSH_VERSION"
 
 RED=""; GREEN=""; YELLOW=""; BLUE=""; BOLD=""; RESET=""

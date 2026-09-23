@@ -64,6 +64,9 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   // 否则较慢的旧请求可能最后落地。Promise 链只按 session 串行，互不阻塞。
   const presetApplyTails = new Map();
   let followedStreamId = null;
+  // 0.1.7 把后台任务列表从 session/control 基线里拆成了每会话一条的 job/list 流
+  // (帧 {type:"rows", jobs},整组替换)。跟着当前 follow 的会话走:换会话就换流。
+  let jobsStreamId = null;
   // 当前 follow 的完整 durable address。子代理分页不能退化成普通 session 地址。
   let currentFollowAddress = null;
   // live 旁路(assistant-stream)的连续性期望:正在流式的 attempt 与下一条帧必须携带的
@@ -357,6 +360,15 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     }
   }
 
+  /// 订阅某会话的 job/list 流(0.1.7)。同一会话重复调用不重开:流的首帧就是全量。
+  function followJobs(sessionId) {
+    const next = sessionId ? `jobs:${sessionId}` : null;
+    if (next === jobsStreamId) return;
+    if (jobsStreamId) connection.unsubscribe?.(jobsStreamId);
+    jobsStreamId = next;
+    if (next) connection.subscribe?.(next, STREAM.jobs, { request: { sessionId } });
+  }
+
   /// 重开当前 follow(同 address):新快照的 baseline 重新武装被丢的 attempt。
   function reopenFollow(reason) {
     assistantExpectation = null;
@@ -499,6 +511,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       connection.subscribe?.(followedStreamId, STREAM.follow, {
         request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
       });
+      followJobs(id);
       return id;
     },
 
@@ -628,8 +641,19 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     },
 
     /// 归档会话:从活动列表移出(非删除,宿主保留日志)。
-    async archive(sessionId) {
-      const value = await connection.call(RPC.workspaceArchiveSession, { request: { sessionId } });
+    ///
+    /// 0.1.7:会话还有活在跑(本轮、子代理、后台任务、定时)时宿主拒成
+    /// workspace/session-active。传了 confirmStop 就问一次,同意后带
+    /// stopActivity:true 重试(宿主先停再归档);不同意返回 null,调用方据此当作取消。
+    async archive(sessionId, { confirmStop } = {}) {
+      let value;
+      try {
+        value = await connection.call(RPC.workspaceArchiveSession, { request: { sessionId } });
+      } catch (error) {
+        if (error?.code !== "workspace/session-active" || typeof confirmStop !== "function") throw error;
+        if (!await confirmStop(error.details?.activity ?? [])) return null;
+        value = await connection.call(RPC.workspaceArchiveSession, { request: { sessionId, stopActivity: true } });
+      }
       const archived = value?.archivedSessionIds ?? [];
       // archive 是只增操作；并发请求的回包可能各自只含自己观察到的快照。
       // 用并集结算，避免迟到的旧回包抹掉另一条已完成的归档。真正的取消归档
@@ -644,9 +668,36 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       return archived;
     },
 
-    /// 子代理目录:parentSessionId 的直属子代理(healthy child / diagnostic)。
+    /// 子代理目录:parentSessionId 的直属子代理。
+    ///
+    /// 0.1.7 删掉了 subagents/list,目录改由父会话的 subagentCatalog 投影发布
+    /// ([{id, mode, label?, createdAt}]),经 session/projections 读 —— 不激活父
+    /// agent。投影里没有运行态与"有没有孙代",这两样从名册(session/list 行的
+    /// running / parentSessionId)补。返回形状保持旧 SubagentListValue
+    /// ({entries:[{kind:"child", id, mode, activity, label, hasChildren}]}),
+    /// 目录视图因此不用分两版。
     async listSubagents(parentSessionId) {
-      return connection.call(RPC.subagentList, { parentSessionId });
+      const value = await connection.call(RPC.sessionProjections, { request: { sessionId: parentSessionId } });
+      const catalog = Array.isArray(value?.values?.subagentCatalog) ? value.values.subagentCatalog : [];
+      const rows = listStore.get();
+      const byId = new Map(rows.map((row) => [row.sessionId, row]));
+      const parents = new Set();
+      for (const row of rows) if (row.origin === "subagent" && row.parentSessionId) parents.add(row.parentSessionId);
+      const entries = catalog
+        .filter((entry) => entry && typeof entry.id === "string")
+        .map((entry) => {
+          const summary = byId.get(entry.id);
+          const nested = summary?.projections?.values?.subagentCatalog;
+          return {
+            kind: "child",
+            id: entry.id,
+            mode: entry.mode === "one-shot" || entry.mode === "continuable" ? entry.mode : "unknown",
+            label: typeof entry.label === "string" && entry.label ? entry.label : undefined,
+            activity: summary?.running ? "running" : "not-running",
+            hasChildren: parents.has(entry.id) || (Array.isArray(nested) && nested.length > 0)
+          };
+        });
+      return { entries };
     },
     /// 子代理转录:按 SubagentAddress 读取并填进 store(含只读 subagent 投影)。
     /// 对齐 Mac 的 subagent.history —— continuable 子代理的 durable log 需要 parent + mode
@@ -665,6 +716,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       connection.subscribe?.(followedStreamId, STREAM.follow, {
         request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
       });
+      followJobs(childId);
       return null;
     },
     /// 中断一个子代理。address = { parentSessionId, childSessionId, mode }。
@@ -805,10 +857,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
         if (payload.type === "baseline") {
           const value = payload.value ?? {};
           controlQueues.clear();
-          controlJobs.clear();
           controlProjections.clear();
           for (const [sid, items] of Object.entries(value.queues ?? {})) controlQueues.set(sid, items);
-          for (const [sid, jobs] of Object.entries(value.jobs ?? {})) controlJobs.set(sid, jobs);
           for (const [sid, projections] of Object.entries(value.projections ?? {})) {
             controlProjections.set(sid, projections);
             for (const [key, val] of Object.entries(projections?.values ?? {})) {
@@ -825,7 +875,6 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           // 0.1.6 不再发布 queue 帧(队列改走 inbox 投影);0.1.5 仍以它为权威的
           // 瞬时队列,所以两条路都留着 —— 帧里的 item 形状与投影折出的一致。
           if (payload.type === "queue") controlQueues.set(payload.sessionId, payload.items ?? []);
-          else if (payload.type === "jobs") controlJobs.set(payload.sessionId, payload.jobs ?? []);
           else if (payload.type === "projection") {
             const previous = controlProjections.get(payload.sessionId) ?? { values: {}, seqs: {}, asOfSeq: -1 };
             // 版本必须逐 key 记:一个会话的 asOfSeq 是所有 key 的最大值,只能当
@@ -840,7 +889,6 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           }
           if (isCurrent(payload.sessionId)) {
             if (payload.type === "queue") store.setQueue(payload.items ?? []);
-            else if (payload.type === "jobs") store.setJobs(payload.jobs ?? []);
             else if (payload.type === "projection") store.applyProjection(payload.key, payload.value, payload.seq);
           }
           if (payload.type === "projection") {
@@ -848,6 +896,18 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
             if (payload.key === "title") listStore.setTitle(payload.sessionId, payload.value);
           }
           if (isCurrent(payload.sessionId)) notifyRuntime();
+        }
+        return;
+      }
+      if (frame.streamId.startsWith("jobs:")) {
+        // job/list:该会话可见任务的全量替换。只认当前那条流,切走后迟到的帧丢掉。
+        if (frame.streamId !== jobsStreamId || payload.type !== "rows") return;
+        const sessionId = frame.streamId.slice("jobs:".length);
+        const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+        controlJobs.set(sessionId, jobs);
+        if (isCurrent(sessionId)) {
+          store.setJobs(jobs);
+          notifyRuntime();
         }
         return;
       }

@@ -14,6 +14,7 @@ import { createReferenceService } from "../../features/references/reference-serv
 import { createGoalService } from "../../features/goals/goal-service.js";
 import { createAttachmentTray } from "../../features/attachments/attachments.js";
 import { setLang, getLang } from "../../shared/i18n.js";
+import { RPC } from "../../platform/dsh/rpc-methods.js";
 import { formatErrorDetails } from "../../shared/error-details.js";
 
 export function createSidepanelDependencies(options = {}) {
@@ -33,8 +34,11 @@ export function createSidepanelDependencies(options = {}) {
   const notifier = options.notifier
     || createBackgroundNotifier({ notifications: globalThis.chrome?.notifications, settings });
   let sessions = options.sessions || null;
+  // 会话置顶:0.1.7 起由宿主保存(workspace/pinSession),老宿主退回浏览器本地账本。
+  const pinnedStore = options.pinnedStore || createPinnedStore({ connection, rpc: RPC });
   const workspaces = options.workspaces || createWorkspaceService(connection, {
-    onArchivedChange: (ids) => sessions?.setArchivedSessionIds?.(ids)
+    onArchivedChange: (ids) => sessions?.setArchivedSessionIds?.(ids),
+    onPinnedChange: (ids) => pinnedStore.applyHost?.(ids)
   });
   sessions ||= (lifecycle.sessions = createSessionService(connection, {
     onBackgroundTurnFailure: (sessionId, message, title) => notifier.reportFailure(sessionId, message, title)
@@ -46,9 +50,7 @@ export function createSidepanelDependencies(options = {}) {
     settings,
     connection,
     sessions,
-    // 会话置顶账本(浏览器本地)。宿主没有"置顶"这个概念,与手动顺序同理:
-    // 它是"我这台机器上我习惯的样子"(对齐 Mac 的 pinnedSessionOrder)。
-    pinnedStore: options.pinnedStore || createPinnedStore(),
+    pinnedStore,
     models: options.models || createModelService(connection),
     skills: options.skills || createSkillService(connection),
     commands: options.commands || createCommandService(connection),

@@ -43,6 +43,14 @@ function namespaceField(namespaces, ns, field) {
   return value && typeof value === "object" ? value[field] : undefined;
 }
 
+/// 预设默认值所在的设置命名空间。0.1.7 把 agent-presets.default 改名为
+/// agent-preset-registry.selectedDefault;老宿主仍是前者。
+export function presetRegistryNamespace(namespaces) {
+  if (namespaces?.has?.("agent-preset-registry")) return { name: "agent-preset-registry", defaultField: "selectedDefault" };
+  if (namespaces?.has?.("agent-presets")) return { name: "agent-presets", defaultField: "default" };
+  return null;
+}
+
 export function createGeneralPane({ host, deps, settingsService, showToast }) {
   let snapshot = { namespaces: new Map(), writable: false, hasDocument: false };
   let presets = [];
@@ -73,8 +81,10 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
 
   function renderAgentPresetRow() {
     // 命名空间缺席就没有"默认预设"这个概念可写,整行隐藏。
-    if (!snapshot.namespaces.has("agent-presets")) return "";
-    const current = namespaceField(snapshot.namespaces, "agent-presets", "default");
+    const ns = presetRegistryNamespace(snapshot.namespaces);
+    if (!ns) return "";
+    const current = namespaceField(snapshot.namespaces, ns.name, ns.defaultField)
+      ?? presets.find((preset) => preset.isDefault)?.id;
     const options = presets.map((preset) => ({
       value: preset.id,
       label: presetMenuLabel(preset) || preset.id,
@@ -206,7 +216,8 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
 
   function bind() {
     host.querySelector("#set-agent-preset")?.addEventListener("change", (event) => {
-      writeField("agent-presets", "default", event.target.value);
+      const ns = presetRegistryNamespace(snapshot.namespaces);
+      if (ns) writeField(ns.name, ns.defaultField, event.target.value);
     });
     host.querySelector("#set-permission")?.addEventListener("change", async (event) => {
       const value = event.target.value;

@@ -55,8 +55,12 @@ export function isReplacement(event) {
   return op === "replace";
 }
 
-function sourcePlugin(data) {
-  return str(isObject(data?.source) ? data.source.plugin : null);
+/// 压缩检查点消息:v3 {kind:"plugin", plugin:"compact"};v4(0.1.7)kind:"compact-checkpoint"。
+function isCompactCheckpoint(data) {
+  const source = isObject(data?.source) ? data.source
+    : (isObject(data?.message?.source) ? data.message.source : null);
+  if (!source) return false;
+  return source.kind === "compact-checkpoint" || (source.kind === "plugin" && source.plugin === "compact");
 }
 
 /// 内容块 → 轨迹源块。tool-call 取 arguments/id/name;image 取附件名。
@@ -357,7 +361,7 @@ export function assembleTrajectory(entries) {
       }
 
       case "user/message": {
-        if (isReplacement(event) || sourcePlugin(data) === "compact") break;
+        if (isReplacement(event) || isCompactCheckpoint(data)) break;
         const message = isObject(data.message) ? data.message : {};
         const source = isObject(data.source) ? data.source : (isObject(message.source) ? message.source : null);
         const messageId = str(data.id) ?? str(message.id);
@@ -591,10 +595,13 @@ export function assembleTrajectory(entries) {
       case "tool/result": {
         const message = isObject(data.message) ? data.message : {};
         const block = arr(message.content).map((item) => (isObject(item) ? item : {})).find((item) => str(item.type) === "tool-result") ?? {};
-        const callId = str(data.callId) ?? str(block.toolCallId) ?? "";
+        // v4(0.1.7):role:"tool" 消息自带 toolCallId / isError,内容块不再包一层。
+        const callId = str(data.callId) ?? str(block.toolCallId) ?? str(message.toolCallId)
+          ?? str(isObject(message.source) ? message.source.callId : null) ?? "";
         const resultBlocks = toolResultBlocksFrom(message.content);
         const error = isObject(data.error) ? data.error : null;
-        const isError = error != null || toolResultError(message.content) || data.isError === true;
+        const isError = error != null || toolResultError(message.content) || data.isError === true
+          || message.isError === true;
         const index = toolRecordIndex.get(callId);
         if (index == null) {
           // 孤儿 tool-result(缺 tool/call):合成工具行,Web 归到 turn 0/step 1,布局再并入 Turn 1。

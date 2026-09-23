@@ -14,7 +14,9 @@
 export const PLUGIN_CARDS = Object.freeze([
   {
     id: "bash",
-    namespace: "shell",
+    // 0.1.7 改名 shell → bash-sandbox;老宿主仍叫 shell(availableCards 按出场的那个解析)。
+    namespace: "bash-sandbox",
+    legacyNamespace: "shell",
     title: "plug.bashTitle",
     description: "plug.bashDescription",
     fields: [
@@ -64,18 +66,34 @@ export const PLUGIN_CARDS = Object.freeze([
       }
     ],
     // 模型选择是同一张卡的第二段,但它有自己的命名空间,所以单独记一处。
-    modelSelection: { namespace: "subagent-model-selection" }
+    // 0.1.7 改名 subagent-model-selection → subagent-model-selection-settings。
+    modelSelection: { namespace: "subagent-model-selection-settings", legacyNamespace: "subagent-model-selection" }
   }
 ]);
 
 /// 按当前 describe 已组装的命名空间过滤。卡片依赖的全部命名空间都在才算可用 ——
 /// subagent 卡少了模型选择那半仍然可渲染(limitsAvailable/modelsAvailable 是两件事)。
+///
+/// 改过名的命名空间(legacyNamespace)按当前宿主实际出场的那个解析,返回的卡片
+/// namespace 就是要读写的真实名字 —— 下游不必知道改名这回事。
 export function availableCards(cards, namespaces) {
   const present = namespaces instanceof Set ? namespaces : new Set(namespaces ?? []);
-  return cards.filter((card) => (
-    present.has(card.namespace)
-    && (!card.modelSelection || present.has(card.modelSelection.namespace))
-  ));
+  const resolve = (spec) => {
+    if (present.has(spec.namespace)) return spec.namespace;
+    if (spec.legacyNamespace && present.has(spec.legacyNamespace)) return spec.legacyNamespace;
+    return null;
+  };
+  return cards.flatMap((card) => {
+    const namespace = resolve(card);
+    if (!namespace) return [];
+    let modelSelection = card.modelSelection;
+    if (modelSelection) {
+      const resolved = resolve(modelSelection);
+      if (!resolved) return [];
+      modelSelection = { ...modelSelection, namespace: resolved };
+    }
+    return [{ ...card, namespace, ...(modelSelection ? { modelSelection } : {}) }];
+  });
 }
 
 /// 凭证 ref:命名空间里的 apiKeyEnv 值是权威(用户可能指向别的环境变量),

@@ -1417,7 +1417,10 @@ export function createSidepanelApp(root, deps, options = {}) {
     const sessionId = state.sessionId;
     void (async () => {
       try {
-        await deps.sessions.archive(sessionId);
+        const archived = await deps.sessions.archive(sessionId, {
+          confirmStop: () => Promise.resolve(window.confirm(t("session.archiveActiveConfirm")))
+        });
+        if (archived === null) return;
         await deps.sessions.refreshList().catch(() => {});
         // 接替谁:与列表同一个顺序里的下一行(与 ⌘[ / ⌘] 同源)。
         const rest = sidebarOrderIds().filter((id) => id !== sessionId);
@@ -1613,6 +1616,8 @@ export function createSidepanelApp(root, deps, options = {}) {
         refreshGitEntry();
       }
     });
+    // 宿主置顶写失败时(已回滚)给个提示,否则用户只会看到图钉"弹回去"。
+    deps.pinnedStore?.setErrorHandler?.(() => showToast(t("session.pinFailed")));
     historyDrawer = mountHistoryDrawer(deps, openSession, newSession, shortcutLabels, {
       // 抽屉按工作区分组(对齐 Mac 左侧栏),所以它要的是整份 workspace 名单
       // 与归档名单,而不再是"当前选中目录"那一个过滤条件。

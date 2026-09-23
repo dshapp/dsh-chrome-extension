@@ -93,7 +93,9 @@ export function catalogTriggerLabel(rootState, descendants, t) {
 
 /// 行次级文案(mode · activity · summary title),对齐 Mac secondaryText。
 export function childSecondaryText(mode, activity, summaryTitle, t) {
-  const modeText = t(mode === "one-shot" ? "subagentModeOneShot" : "subagentModeContinuable");
+  // 0.1.7 的 mode 多了 unknown(记录里读不出模式的子会话):只能浏览,不能继续。
+  const modeText = t(mode === "one-shot" ? "subagentModeOneShot"
+    : mode === "unknown" ? "subagentModeUnknown" : "subagentModeContinuable");
   const activityText = t(activity === "running" ? "subagentActivityRunning" : "subagentActivityNotRunning");
   return [summaryTitle, modeText, activityText].filter(Boolean).join(" · ");
 }

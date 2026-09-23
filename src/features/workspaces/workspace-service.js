@@ -1,7 +1,7 @@
 // 工作区由 workspace/follow 的 baseline + 增量维护。
 import { RPC, STREAM } from "../../platform/dsh/rpc-methods.js";
 
-export function createWorkspaceService(connection, { onArchivedChange } = {}) {
+export function createWorkspaceService(connection, { onArchivedChange, onPinnedChange } = {}) {
   let workspaces = [];
   let archivedSessionIds = [];
   // workspace id 不复用。移除后保留 tombstone，防止同一 mux 队列里迟到的
@@ -167,6 +167,8 @@ export function createWorkspaceService(connection, { onArchivedChange } = {}) {
         .filter((item) => !removedWorkspaceIds.has(item.workspaceId));
       archivedSessionIds = payload.value?.archivedSessionIds ?? [];
       onArchivedChange?.(archivedSessionIds);
+      // 0.1.7:宿主级置顶集合随 baseline 下发;老宿主没有这个字段(不回调)。
+      if (Array.isArray(payload.value?.pinnedSessionIds)) onPinnedChange?.(payload.value.pinnedSessionIds);
       baselineResolve?.(); baselineResolve = null;
     } else if (payload.type === "upsert") {
       const item = payload.workspace;
@@ -184,6 +186,9 @@ export function createWorkspaceService(connection, { onArchivedChange } = {}) {
     } else if (payload.type === "archived") {
       archivedSessionIds = payload.archivedSessionIds ?? [];
       onArchivedChange?.(archivedSessionIds);
+    } else if (payload.type === "pinned") {
+      onPinnedChange?.(payload.pinnedSessionIds ?? []);
+      return;
     } else return;
     notify();
   });

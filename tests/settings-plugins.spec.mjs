@@ -43,11 +43,12 @@ test('联网搜索卡带 baseURL + maxUses 与一条凭证', () => {
   assert.equal(card.credential.defaultRef, 'DEEPSEEK_API_KEY')
 })
 
-test('Subagent 卡声明两段:limits 在 subagent,模型选择在 subagent-model-selection', () => {
+test('Subagent 卡声明两段:limits 在 subagent,模型选择在 subagent-model-selection-settings(0.1.7 改名)', () => {
   const card = PLUGIN_CARDS.find((entry) => entry.id === 'subagent')
   assert.equal(card.namespace, 'subagent')
   assert.deepEqual(card.fields.map((f) => f.id), ['maxDepth', 'maxActiveSubagents'])
-  assert.equal(card.modelSelection.namespace, 'subagent-model-selection')
+  assert.equal(card.modelSelection.namespace, 'subagent-model-selection-settings')
+  assert.equal(card.modelSelection.legacyNamespace, 'subagent-model-selection')
   // 两个字段各有自己的非法文案 —— 共用一句"请输入数字"会丢掉"0 合法 / 1 起"的区别。
   assert.equal(card.fields[0].invalidKey, 'plug.subagentDepthInvalid')
   assert.equal(card.fields[1].invalidKey, 'plug.subagentCapacityInvalid')

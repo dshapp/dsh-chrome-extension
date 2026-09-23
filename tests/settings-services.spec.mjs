@@ -64,30 +64,17 @@ test("plugin-manager:installBundle 默认 enabled,approvedBuilds 为空时不出
   });
 });
 
-test("preset:每个方法打到对应 RPC;presetCopy 在 name 为空时不发这个键", async () => {
+test("preset:0.1.7 只剩列表;删掉的预设端点不再暴露", async () => {
   const c = recorder();
   const service = createPresetService(c);
 
   await service.presetList();
-  await service.presetRead("standard");
-  await service.presetCopy("standard", "my-copy", "我的副本");
-  await service.presetCopy("standard", "my-copy");
-  await service.presetRemove("my-copy");
-  await service.presetOpenDocument("standard");
-  await service.canOpenPresetDirectory();
-
-  assert.deepEqual(c.calls.map((x) => x.method), [
-    RPC.agentPresetList,
-    RPC.agentPresetRead,
-    RPC.agentPresetCopy,
-    RPC.agentPresetCopy,
-    RPC.agentPresetRemove,
-    RPC.agentPresetOpenDocument,
-    RPC.settingsCanOpenAgentPresetDirectory
-  ]);
-  // 用户填的显示名必须透传,否则宿主只能拿 id 当名字。
-  assert.deepEqual(c.calls[2].args, { from: "standard", id: "my-copy", name: "我的副本" });
-  assert.deepEqual(c.calls[3].args, { from: "standard", id: "my-copy" });
-  assert.deepEqual(c.calls[4].args, { id: "my-copy" });
-  assert.deepEqual(c.calls[5].args, { agentPreset: "standard" });
+  assert.deepEqual(c.calls.map((x) => x.method), [RPC.agentPresetList]);
+  for (const gone of ["presetRead", "presetCopy", "presetRemove", "presetOpenDocument", "canOpenPresetDirectory"]) {
+    assert.equal(service[gone], undefined, gone);
+  }
+  for (const gone of ["agentPresetRead", "agentPresetCopy", "agentPresetRemove", "agentPresetOpenDocument",
+    "settingsCanOpenAgentPresetDirectory", "subagentList"]) {
+    assert.equal(RPC[gone], undefined, gone);
+  }
 });

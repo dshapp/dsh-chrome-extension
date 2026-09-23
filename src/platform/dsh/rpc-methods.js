@@ -25,7 +25,11 @@ export const RPC = Object.freeze({
   workspaceCreate: "workspace/create",
   workspaceRename: "workspace/rename",
   workspaceDelete: "workspace/delete",
+  // 0.1.7:有活在跑的会话会被拒成 workspace/session-active,带 stopActivity:true 重试即先停再归档。
   workspaceArchiveSession: "workspace/archiveSession",
+  // 0.1.7 起置顶由宿主保存(注册表级,最近置顶的在前),workspace/follow 以 pinned 帧广播。
+  workspacePinSession: "workspace/pinSession",
+  workspaceUnpinSession: "workspace/unpinSession",
   // 排序:beforeXxxId 省略即追加到末尾。前者排工作区本身,后者排某个工作区内的会话。
   workspaceInsertBefore: "workspace/insertBefore",
   workspaceInsertSessionBefore: "workspace/insertSessionBefore",
@@ -36,14 +40,10 @@ export const RPC = Object.freeze({
   commandsExecute: "commands/execute",
   skillList: "skills/list",
   // ---- agent preset ----
+  // 0.1.7 预设改为在配置文件里声明:read/copy/deletePreset 与打开预设目录的端点
+  // 全部删除,只剩列表与选择;默认预设写 agent-preset-registry.selectedDefault。
   agentPresetList: "agentPresets/list",
   agentPresetSelect: "agentPresets/select",
-  agentPresetRead: "agentPresets/read",
-  agentPresetCopy: "agentPresets/copy",
-  agentPresetRemove: "agentPresets/deletePreset",
-  agentPresetOpenDocument: "settings/openAgentPresetDirectory",
-  // 宿主桌面上能不能打开预设目录 —— 设置页据此决定要不要画"打开目录"动作。
-  settingsCanOpenAgentPresetDirectory: "settings/canOpenAgentPresetDirectory",
   // ---- goal ----
   goalCreate: "goals/create",
   goalClear: "goals/clear",
@@ -51,7 +51,9 @@ export const RPC = Object.freeze({
   goalPause: "goals/pause",
   goalResume: "goals/resume",
   // ---- subagent ----
-  subagentList: "subagents/list",
+  // 0.1.7 删了 subagents/list:子代理目录改读父会话的 subagentCatalog 投影
+  // (session/projections 不激活父 agent),运行态取子会话 SessionSummary.running。
+  sessionProjections: "session/projections",
   subagentPrompt: "subagents/prompt",
   subagentInterrupt: "subagents/interruptByParent",
   // ---- settings ----
@@ -65,6 +67,8 @@ export const RPC = Object.freeze({
   credentialsDescribe: "credentials/describe",
   credentialsSet: "credentials/set",
   credentialsUnset: "credentials/unset",
+  // ---- 后台任务(0.1.7 job/*) ----
+  jobKill: "job/kill",
   // ---- 模型发现 ----
   llmDiscoverModels: "llm/discoverModels",
   // ---- 权限预设目录(0.1.6) ----
@@ -91,6 +95,8 @@ export const STREAM = Object.freeze({
   events: "$events",
   workspaces: "workspace/follow",
   control: "session/control",
+  // 0.1.7:每会话一条后台任务名册流,帧 {type:"rows", jobs} 整组替换。
+  jobs: "job/list",
   follow: "session/follow"
 });
 
@@ -98,7 +104,6 @@ export const STREAM = Object.freeze({
 export const MUX = Object.freeze({
   sessionEvent: "session/event",
   sessionSubscribed: "session/subscribed",
-  sessionJobs: "session/jobs",
   sessionProjection: "session/projection",
   approvalRequested: "approval/requested",
   approvalResolved: "approval/resolved",
