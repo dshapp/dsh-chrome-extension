@@ -208,6 +208,21 @@ export function mountSubagentCatalog(trigger, menu, { deps, getSessionId, onOpen
     }
   });
 
+  // chip 的运行数来自名册(子代理行的 running 位),而名册由 host 帧实时维护。
+  // 只靠父会话快照去重画会漏掉"子代理停下"这一拍:0.1.7 实测一次性子代理的
+  // api-session/status false 可以晚于父会话最后一个快照到达,chip 就一直卡在
+  // "1 个子代理运行中",直到切会话或重载。所以名册一变也重画 chip。
+  listStore.subscribe?.(() => {
+    if (!getSessionId()) return;
+    const wasRunning = dotSpan.classList.contains("running");
+    paintTrigger();
+    if (opened) {
+      render();
+      // 运行态翻转时同步 1s 计时器的开关(停下后不必再每秒重画)。
+      if (wasRunning !== dotSpan.classList.contains("running")) armliveRefresh();
+    }
+  });
+
   function armliveRefresh() {
     disarmRefresh();
     // 运行中的行要显示"距开跑已过多久";有 running 才 1s 刷一次,否则静态。
