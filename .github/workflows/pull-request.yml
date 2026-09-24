@@ -54,8 +54,8 @@ jobs:
           STAGE="$RUNNER_TEMP/dsh-chrome-extension"
           mkdir -p "$STAGE"
           cp -R \
-            manifest.json background.js install.sh \
-            content icons native-host pages scripts src sw \
+            manifest.json background.js \
+            content icons pages src sw \
             "$STAGE/"
           cd "$RUNNER_TEMP"
           zip -r "$GITHUB_WORKSPACE/dsh-chrome-extension-pr.zip" dsh-chrome-extension
