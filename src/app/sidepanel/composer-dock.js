@@ -69,6 +69,8 @@ export function createComposerDock({ elements, deps, state, showToast, format })
     // 占位符由 sidepanel-app 的 applyComposerAvailability 统一裁决,这里不写,
     // 否则两处会互相覆盖(子代理只读提示会被计划模式文案盖掉)。
     chip.disabled = planLeaving;
+    const label = chip.querySelector(".plan-chip-label");
+    if (label) label.textContent = t("composer.planChip");
     chip.title = t("composer.planChipOff");
     chip.setAttribute("aria-label", t("composer.planChipOff"));
   }

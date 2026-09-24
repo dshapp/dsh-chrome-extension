@@ -152,10 +152,11 @@
 #input::placeholder { color: var(--text-faint); }
 #input:focus { outline: none; }
 
-#composer-bar { display: flex; align-items: center; min-block-size: 2rem; gap: 0.25rem; }
+/* 底栏统一 24px 高:胶囊(计划/权限/模型)、图标钮(加号/选取/统计)、发送钮同高。 */
+#composer-bar { display: flex; align-items: center; min-block-size: 24px; gap: 0.25rem; }
 .bar-btn {
   display: flex; align-items: center; gap: 4px;
-  min-block-size: 2rem;
+  box-sizing: border-box; block-size: 24px;
   padding-inline: 0.5rem;
   border: 1px solid transparent;
   border-radius: 20px;
@@ -168,6 +169,9 @@
 }
 .bar-btn:hover { background: var(--bg-raised); color: var(--text); }
 .dropdown-chevron { flex-shrink: 0; }
+/* chevron 路径在 24 格里占 6–18,左右各自带 ~3px 留白;叠上 4px gap 离文字太远。
+   负外边距把视觉间距收到 ~3px,右侧同样抵掉留白,让胶囊左右内边距看起来对称。 */
+.bar-btn .dropdown-chevron { margin-inline: -4px -3px; }
 
 /* 完全访问:药丸文字染警告色(对齐 Mac PermissionChip 的 warnLabel)。
    规则挂在 label 上而非按钮上 —— .bar-btn:hover 会改按钮 color,
@@ -175,19 +179,8 @@
 #perm-label.warn { color: var(--warn); }
 .bar-btn:hover #perm-label.warn { color: var(--warn); }
 
-/* 加号按钮:打开候选浮层(#trigger-menu),与输入 "@" 是同一个 */
-#attach-btn {
-  display: flex; align-items: center; justify-content: center;
-  inline-size: 2rem; block-size: 2rem;
-  border: 1px solid transparent;
-  border-radius: 50%;
-  background: none;
-  color: var(--text-dim);
-  font-size: 1.25rem;
-  flex-shrink: 0;
-  transition: background .12s, border-color .12s;
-}
-#attach-btn:hover { background: var(--bg-raised); color: var(--text); }
+/* 加号按钮:打开候选浮层(#trigger-menu),与输入 "@" 是同一个。
+   尺寸/形状/悬停全走 .bar-btn,这里只声明它是方形图标钮(见 #stats-btn 那条)。 */
 /* 浮层开着时保持按下态,让用户看得出这颗按钮正开着东西 */
 #attach-btn[aria-expanded="true"] { background: var(--bg-raised); color: var(--text); }
 
@@ -357,8 +350,8 @@
 /* 不再 margin-left:auto —— 靠右推挤由它前面的 #stats-btn 负责。
    flex 里只有第一个 auto 外边距吃得到剩余空间,两个都写会让后面那个失效。 */
 #send {
-  /* 28px:与同排胶囊(.bar-btn / #attach-btn 的 2rem)等高。之前写死 32px,比它们高 4px。 */
-  inline-size: 2rem; block-size: 2rem;
+  /* 24px:与同排胶囊(.bar-btn / #attach-btn)等高。 */
+  box-sizing: border-box; inline-size: 24px; block-size: 24px; padding: 0;
   border-radius: 50%;
   border: none;
   display: flex;
@@ -759,16 +752,19 @@
 .btn.ghost:hover:not(:disabled) { color: var(--text); }
 
 /* plan 药丸 */
-/* 与底栏其它按钮同形:沿用 .bar-btn 的透明描边,只染文字色
-   (同 #stats-btn.warn 的做法)。原来强制了 warn 描边 + !important,
-   在一排无边框的灰字按钮里像个异类。 */
+/* 开启计划模式时的 tinted Capsule:warn 文字 + 15% warn 底色(与 .h-badge-warn
+   同一观感族),文字加粗,右侧 ✕ 表示点击退出。 */
 .plan-chip {
   display: inline-flex; align-items: center; gap: 0.25rem;
+  padding-inline: 0.625rem 0.5rem;
   color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  font-size: 0.8125rem; font-weight: 600;
 }
-/* hover 仍走 .bar-btn 的底色变化,但文字保持 warn,不被 :hover 的 --text 覆盖 */
-.plan-chip:hover { color: var(--warn); }
-.plan-chip-x { font-size: 0.875rem; line-height: 1; opacity: 0.7; }
+/* hover 加深底色,文字保持 warn,不被 .bar-btn:hover 的 --text 覆盖 */
+.plan-chip:hover { color: var(--warn); background: color-mix(in srgb, var(--warn) 24%, transparent); }
+.plan-chip:disabled { opacity: 0.6; }
+.plan-chip-x { display: inline-flex; line-height: 1; }
 
 /* "/" 与 "@" 触发候选菜单 */
 #trigger-menu {
@@ -955,16 +951,16 @@
 /* 只剩一枚圆环:收成正方形图标位,不再留文字的横向内边距。
    靠右推挤由 #model-picker 那颗 auto 外边距统一负责(flex 里只有第一个
    auto 外边距吃得到剩余空间),这里不再重复声明。 */
-#stats-btn {
-  inline-size: 2rem; padding-inline: 0; justify-content: center;
+#attach-btn, #stats-btn, #element-picker-btn {
+  flex-shrink: 0; inline-size: 24px; padding-inline: 0; justify-content: center;
 }
 #stats-btn.warn { color: var(--warn); }
 #stats-btn.critical { color: var(--danger); }
 /* 占比圆环:conic-gradient 扇形 + 中心挖空,比横条省底栏宽度 */
 .stats-ring {
-  flex: none; inline-size: 14px; block-size: 14px; border-radius: 50%;
+  flex: none; inline-size: 16px; block-size: 16px; border-radius: 50%;
   background: conic-gradient(currentColor var(--stats-pct, 0%), var(--border-soft) 0);
-  mask: radial-gradient(circle, transparent 4px, #000 4.5px);
+  mask: radial-gradient(circle, transparent 5.5px, #000 6px);
 }
 
 

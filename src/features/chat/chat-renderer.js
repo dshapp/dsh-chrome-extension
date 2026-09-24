@@ -21,6 +21,48 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
   const openProcessTurns = new Set();
   let processSpecs = new Map();
 
+  // ---- turn hover(对齐 Mac TurnHoverState) ----
+  // 页脚操作行只在指针落在**该轮**上时浮现:该轮的 assistant 正文行或页脚本身。
+  // 所有行共用一个 hoveredTurn,离开时延迟 150ms 再清,指针从正文挪到页脚、
+  // 或穿过两行之间的空隙时不会闪。显隐只切 class、走 opacity,不改布局。
+  const HOVER_CLOSE_DELAY_MS = 150;
+  let hoveredTurn = null;
+  let hoverCloseTimer = null;
+
+  function applyTurnHover() {
+    for (const entry of rendered.values()) {
+      if (entry.node.kind !== NodeKind.turnTail) continue;
+      entry.element.classList.toggle("turn-hovered", hoveredTurn != null && nodeTurn(entry.node) === hoveredTurn);
+    }
+  }
+
+  function setHoveredTurn(turn) {
+    if (hoverCloseTimer) { clearTimeout(hoverCloseTimer); hoverCloseTimer = null; }
+    if (turn == null) {
+      if (hoveredTurn == null) return;
+      hoverCloseTimer = setTimeout(() => {
+        hoverCloseTimer = null;
+        hoveredTurn = null;
+        applyTurnHover();
+      }, HOVER_CLOSE_DELAY_MS);
+      return;
+    }
+    if (hoveredTurn === turn) return;
+    hoveredTurn = turn;
+    applyTurnHover();
+  }
+
+  /// 指针所在的"会揭示页脚"的行(容器的直接子元素,带 data-hover-turn)。
+  function hoverTurnOf(target) {
+    let row = target instanceof Element ? target : null;
+    while (row && row.parentElement !== container) row = row.parentElement;
+    const value = row?.dataset.hoverTurn;
+    return value == null || value === "" ? null : Number(value);
+  }
+
+  container.addEventListener("pointerover", (event) => setHoveredTurn(hoverTurnOf(event.target)));
+  container.addEventListener("pointerleave", () => setHoveredTurn(null));
+
   function context() {
     return { onFork, ...(getContext?.() ?? {}) };
   }
@@ -100,6 +142,10 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
       }
       // turn rail 的滚动定位与阅读位置上报依赖 nodeId → 元素,这里显式挂上。
       element.dataset.nodeId = id;
+      // 会揭示本轮页脚的行:assistant 正文与页脚本身(同 Mac 的 onHover 挂点)。
+      const hoverTurn = node.kind === NodeKind.assistant || node.kind === NodeKind.turnTail ? nodeTurn(node) : null;
+      if (hoverTurn != null) element.dataset.hoverTurn = String(hoverTurn);
+      else delete element.dataset.hoverTurn;
       next.set(id, { element, node, isLastTurn, deliverablesRev });
     }
 
@@ -112,6 +158,8 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
     }
     rendered = next;
     applyProcessVisibility();
+    // 新建/替换的页脚元素不带 hover 态,按当前 hoveredTurn 补上。
+    applyTurnHover();
 
     // indicator 始终贴底。
     if (typingEl && typingEl.parentNode === container && typingEl !== container.lastElementChild) {
@@ -202,6 +250,8 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
     closeTurnStatPopover();
     for (const entry of rendered.values()) entry.element.dispose?.();
     rendered = new Map();
+    if (hoverCloseTimer) { clearTimeout(hoverCloseTimer); hoverCloseTimer = null; }
+    hoveredTurn = null;
     openProcessTurns.clear();
     processSpecs = new Map();
     container.replaceChildren();

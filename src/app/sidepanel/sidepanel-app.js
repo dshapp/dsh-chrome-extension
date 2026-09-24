@@ -491,17 +491,17 @@ export function createSidepanelApp(root, deps, options = {}) {
     if (state.running) {
       if (hasInput) {
         elements.send.className = "state-queue";
-        elements.send.innerHTML = lucideIconSvg("plus", { size: 16 });
+        elements.send.innerHTML = lucideIconSvg("plus", { size: 14 });
         elements.send.title = t("queue.send");
       } else {
         elements.send.className = "state-stop";
-        elements.send.innerHTML = lucideIconSvg("square", { size: 14 });
+        elements.send.innerHTML = lucideIconSvg("square", { size: 10 });
         elements.send.title = t("stop");
       }
       elements.send.disabled = false;
     } else {
       elements.send.className = "state-idle";
-      elements.send.innerHTML = lucideIconSvg("arrow-up", { size: 16 });
+      elements.send.innerHTML = lucideIconSvg("arrow-up", { size: 14 });
       elements.send.title = t("send");
       elements.send.disabled = !connected || !hasInput;
     }

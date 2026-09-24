@@ -227,7 +227,7 @@
 
         <div id="composer-bar">
           <!-- 加号按钮:打开的就是输入 "@" 时那个候选浮层(#trigger-menu) -->
-          <button id="attach-btn" type="button" aria-label="添加上下文"
+          <button class="bar-btn" id="attach-btn" type="button" aria-label="添加上下文"
                   aria-haspopup="listbox" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
 
           <!-- 页面元素选取:在当前网页上圈选元素,发送时随消息附上定位信息 -->
@@ -243,7 +243,7 @@
 
           <!-- plan mode 药丸:仅在计划模式开启时显示,点击执行 /plan off -->
           <button class="bar-btn plan-chip" id="plan-chip" type="button" hidden>
-            <span>Plan</span><span class="plan-chip-x" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+            <span class="plan-chip-label">Plan</span><span class="plan-chip-x" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
           </button>
 
           <!-- 技能/命令候选菜单:仅由输入框的 "/" 触发,底栏不再放入口按钮 -->
@@ -273,7 +273,7 @@
           </button>
           <div id="stats-menu" popover="auto" aria-label="上下文与统计"></div>
 
-          <button id="send" class="state-idle" disabled aria-label="Send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+          <button id="send" class="state-idle" disabled aria-label="Send"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
         </div>
       </div>
     </div>

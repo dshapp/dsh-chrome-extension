@@ -1233,7 +1233,7 @@ function buildTurnStatPill({ className, icon, label, title, headline, build }) {
 /// seq 落点(`data.seq`),而 assistant step 的 seq 落在未闭合的轮次内部,服务端会以
 /// OPEN_TURN 拒绝。所以整个记录里只有这一行能发起分叉。
 export function createTurnTailNode(node, context = {}) {
-  const { onFork, isLastTurn = true, producedPaths, presentedFiles, onOpenPath, onRevealPath } = context;
+  const { onFork, producedPaths, presentedFiles, onOpenPath, onRevealPath } = context;
   const produced = typeof producedPaths === "function" ? (producedPaths(node.turn) ?? []) : [];
   const presented = typeof presentedFiles === "function" ? (presentedFiles(node.turn) ?? []) : [];
   // 产出/present 的 path 是工作区相对路径;宿主 openWorkspacePath 只按自己的 cwd
@@ -1262,10 +1262,9 @@ export function createTurnTailNode(node, context = {}) {
 
   if (hasActions) {
     // 对齐 Mac 的 TurnTailIconActions:复制 → 分叉 → 用量 → 用时 → 时钟,是**同一行里
-    // 的一簇**,左对齐、不加 spacer。整行沿用 msg-actions 的 hover 浮现语义。
+    // 的一簇**,左对齐、不加 spacer。显隐由 chat-renderer 的 turn hover 驱动:
+    // 指针在本轮正文或页脚上时 .turn-tail-node 带 .turn-hovered,整行淡入。
     const row = el("div", "msg-actions turn-tail-actions");
-    // 交互口径=Mac:最新一轮常显,其余 hover 才浮现。
-    row.classList.toggle("always", isLastTurn);
 
     if (node.messageId != null) {
       row.append(makeCopyButton(() => node.closingText || ""));

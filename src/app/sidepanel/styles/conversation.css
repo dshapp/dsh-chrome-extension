@@ -500,11 +500,13 @@ span.ref-chip { cursor: default; }
   gap: 0.25rem;
   margin-block: 0 0.625rem;
 }
-/* turnTail 是独立兄弟节点,落不进 .msg-turn 的 hover 区,而一个"只有悬停到
-   自己才显形"的隐形行等于没有命中目标。改由整个记录区触发:指针进入对话即浮现。 */
-#msg-list:hover .turn-tail-actions, #msg-list:focus-within .turn-tail-actions { opacity: 1; }
-/* 交互口径=Mac:最新一轮的动作行常显,其余 hover 浮现。 */
-#msg-list .turn-tail-actions.always { opacity: 1; }
+/* 交互口径=Mac TurnHoverState:只有指针落在**本轮**(assistant 正文或页脚本身)上时
+   才浮现,由 chat-renderer 给 .turn-tail-node 挂 .turn-hovered(离开有 150ms 余量)。
+   键盘聚焦到行内按钮、用量/用时浮层开着、分叉进行中时也保持可见,
+   否则焦点/浮层会停在一个看不见的按钮上。 */
+.turn-tail-node.turn-hovered .turn-tail-actions,
+.turn-tail-actions:has(:focus-visible),
+.turn-tail-actions:has([aria-expanded="true"], .busy) { opacity: 1; }
 /* 分叉进行中:按钮转圈并禁用。 */
 .act-btn.busy { animation: fork-spin 800ms linear infinite; }
 @keyframes fork-spin { to { transform: rotate(360deg); } }
@@ -512,6 +514,11 @@ span.ref-chip { cursor: default; }
    tooltip 还在,能解释为什么不能点。 */
 .act-btn.unavailable { opacity: 0.4; cursor: default; }
 .act-btn.unavailable:hover { background: none; }
+/* 页脚行里的复制 / 分叉与同行用量、用时药丸同一套图标观感:13px、--text-faint;
+   hover 仍走 .act-btn 的底色 + --text。只作用于 turnTail,不影响消息自身的操作行。 */
+.turn-tail-actions .act-btn { color: var(--text-faint); }
+.turn-tail-actions .act-btn:hover:not(:disabled) { color: var(--text); }
+.turn-tail-actions .act-btn svg { inline-size: 13px; block-size: 13px; }
 .turn-tail {
   padding-inline: 0.125rem;
   font-size: 0.6875rem; color: var(--text-faint);

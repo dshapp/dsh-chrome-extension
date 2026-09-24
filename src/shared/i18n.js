@@ -1253,7 +1253,7 @@ const MESSAGES = Object.freeze({
     "question.progress": "{index}/{total}",
     "question.unanswered": "请选择一项或输入答案",
     "question.incomplete": "这一题还没有回答",
-    "composer.planChip": "Plan",
+    "composer.planChip": "计划",
     "composer.planChipOff": "plan mode 已开启 — 点击关闭(/plan off)",
     "composer.planExitFailed": "退出计划模式失败",
     "composer.placeholderPlan": "描述你的任务以生成计划",
