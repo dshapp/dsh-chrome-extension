@@ -21,7 +21,7 @@ import { test } from 'node:test'
 
 import { rulesForBackendUrl, applyFenceRules, FENCE_RULE_ID, FENCE_REMOVED_HEADERS } from '../src/platform/dsh/fence-rules.js'
 
-const EXT = 'hjgcllfkbkhmggdopnfhhmaiaedacnpg'
+const EXT = 'kgjjicancjnedmappjhefngdjaommpop'
 
 function conditionOf(backendUrl, options) {
   const rules = rulesForBackendUrl(backendUrl, options)
