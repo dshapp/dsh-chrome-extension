@@ -948,3 +948,46 @@ dialog.card-detail[open] { display: flex; flex-direction: column; }
   overflow: hidden;
 }
 
+
+/* 压缩行 / 命令行(对齐 Mac CompactionRow / CommandRow):图标 + 摘要本身就是入口,
+   命中区只包住这一簇墨迹,不铺满整行,也不再另挂一枚"查看详情"按钮。 */
+.chip-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; max-inline-size: 100%;
+  padding: 0; border: 0; background: transparent;
+  font: inherit; color: inherit; text-align: start;
+}
+button.chip-head, .chip-label-button { cursor: pointer; }
+button.chip-head:hover, .chip-label-button:hover { color: var(--text); }
+.chip-label-button {
+  padding: 0; border: 0; background: transparent; font: inherit; color: inherit; text-align: start;
+}
+.command-node { display: flex; flex-direction: column; gap: 4px; inline-size: 100%; }
+/* /goal 的人类输入:右对齐等宽气泡(Mac CommandRow / web GoalCommandInputView)。 */
+.command-input-bubble {
+  align-self: flex-end;
+  max-inline-size: min(82%, 42rem);
+  padding: 0.5rem 0.875rem;
+  border-radius: 1.25rem;
+  background: var(--user-bubble);
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8125rem;
+  white-space: pre-wrap; overflow-wrap: anywhere; text-align: end;
+}
+
+/* 聊天记录顶端的「加载更早」(对齐 Mac LoadMoreButton):已加载窗口之前还有历史时出现。 */
+#history-load-older {
+  display: flex; justify-content: center;
+  padding: 0.5rem 0 0.25rem;
+}
+#history-load-older[hidden] { display: none; }
+#history-load-older button {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--border); border-radius: 0.375rem;
+  background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 0.75rem; cursor: pointer;
+}
+#history-load-older button:hover:not(:disabled) { background: var(--bg-raised); color: var(--text); }
+#history-load-older button:disabled { cursor: default; opacity: 0.7; }

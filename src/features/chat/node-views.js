@@ -877,19 +877,32 @@ function prettyJson(raw) {
 
 // ---------- 其他节点 ----------
 
+/// 压缩行(对齐 Mac CompactionRow):图标 + 摘要,摘要位依次取
+/// 被遮蔽的项数/token 数 → 摘要首行 → "摘要不可用"。只有摘要事件落在已加载窗口内
+/// 才可点开详情;点的是图标+摘要本身,而不是行尾另挂的一枚按钮。
 export function createCompactionNode(node) {
+  const expandable = Boolean(node.summary);
+  let description = null;
+  if (node.shadowedItemCount != null && node.shadowedTokenCount != null) {
+    description = t("node.compactionSummary", {
+      items: String(node.shadowedItemCount), tokens: String(node.shadowedTokenCount)
+    });
+  } else if (node.summary) {
+    description = node.summary.split("\n")[0];
+  } else {
+    description = t("node.compactionUnavailable");
+  }
   const wrap = el("div", "chip-row compaction-chip");
-  wrap.append(el("span", "chip-icon", "⇲"));
-  const label = node.shadowedTokenCount != null
-    ? `${t("node.compaction")} · ${t("node.compactionTokens", { tokens: String(node.shadowedTokenCount) })}`
-    : t("node.compaction");
-  wrap.append(el("span", "chip-label", label));
-  // 摘要全文进弹窗,记录里只留这枚 chip。
-  if (node.summary) {
-    const more = el("button", "chip-more", t("card.viewDetail"));
-    more.type = "button";
-    more.setAttribute("aria-haspopup", "dialog");
-    more.addEventListener("click", () => openCardDetail({
+  const head = el(expandable ? "button" : "div", "chip-head");
+  const icon = el("span", "chip-icon");
+  icon.append(lucideIcon("archive", { size: 14 }));
+  head.append(icon, el("span", "chip-label", description));
+  wrap.append(head);
+  if (expandable) {
+    head.type = "button";
+    head.setAttribute("aria-haspopup", "dialog");
+    head.title = t("node.compaction");
+    head.addEventListener("click", () => openCardDetail({
       title: t("node.compaction"),
       copyText: node.summary,
       build: () => {
@@ -899,7 +912,6 @@ export function createCompactionNode(node) {
         return body;
       }
     }));
-    wrap.append(more);
   }
   return wrap;
 }
@@ -1001,25 +1013,43 @@ export function createTurnMaxTokensNode() {
   return wrap;
 }
 
+/// 宿主命令行(对齐 Mac CommandRow / web GenericCommandCard):
+/// 图标 + 结算文本就是整张卡的摘要 —— 不回显 "/name args",也不单列 success 标签;
+/// 多行结算文本只露首行,点开进详情弹窗;没有文本时只有非 success 的结论才写出来。
+/// `/goal` 额外把人类输入画成右对齐的等宽气泡,通用结果行留在它下面。
 export function createCommandNode(node) {
-  const wrap = el("div", "chip-row command-chip");
+  const chip = el("div", "chip-row command-chip");
   const prefixIcon = el("span", "chip-icon");
-  prefixIcon.append(lucideIcon("chevron-right", { size: 12 }));
-  wrap.append(prefixIcon);
-  const name = t("node.commandRan", { name: node.name ?? "?" });
-  wrap.append(el("span", "chip-label", node.args ? `${name} ${node.args}` : name));
-  if (node.outcome?.text) {
-    const more = el("button", "chip-more", node.outcome.kind);
-    more.type = "button";
-    more.setAttribute("aria-haspopup", "dialog");
-    more.addEventListener("click", () => openCardDetail({
-      title: name,
-      copyText: node.outcome.text,
-      build: () => el("pre", "command-output-body", node.outcome.text)
-    }));
-    wrap.append(more);
+  prefixIcon.append(lucideIcon("code-xml", { size: 14 }));
+  chip.append(prefixIcon);
+  const outcome = node.outcome;
+  const isError = outcome?.kind === "error";
+  const text = outcome?.text ?? "";
+  if (text) {
+    const firstLine = text.split("\n")[0];
+    if (text.includes("\n")) {
+      const more = el("button", "chip-label chip-label-button", firstLine);
+      more.type = "button";
+      more.setAttribute("aria-haspopup", "dialog");
+      more.addEventListener("click", () => openCardDetail({
+        title: firstLine,
+        copyText: text,
+        build: () => el("pre", "command-output-body", text)
+      }));
+      chip.append(more);
+    } else {
+      chip.append(el("span", "chip-label", firstLine));
+    }
+  } else if (outcome && outcome.kind !== "success") {
+    chip.append(el("span", "chip-label", isError ? t("node.commandFailed") : outcome.kind));
   }
-  if (node.outcome?.kind === "error") wrap.classList.add("error");
+  if (isError) chip.classList.add("error");
+  if (node.name !== "goal") return chip;
+
+  const wrap = el("div", "command-node");
+  const bubble = el("div", "command-input-bubble", `/goal${(node.args ?? "").replace(/\s+$/, "")}`);
+  bubble.setAttribute("aria-label", t("node.commandInput"));
+  wrap.append(bubble, chip);
   return wrap;
 }
 

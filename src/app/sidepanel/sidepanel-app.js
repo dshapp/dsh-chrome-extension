@@ -35,6 +35,7 @@ import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../../fe
 import { createPageContext } from "../../features/page-context/page-context.js";
 import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER, steerChordLabel } from "../../features/prompt-queue/index.js";
 import { isFirstUse, initializeDefaultWorkspace } from "../../features/workspaces/default-workspace.js";
+import { mountHistoryLoadOlder } from "./history-load-older.js";
 
 export function createSidepanelApp(root, deps, options = {}) {
   // 主题句柄由入口创建(首帧要在 app 组装前就定色),app 只负责把本地镜像与
@@ -60,6 +61,11 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 它缺席(或还没接上)时草稿本身照常工作,只是行上不亮徽章。
     deps.sessions.listStore?.setDraft?.(sessionId, meaningful);
   }
+
+  // 「加载更早」:窗口之前还有历史时挂在记录顶端(对齐 Mac LoadMoreButton)。
+  const historyLoadOlder = mountHistoryLoadOlder(elements.msgList, {
+    onLoad: () => (state.sessionId ? deps.sessions.loadEarlier(state.sessionId) : null)
+  });
 
   const chatRenderer = createChatRenderer(elements.msgList, {
     onFork: handleFork,
@@ -294,6 +300,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 查找标记包住的是真实文本节点,重建前先还原,避免与增量 markdown 打架。
     if (findBar.isOpen()) findBar.detach();
     chatRenderer.render(snapshot.nodes);
+    historyLoadOlder.update(snapshot.hasMore === true && (snapshot.nodes?.length ?? 0) > 0);
     if (findBar.isOpen()) findBar.refresh();
     // turn 轨道:随快照更新条目;active 在首个快照落到最后一轮,当前 active 消失时回退。
     turnRailItems = snapshot.turnRail ?? [];
@@ -1132,6 +1139,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 轨迹模式是一次点击的即时状态:打开任何会话都回到对话列。
     trajectory.close();
     chatRenderer.reset();
+    historyLoadOlder.update(false);
     turnRail.reset();
     turnRailItems = [];
     activeTurn = null;
@@ -1231,6 +1239,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     awaitingTurnStart = false;
     trajectory.close();
     chatRenderer.reset();
+    historyLoadOlder.update(false);
     takeoverCard?.dispose?.();
     takeoverCard?.remove();
     takeoverCard = null;

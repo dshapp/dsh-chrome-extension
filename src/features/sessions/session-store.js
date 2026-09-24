@@ -144,6 +144,9 @@ export function createSessionStore() {
       window: [],
       // 窗口曾因超限被截断(replayWindow 完整性受损),需从历史重载恢复。
       windowTruncated: false,
+      // 已加载窗口之前是否还有更早历史(session/page 的 hasMore)。为真时不做 turn process
+      // 折叠:早期过程行可能还没加载,折叠范围的起点未知(对齐 Mac rebuildTurnProcessSpecs)。
+      hasMore: false,
       // keyed contexts:key → context 记录
       contexts: new Map(),
       // "turn:step" → step/start 事件时间(TTFT 的分发边界)
@@ -287,7 +290,7 @@ export function createSessionStore() {
       sessionId: state.sessionId, cwd: state.cwd, queue: state.queue, jobs: state.jobs,
       pendingApproval: state.pendingApproval, pendingQuestion: state.pendingQuestion,
       projections: state.projections, projectionHistory: state.projectionHistory,
-      window: state.window
+      window: state.window, hasMore: state.hasMore
     };
     const keptTitle = state.title;
     state = blank();
@@ -1623,9 +1626,12 @@ export function createSessionStore() {
       state.deliverablesRevision += 1;
     }
 
-    // Turn process 折叠头:该轮出现最终回答后,把过程行收进一个折叠头。
-    // 折叠头自身 anchor 比首个成员小 0.1(web processControl 偏移),排在成员之前。
-    const processSpecs = buildTurnProcessSpecs(state.nodes, state.turnStartSeqs);
+    // Turn process 折叠头:该轮以最终回答关闭后,把过程行收进一个折叠头(对齐 Mac)。
+    // 折叠头自身 anchor = processStartSeq - 0.001,排在它折叠的首行之前。
+    const processSpecs = buildTurnProcessSpecs(state.nodes, {
+      hasMore: state.hasMore,
+      turnClosedAfter: (seq) => turnEndBoundaryAfter(seq) != null
+    });
     state.turnProcessByTurn = new Map();
     if (processSpecs.size) {
       for (const [turn, spec] of processSpecs) state.turnProcessByTurn.set(turn, spec);
@@ -1770,6 +1776,7 @@ export function createSessionStore() {
       historyError: state.historyError,
       currentTurn: state.currentTurn,
       lastSeq: state.lastSeq,
+      hasMore: state.hasMore,
       nodes: state.nodes,
       lastNode: state.lastNode ?? null,
       runningTool: state.runningTool ?? null,
@@ -1815,6 +1822,13 @@ export function createSessionStore() {
     setApproval(approval) { state.pendingApproval = approval ?? null; },
     setQuestion(question) { state.pendingQuestion = question ?? null; },
     setRunning(running) { state.running = Boolean(running); },
+    /// 已加载窗口之前是否还有更早历史。变化会影响 turn process 折叠,所以要重折节点。
+    setHasMore(hasMore) {
+      const next = hasMore === true;
+      if (state.hasMore === next) return;
+      state.hasMore = next;
+      state.nodesDirty = true;
+    },
     /// 某轮的变更工具产出路径(首见顺序)。渲染回合尾行与 mention 词表用。
     producedPaths(turn) { return state.producedPathsByTurn.get(turn) ?? []; },
     /// 某轮的 present 交付声明(首见路径顺序)。

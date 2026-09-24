@@ -1,17 +1,22 @@
 // Turn process 折叠:把一轮回答之前的思考/工具/旧回复收进一个折叠头。
 //
-// 判定对齐 web conversation-nodes/turn-process.ts:
-// - 折叠头只在出现"最终回答"之后才有意义(processWindowReady 要求 answerAnchorSeq 非空);
-// - 成员 = 同轮、anchorSeq ∈ [processStartSeq, answerAnchorSeq) 且不属于独立种类;
-// - 计数分"回复消息数 / 工具调用数 / 子代理数",子代理按工具名识别。
+// 逐条移植 Mac SessionStore.rebuildTurnProcessSpecs / isFoldedProcessRow
+// (Mac 本身移植 web conversation-nodes/turn-process.ts):
+// - 一轮只有在**最后一个** assistant step 已结算、带真实回复文本且不含工具调用,
+//   并且该轮已关闭(之后有 turn/end)时才折叠;
+// - 已加载窗口还能向前增长(hasMore)时不折叠 —— 早期过程行可能还没加载,
+//   此时折叠会藏起一段起点未知的范围;
+// - 成员按 **anchor 区间** [processStartSeq, answerAnchorSeq) 判定,而不是按行的 turn 号:
+//   command / retry / compaction 这类行根本没有 turn 号,孤儿结果的 turn 号也可能
+//   指向窗口外的更早一轮,但它们都落在区间内,正是读者要求收起的过程证据;
+// - 计数只数模型自己做的事:回复消息数 / 工具调用数 / 子代理数。
 //
-// 输出形态对齐 Mac TurnProcessRow:chevron + "N tool calls · N messages · N subagents";
-// 三项皆 0 时退化为 "Thought for a while"(由渲染层处理)。
-import { NodeKind, anchorSeq, nodeTurn, assistantHasVisibleContent } from "./chat-nodes.js";
+// 输出形态对齐 Mac TurnProcessRow:chevron + "N tool calls · N messages · N subagents"。
+import { NodeKind, AssistantStatus, anchorSeq, nodeTurn } from "./chat-nodes.js";
 
-/// 不参与折叠、始终独立成行的种类(web TURN_PROCESS_INDEPENDENT_KINDS / process-groups.ts INDEPENDENT)。
-/// turnTrigger 与 user/steering 同级:它说明谁唤醒了本轮,是回答的框架而不是过程证据,
-/// 不能被折进它自己开启的过程组(对齐 Mac 267bcde isProcessMember)。
+/// 不参与折叠、始终独立成行的种类(Mac isFoldedProcessRow 的独立名单 /
+/// web TURN_PROCESS_INDEPENDENT_KINDS)。名单之外的种类一律随区间折叠,
+/// 这样以后新增的行种类会跟着收起,而不是悄悄逃出折叠组。
 export const PROCESS_INDEPENDENT_KINDS = new Set([
   NodeKind.user,
   NodeKind.steering,
@@ -22,111 +27,144 @@ export const PROCESS_INDEPENDENT_KINDS = new Set([
   NodeKind.turnTail
 ]);
 
+/// 标记过程起点、但不进计数的种类(Mac:.modelRetry, .compaction, .command, .workflowRun, .unknownSurface)。
+const PROCESS_EVIDENCE_KINDS = new Set([
+  NodeKind.modelRetry,
+  NodeKind.compaction,
+  NodeKind.command,
+  NodeKind.workflowRun,
+  NodeKind.unknownSurface
+]);
+
+/// 开启新框架的输入:之后的行不能再记到它之前那一轮。
+const OPENING_INPUT_KINDS = new Set([NodeKind.user, NodeKind.steering, NodeKind.turnTrigger]);
+
 /// web isSubagentDelegationTool:subagent / subagent_*。
 export function isSubagentDelegationTool(name) {
   const value = String(name ?? "");
   return value === "subagent" || value.startsWith("subagent_");
 }
 
-function assistantHasText(node) {
-  return (node.blocks ?? []).some((block) => block?.type === "text" && block.text);
-}
-
-function assistantHasToolCall(node) {
-  return (node.blocks ?? []).some((block) => block?.type === "tool-call");
-}
-
-/// 该 assistant step 是否是"承载回答"的最终步:已结算、有文本、且不含工具调用。
-/// 对齐 web latestAnswer 的判定(blocks 全为回答内容)。
-function isFinalAnswer(node) {
-  return node.kind === NodeKind.assistant
-    && node.status !== "running"
-    && node.messageId != null
-    && assistantHasText(node)
-    && !assistantHasToolCall(node);
-}
-
-function nodeSeq(node) {
-  return node.kind === NodeKind.assistant
-    ? (node.firstVisibleSeq ?? node.startSeq)
-    : (node.startSeq ?? node.seq);
-}
-
-/// 单个 turn 的折叠规格;没有证据或没有最终回答时返回 null。
-function turnSpec(turn, nodes, turnStartSeq) {
-  const owned = nodes.filter((node) => nodeTurn(node) === turn);
-  // 证据看"是否有可见内容"(含 reasoning);回复计数看"是否承载文本"。
-  const visibleAssistants = owned
-    .filter((node) => node.kind === NodeKind.assistant && assistantHasVisibleContent(node))
-    .sort((a, b) => a.step - b.step);
-  const replyAssistants = visibleAssistants.filter(assistantHasText);
-  const tools = owned.filter((node) => node.kind === NodeKind.toolCall);
-
-  const evidenceSeqs = [
-    ...tools.map(nodeSeq),
-    ...visibleAssistants.map(nodeSeq)
-  ].filter((seq) => Number.isFinite(seq));
-  if (!evidenceSeqs.length) return null;
-
-  const answer = [...visibleAssistants].reverse().find(isFinalAnswer);
-  if (!answer) return null;
-
-  const answerSeq = nodeSeq(answer);
-  const earlierAssistantSeqs = visibleAssistants.filter((n) => n.step < answer.step).map(nodeSeq);
-  const externalSeqs = [
-    ...(turnStartSeq != null ? [] : tools.map(nodeSeq)),
-    ...earlierAssistantSeqs
-  ].filter((seq) => Number.isFinite(seq));
-
-  let toolCallCount = 0;
-  let subagentCount = 0;
-  for (const tool of tools) {
-    // 嵌套子调用不进记录流,也不计入折叠头的计数(与可见行一致)。
-    if (tool.parentCallId != null) continue;
-    if (isSubagentDelegationTool(tool.name)) subagentCount += 1;
-    else toolCallCount += 1;
+/// assistant 块是否是面向用户的回复内容(Mac isReplyBlock / web hasAssistantReplyContent):
+/// reasoning 与 tool-call 是过程,不是回答。
+function isReplyBlock(block) {
+  if (!block) return false;
+  switch (block.type) {
+    case "text": return Boolean(block.text && block.text.trim());
+    case "reasoning":
+    case "tool-call":
+      return false;
+    default:
+      return true;
   }
-  const messageCount = replyAssistants.filter((n) => n.step < answer.step).length;
-
-  return {
-    turn,
-    seq: Math.min(...evidenceSeqs),
-    controlAnchorSeq: Math.min(...evidenceSeqs),
-    processStartSeq: turnStartSeq ?? (externalSeqs.length ? Math.min(...externalSeqs) : answerSeq),
-    answerAnchorSeq: answerSeq,
-    answerStep: answer.step,
-    inlineReasoning: (answer.blocks ?? []).some((block) => block?.type === "reasoning" && block.text),
-    messageCount,
-    toolCallCount,
-    subagentCount
-  };
 }
 
-/// 为所有已出现最终回答的 turn 计算折叠规格。
-/// @param {Array} nodes 已 materialize 的节点(不含折叠头自身)。
-/// @param {Map<number, number>} turnStartSeqs turn → turn/start seq。
-export function buildTurnProcessSpecs(nodes, turnStartSeqs = new Map()) {
-  const turns = new Set();
-  for (const node of nodes) {
-    const turn = nodeTurn(node);
-    if (turn != null) turns.add(turn);
-  }
+function hasReasoning(node) {
+  return (node.blocks ?? []).some((block) => block?.type === "reasoning" && Boolean(block.text?.trim()));
+}
+
+/// 为所有可折叠的已关闭 turn 计算折叠规格。
+/// @param {Array} rows 已按 anchor 排好序的节点(不含折叠头自身)。
+/// @param {{ hasMore?: boolean, turnClosedAfter?: (seq: number) => boolean }} options
+///   hasMore:已加载窗口是否还能向前增长;turnClosedAfter:该 seq 之后是否有 turn/end。
+export function buildTurnProcessSpecs(rows, { hasMore = false, turnClosedAfter = () => false } = {}) {
   const specs = new Map();
-  for (const turn of turns) {
-    const spec = turnSpec(turn, nodes, turnStartSeqs.get(turn) ?? null);
-    if (!spec) continue;
-    // 没有可折叠成员时折叠头不该占行(web foldable 的等价判定)。
-    spec.memberCount = nodes.reduce((count, node) => count + (isProcessMember(node, spec) ? 1 : 0), 0);
+  if (hasMore) return specs;
+
+  const byTurn = new Map();
+  const order = [];
+  // 行按记录顺序到来:最近一个带 turn 号的行打开的那一轮,就是无 turn 行(重试、命令)的归属。
+  // 开启新框架的输入(user/steering/turnTrigger)终止这种归属。
+  let openTurn = null;
+  // 本轮第一个带 turn 号的行之前见到的无 turn 行:它们是最早的过程证据,
+  // 折叠组必须从它们开始,否则它们会被晾在折叠头上方。
+  let pendingAnchors = [];
+
+  for (const node of rows) {
+    if (OPENING_INPUT_KINDS.has(node.kind)) {
+      openTurn = null;
+      pendingAnchors = [];
+      continue;
+    }
+    const owned = nodeTurn(node);
+    if (owned != null) openTurn = owned;
+    const anchor = anchorSeq(node);
+    if (openTurn == null) {
+      pendingAnchors.push(anchor);
+      continue;
+    }
+    let acc = byTurn.get(openTurn);
+    if (!acc) {
+      acc = { processAnchors: [], lastStep: null, messagesByStep: new Map(), toolCalls: 0, subagents: 0 };
+      byTurn.set(openTurn, acc);
+      order.push(openTurn);
+    }
+    if (pendingAnchors.length) {
+      acc.processAnchors.push(...pendingAnchors);
+      pendingAnchors = [];
+    }
+    if (node.kind === NodeKind.assistant) {
+      const blocks = node.blocks ?? [];
+      const hasReply = blocks.some(isReplyBlock);
+      if (hasReply) acc.messagesByStep.set(node.step, (acc.messagesByStep.get(node.step) ?? 0) + 1);
+      // 被后续 step 取代的 step 一律是过程,无论它装着什么。
+      if (acc.lastStep) acc.processAnchors.push(acc.lastStep.anchor);
+      const isAnswer = node.status === AssistantStatus.settled && hasReply
+        && !blocks.some((block) => block?.type === "tool-call");
+      acc.lastStep = { anchor, step: node.step, isAnswer, reasoning: hasReasoning(node) };
+    } else if (node.kind === NodeKind.toolCall) {
+      if (isSubagentDelegationTool(node.name)) acc.subagents += 1;
+      else acc.toolCalls += 1;
+      acc.processAnchors.push(anchor);
+    } else if (PROCESS_EVIDENCE_KINDS.has(node.kind)) {
+      // 重试、命令、压缩标记过程从哪里开始,但不进摘要计数。
+      acc.processAnchors.push(anchor);
+    }
+    // turnTail / turnError / turnMaxTokens 留在组外。
+  }
+
+  for (const turn of order) {
+    const acc = byTurn.get(turn);
+    const last = acc?.lastStep;
+    // 没有最终回答时,过程本身就是唯一的证据;该轮也必须真的关闭了。
+    if (!last || !last.isAnswer || !turnClosedAfter(Math.floor(last.anchor))) continue;
+    const earlier = acc.processAnchors.filter((seq) => seq < last.anchor);
+    const external = earlier.length ? Math.min(...earlier) : null;
+    // Mac 在只有回答自带 reasoning 时也出折叠头(用来收起回答的思考块);
+    // 本扩展不隐藏回答的思考块,没有外部过程行时折叠头什么也收不起,不出。
+    if (external == null) continue;
+    let messageCount = 0;
+    for (const [step, count] of acc.messagesByStep) if (step < last.step) messageCount += count;
+    const spec = {
+      turn,
+      seq: external,
+      processStartSeq: external,
+      answerAnchorSeq: last.anchor,
+      answerStep: last.step,
+      inlineReasoning: last.reasoning,
+      messageCount,
+      toolCallCount: acc.toolCalls,
+      subagentCount: acc.subagents
+    };
+    spec.memberCount = rows.reduce((count, node) => count + (isProcessMember(node, spec) ? 1 : 0), 0);
     specs.set(turn, spec);
   }
   return specs;
 }
 
-/// 某节点是否落入折叠窗口(web ChatNodeSeat 的 processMember 判定)。
+/// 某节点是否落入该折叠窗口(Mac TurnProcessSpec.covers + isFoldedProcessRow 的独立名单)。
+/// 按 anchor 判定,不看行自己的 turn 号。
 export function isProcessMember(node, spec) {
   if (!spec || spec.answerAnchorSeq == null) return false;
   if (PROCESS_INDEPENDENT_KINDS.has(node.kind)) return false;
-  if (nodeTurn(node) !== spec.turn) return false;
   const anchor = anchorSeq(node);
   return anchor >= spec.processStartSeq && anchor < spec.answerAnchorSeq;
+}
+
+/// 在所有折叠规格里找覆盖该节点的那一个(各轮区间互不重叠,至多一个)。
+export function processSpecFor(node, specs) {
+  for (const spec of specs.values()) {
+    if (isProcessMember(node, spec)) return spec;
+  }
+  return null;
 }

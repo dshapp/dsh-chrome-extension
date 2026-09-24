@@ -177,10 +177,18 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     if (!sessionId) return;
     const entries = value?.records ?? value?.events ?? [];
     const first = entries.find((entry) => Number.isInteger(entry?.event?.seq));
-    historyBounds.set(sessionId, {
+    const bounds = {
       earliestSeq: first ? first.event.seq : -1,
       hasMore: value?.hasMore === true
-    });
+    };
+    historyBounds.set(sessionId, bounds);
+    syncStoreHasMore(bounds);
+  }
+
+  /// 把"窗口之前还有更早历史"同步给 store:它决定 turn process 能否折叠(对齐 Mac hasMore)。
+  /// 调用方都已确认 store 正承载该会话(applyHistoryValue 刚 reset 到它;翻页已校验 currentSessionId)。
+  function syncStoreHasMore(bounds) {
+    store.setHasMore(bounds?.hasMore === true && Number.isInteger(bounds.earliestSeq) && bounds.earliestSeq >= 0);
   }
 
   function applyHistoryValue(sessionId, value, buffered = []) {
@@ -233,6 +241,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       hasMore: value?.hasMore === true
     };
     historyBounds.set(sessionId, next);
+    syncStoreHasMore(next);
     return { prepended, earliestSeq: next.earliestSeq, hasMore: next.hasMore, value };
   }
 

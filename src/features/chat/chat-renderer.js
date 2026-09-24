@@ -5,7 +5,7 @@
 // 按索引比对遇到首个差异就要截断重建,那会把整段记录重画;按 id 对账则只动真正变了的行。
 import { t } from "../../shared/i18n.js";
 import { nodeId, NodeKind, isNodeRunning, nodeTurn } from "../sessions/chat-nodes.js";
-import { isProcessMember } from "../sessions/turn-process.js";
+import { processSpecFor } from "../sessions/turn-process.js";
 import { createNodeElement, updateNodeElement, closeTurnStatPopover } from "./node-views.js";
 import { closeCardDetail } from "./card-detail.js";
 import { toolRowModel } from "./tool-row-model.js";
@@ -170,13 +170,12 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
   // ---- turn process 折叠 ----
 
   /// 折叠头是成员行的开关;成员行用 hidden 隐藏(保留在 DOM,便于后续查找)。
+  /// 成员按 anchor 区间归属(对齐 Mac isFoldedProcessRow):命令/压缩/重试行没有 turn 号,
+  /// 孤儿结果的 turn 号可能指向窗口外的更早一轮,它们照样随所在区间一起收起。
   function applyProcessVisibility() {
     for (const entry of rendered.values()) {
-      const node = entry.node;
-      const turn = nodeTurn(node);
-      const spec = turn == null ? undefined : processSpecs.get(turn);
-      const member = spec ? isProcessMember(node, spec) : false;
-      entry.element.hidden = member ? !openProcessTurns.has(turn) : false;
+      const spec = processSpecFor(entry.node, processSpecs);
+      entry.element.hidden = spec ? !openProcessTurns.has(spec.turn) : false;
     }
   }
 

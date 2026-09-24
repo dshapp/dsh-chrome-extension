@@ -78,8 +78,8 @@ export function anchorSeq(node) {
     case NodeKind.assistant: return node.firstVisibleSeq ?? node.startSeq;
     case NodeKind.toolCall: return node.startSeq;
     case NodeKind.turnMaxTokens: return node.seq + 0.05;
-    // 对齐 web CHAT_SYNTHETIC_SEQ_OFFSETS.processControl = -0.1:折叠头排在首个成员之前。
-    case NodeKind.turnProcess: return node.seq - 0.1;
+    // 对齐 Mac ChatNode.turnProcess:紧贴在它折叠的首行之前(processStartSeq - 0.001)。
+    case NodeKind.turnProcess: return (node.processStartSeq ?? node.seq) - 0.001;
     case NodeKind.turnTail: return node.seq + 0.1;
     case NodeKind.workflowRun: return node.anchorSeq;
     default: return node.seq;
