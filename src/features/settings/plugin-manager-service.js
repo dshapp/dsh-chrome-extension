@@ -28,17 +28,36 @@ export function createPluginManagerService(connection) {
     async removeBundle(name) {
       return connection.call(RPC.pluginManagerRemoveBundle, { name });
     },
-    /// 安装前的检查:包名/地址 → 版本、来源、是不是 bundle,或被拒的原因。
-    async inspectPlugin(spec) {
-      return connection.call(RPC.pluginManagerInspect, { spec });
-    },
-    /// 安装。requestId 由调用方生成 —— 它同时是取消的凭据(宿主的
-    /// cancelInstall 只认这个 id),所以必须在整个弹窗生命周期里保持不变。
-    async installBundle(spec, { requestId, enabled = true, approvedBuilds } = {}) {
-      return connection.call(RPC.pluginManagerInstallBundle, {
-        spec, enabled, requestId,
-        ...(approvedBuilds?.length ? { approvedBuilds } : {})
+    /// 安装前的检查:包名/地址 → 版本、来源、是不是 bundle、作答的 registry,
+    /// 或被拒的原因与问过的 registries。宿主签名 inspect(spec, options?),
+    /// registry 为 undefined 时整个 options 省略(问宿主配置的首选源)。
+    async inspectPlugin(spec, { registry } = {}) {
+      return connection.call(RPC.pluginManagerInspect, {
+        spec,
+        ...(registry !== undefined ? { options: { registry } } : {})
       });
+    },
+    /// 安装。宿主签名 installBundle(spec, options?),选项必须包在 options 里
+    /// (对齐 Mac PluginInstallPayload)。requestId 由调用方生成 —— 它同时是取消的
+    /// 凭据(宿主的 cancelInstall 只认这个 id),所以必须在整个弹窗生命周期里保持不变。
+    /// registry:首先问的源,null = pnpm 自身配置的源,undefined = 宿主配置的首选。
+    async installBundle(spec, { requestId, enabled = true, approvedBuilds, registry } = {}) {
+      return connection.call(RPC.pluginManagerInstallBundle, {
+        spec,
+        options: {
+          enabled, requestId,
+          ...(approvedBuilds?.length ? { approvedBuilds } : {}),
+          ...(registry !== undefined ? { registry } : {})
+        }
+      });
+    },
+    /// 宿主会问的源:{registry, fallbackRegistries, resolved}。
+    async pluginRegistries() {
+      return connection.call(RPC.pluginManagerRegistries, {});
+    },
+    /// 宿主并行 ping npmjs 与 npmmirror,返回先答的那个 URL;都不通或关闭时 null。
+    async fastestRegistry() {
+      return connection.call(RPC.pluginRegistryProbeFastest, {});
     },
     async cancelInstall(requestId) {
       return connection.call(RPC.pluginManagerCancelInstall, { requestId });

@@ -10,6 +10,7 @@
 import { t } from "../../shared/i18n.js";
 import { SessionOrderBy } from "../../features/sessions/session-list-store.js";
 import { mountHistoryDrag } from "../../features/sessions/history-drag.js";
+import { mountHistoryGroupDrag } from "../../features/sessions/history-group-drag.js";
 import { resolveReorder } from "../../features/sessions/sidebar-reorder.js";
 import { renderMenuItems } from "./menu-items.js";
 import { lucideIconSvg } from "../../features/chat/file-icons.js";
@@ -136,6 +137,20 @@ export function mountHistoryViewOptions({
     void persist({ [COLLAPSED_KEY]: [...collapsed] });
   }
 
+  // 多个侧栏实例(每个窗口一个 side panel,外加直接打开的扩展页)共用这一把 key,
+  // 且每次都整份写回。不跟随别人的写入,自己下次一写就会把别的实例刚折/展开
+  // 的组覆盖回去 —— 表现为"折叠状态自己变了"。
+  try {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local" || !changes[COLLAPSED_KEY]) return;
+      const next = changes[COLLAPSED_KEY].newValue;
+      const incoming = new Set(Array.isArray(next) ? next.filter((id) => typeof id === "string") : []);
+      if (incoming.size === collapsed.size && [...incoming].every((id) => collapsed.has(id))) return;
+      collapsed = incoming;
+      rerender();
+    });
+  } catch { /* 非扩展环境(测试 / shim)没有 onChanged,单实例无所谓 */ }
+
   // 读回上次的两根轴与折叠态,以及手动顺序/置顶账本。都是异步的,
   // 读到之前列表按默认档显示。
   const ready = (async () => {
@@ -192,15 +207,28 @@ export function mountHistoryViewOptions({
       if (!section) return;
       const visible = section.rows.map((item) => item.sessionId);
       // full 传全量:落在最后一条渲染行之后、而后面还有折叠行时,锚点要取
-      // 第一条折叠行,而不是当成"移到末尾"。
+      // 完整列表里紧跟前一行的那条折叠行,而不是当成"移到末尾"。
       const move = resolveReorder({ movedId, overId, after, visible, full: section.allIds });
       if (!move) return;
       commitMove(groupId, move.movedId, move.beforeId);
     }
   });
 
+  // 分组拖拽:拖工作区标题调整分组顺序(Mac WorkspaceGroupDrag)。只在按工作区
+  // 分组时有意义;分组顺序不受排序档影响,所以状态档下照样能拖。
+  const groupDraggable = () => groupBy === SidebarGroupBy.workspace && typeof workspaces?.moveWorkspace === "function";
+  mountHistoryGroupDrag(list, {
+    enabled: groupDraggable,
+    onDrop(movedId, beforeId) {
+      // service 同步发布乐观顺序并 notify(抽屉据此重画),回包结算 / 失败回滚。
+      // 位置没记上不弹错打断用户(与工作目录菜单的拖动一致)。
+      void Promise.resolve(workspaces.moveWorkspace(movedId, beforeId)).catch(() => {});
+    }
+  });
+
   return {
     orderBy: () => orderBy,
+    isGroupDraggable: groupDraggable,
     groupBy: () => groupBy,
     /// 状态档下不让拖(置顶区在 mountHistoryDrag 的 enabled 里单独放行)。
     isDraggable: () => orderBy !== SessionOrderBy.status,
@@ -213,6 +241,14 @@ export function mountHistoryViewOptions({
       else collapsed.add(groupId);
       persistCollapsed();
       rerender();
+    },
+    /// 打开抽屉时把含当前会话的组展开(Mac onAppear 的 `!containsCurrent`),
+    /// 同样持久化。返回是否真的改了 —— 调用方据此决定要不要重算一遍分区。
+    reveal(groupId) {
+      if (!groupId || !collapsed.has(groupId)) return false;
+      collapsed.delete(groupId);
+      persistCollapsed();
+      return true;
     },
     /// 「展开其余 N 个」/「收起」。
     toggleExpanded(groupId) {

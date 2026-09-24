@@ -6,15 +6,18 @@
 // 行本体仍是"设为默认",默认值写 agent-preset-registry.selectedDefault(老宿主
 // agent-presets.default);模式选择关闭时不再可点(宿主会忽略这个默认值)。
 // 内置/自定义按 isBuiltInPreset 分:出厂 id 且没有自带 name 才算内置。
+// 0.1.7 起内置行多"模式说明 / 如何使用"两个入口(web AgentPresetSection 的
+// cardHelp;Mac 是一个 info 按钮),打开只读的 PresetGuide 弹窗。
 import { t } from "../../../shared/i18n.js";
 import { section, row, notice, spinner, escapeHtml, tag, button, selectorEscape } from "./settings-ui.js";
 import { presetDisplayName, presetDescription, isBuiltInPreset } from "../composer-dock.js";
 import { presetRegistryNamespace } from "./general-pane.js";
+import { presetGuide, openPresetGuide } from "./preset-guide-sheet.js";
 
 /// 创造模式的预设 id。Mac 与 web 都用这一个自指的出厂预设当"让 Agent 帮我写"的入口。
 const CREATOR_PRESET_ID = "cordis";
 
-export function createPresetsPane({ host, deps, settingsService, showToast, onStartCreatorDraft }) {
+export function createPresetsPane({ host, sheet, deps, settingsService, showToast, onStartCreatorDraft }) {
   let presets = [];
   let defaultId = null;
   let writable = false;
@@ -42,9 +45,19 @@ export function createPresetsPane({ host, deps, settingsService, showToast, onSt
       ? `<span class="set-warn">${escapeHtml(typeof preset.broken === "string" ? preset.broken : t("pset.brokenFallback"))}</span>`
       : escapeHtml(presetDescription(preset) ?? "");
     const busy = busyPresetId === preset.id;
+    const guide = sheet ? presetGuide(preset) : undefined;
+    const help = guide
+      ? `<div class="pset-guide-links">`
+        + [["explanation", "pset.modeExplanation"], ["usage", "pset.howToUse"]].map(([page, key]) => (
+          `<button class="set-link" type="button" data-guide-open="${page}"`
+          + ` aria-label="${escapeHtml(`${t(key)}: ${name}`)}">${escapeHtml(t(key))}</button>`
+        )).join("")
+        + `</div>`
+      : "";
     return row({
       label,
       hint: hint + `<div class="set-mono">${escapeHtml(preset.id)}</div>`,
+      extra: help,
       control: busy ? `<span class="set-icon-spin"></span>` : "",
       id: `pset-row-${preset.id}`
     });
@@ -123,9 +136,17 @@ export function createPresetsPane({ host, deps, settingsService, showToast, onSt
     });
     host.querySelector("#pset-create-draft")?.addEventListener("click", () => startCreatorDraft());
     for (const preset of presets) {
+      const rowElement = host.querySelector(`#pset-row-${selectorEscape(preset.id)}`);
+      // 说明入口:只读,不能冒泡成行点击(那会顺手把它设为默认)。
+      for (const link of rowElement?.querySelectorAll("[data-guide-open]") ?? []) {
+        link.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const guide = presetGuide(preset);
+          if (guide) openPresetGuide({ sheet, title: presetLabel(preset), guide, page: link.dataset.guideOpen });
+        });
+      }
       // 行本体点击 = 设为默认(Mac 的 onTapGesture)。坏掉的预设无从选择,
       // 模式选择关闭时也不该可点(写了会被宿主丢掉)。
-      const rowElement = host.querySelector(`#pset-row-${selectorEscape(preset.id)}`);
       if (rowElement && !preset.broken && preset.id !== defaultId && pickerEnabled && writable) {
         rowElement.classList.add("clickable");
         rowElement.setAttribute("role", "button");

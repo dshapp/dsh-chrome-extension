@@ -74,15 +74,25 @@ test("折叠的分组一行不画,但 total 仍报完整成员数", () => {
   assert.deepEqual(renderedIds, []);
 });
 
-test("含当前会话的分组不许保持折叠", () => {
-  const { sections } = buildSidebarSections({
-    sessions: [session("a")],
-    workspaces: [workspace("ws1", ["a"])],
+test("含当前会话的分组照样可以折叠,并通过 activeGroupId 报告它在哪组", () => {
+  // 回归:以前每次渲染都强行展开这个组,点它的标题永远没反应。
+  // 现在只报告位置,由抽屉在打开那一下决定展开(Mac onAppear 的 containsCurrent)。
+  const { sections, activeGroupId } = buildSidebarSections({
+    sessions: [session("a"), session("b")],
+    workspaces: [workspace("ws1", ["a"]), workspace("ws2", ["b"])],
     collapsedGroupIds: ["ws1"],
     activeSessionId: "a"
   });
-  assert.equal(sections[0].collapsed, false);
-  assert.deepEqual(sections[0].rows.map((item) => item.sessionId), ["a"]);
+  assert.equal(sections[0].collapsed, true);
+  assert.deepEqual(sections[0].rows, []);
+  assert.equal(activeGroupId, "ws1");
+});
+
+test("activeGroupId:未分组桶 / 置顶区 / 无当前会话", () => {
+  const base = { sessions: [session("a"), session("b")], workspaces: [workspace("ws1", ["a"])] };
+  assert.equal(buildSidebarSections({ ...base, activeSessionId: "b" }).activeGroupId, UNGROUPED_GROUP_ID);
+  assert.equal(buildSidebarSections({ ...base, pinnedIds: ["a"], activeSessionId: "a" }).activeGroupId, PINNED_GROUP_ID);
+  assert.equal(buildSidebarSections(base).activeGroupId, null);
 });
 
 test("超过 5 行的分组只画前 5 行,其余记进 hiddenCount;展开后全画", () => {
@@ -103,6 +113,55 @@ test("超过 5 行的分组只画前 5 行,其余记进 hiddenCount;展开后全
   const opened = buildSidebarSections({ ...input, expandedGroupIds: ["ws1"] });
   assert.deepEqual(opened.sections[0].rows.map((item) => item.sessionId), ids);
   assert.equal(opened.sections[0].hiddenCount, 0);
+});
+
+test("折叠分组不隐藏运行中会话:运行中 / 子代理在跑 / 当前空白行不占名额,按原序穿插", () => {
+  const ids = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"];
+  const live = { s7: { running: true }, s9: { blank: true } };
+  const input = {
+    sessions: ids.map((id) => session(id, live[id] ?? {})),
+    workspaces: [workspace("ws1", ids)],
+    orderBy: "manual",
+    sortRows: (rows) => rows,
+    activeSessionId: "s9",
+    isRunningSubagentRoot: (id) => id === "s8"
+  };
+  const folded = buildSidebarSections(input);
+  // 闲置名额 5 个给 s1–s5;s6 被折叠;s7(运行中)、s8(子代理在跑)、s9(当前空白)始终画出。
+  assert.deepEqual(folded.sections[0].rows.map((item) => item.sessionId), ["s1", "s2", "s3", "s4", "s5", "s7", "s8", "s9"]);
+  assert.equal(folded.sections[0].hiddenCount, 1);
+  assert.deepEqual(folded.renderedIds, ["s1", "s2", "s3", "s4", "s5", "s7", "s8", "s9"]);
+  // 不注入子代理判定时 s8 当闲置行,名额已满被折叠。
+  const plain = buildSidebarSections({ ...input, isRunningSubagentRoot: null });
+  assert.deepEqual(plain.sections[0].rows.map((item) => item.sessionId), ["s1", "s2", "s3", "s4", "s5", "s7", "s9"]);
+  assert.equal(plain.sections[0].hiddenCount, 2);
+});
+
+test("运行中行不占名额,但整组折叠时照样一行不画;单列表上限不受影响", () => {
+  const ids = ["s1", "s2", "s3"];
+  const sessions = ids.map((id) => session(id, { running: true }));
+  const collapsed = buildSidebarSections({
+    sessions, workspaces: [workspace("ws1", ids)], collapsedGroupIds: ["ws1"], rowLimit: 1
+  });
+  assert.deepEqual(collapsed.sections[0].rows, []);
+  const flat = buildSidebarSections({ sessions, groupBy: SidebarGroupBy.flat, rowLimit: 1 });
+  assert.equal(flat.sections[0].rows.length, 3, "单列表走 FLAT_ROW_LIMIT,与 rowLimit 无关");
+});
+
+test("拖到最后一条渲染行之后:锚点取完整列表里紧跟其前一行的折叠行", async () => {
+  const { resolveReorder } = await import("../src/features/sessions/sidebar-reorder.js");
+  // 折叠组画出 s1,s2 与运行中的 s5;s3,s4 被折起。
+  const full = ["s1", "s2", "s3", "s4", "s5", "s6"];
+  const visible = ["s1", "s2", "s5"];
+  // s1 拖到 s5 之后 → 落在 s5 与 s6 之间。
+  assert.deepEqual(resolveReorder({ movedId: "s1", overId: "s5", after: true, visible, full }), { movedId: "s1", beforeId: "s6" });
+  // s5 拖到 s2 之后 = 原位 → null;拖到 s1 之前 → 锚点取渲染序里的下一行。
+  assert.deepEqual(resolveReorder({ movedId: "s5", overId: "s2", after: true, visible, full }), null);
+  assert.deepEqual(resolveReorder({ movedId: "s5", overId: "s1", after: false, visible, full }), { movedId: "s5", beforeId: "s1" });
+  // 前缀场景保持原语义:s1 拖到 s2 之后 → 锚点是第一条折叠行 s3。
+  assert.deepEqual(resolveReorder({ movedId: "s1", overId: "s2", after: true, visible: ["s1", "s2"], full }), { movedId: "s1", beforeId: "s3" });
+  // 真到末尾 → null。
+  assert.deepEqual(resolveReorder({ movedId: "s1", overId: "s6", after: true, visible: full, full }), { movedId: "s1", beforeId: null });
 });
 
 test("置顶区排在最前,并且置顶行不再出现在下面的分组里", () => {

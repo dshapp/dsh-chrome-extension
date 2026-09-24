@@ -62,7 +62,9 @@ export function createApiClient(options) {
   /// `/api/changes.summary` / `/api/changes.diff`。与 post() 的区别:
   /// 404 不是失败,而是"宿主已不再提供这条记录"(会话被回收 / 本进程没记过),
   /// 与 Mac APIClient.changesGet 同口径 —— 调用方据此不画卡,而不是报错。
-  async function getJson(path, query = {}, timeoutMs = 30000, mayRetryAuth = true) {
+  ///
+  /// read 决定怎么读 body(json / blob);鉴权重试、超时与错误分流两者共用。
+  async function get(path, query, timeoutMs, read, mayRetryAuth = true) {
     const search = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
       if (value == null) continue;
@@ -79,12 +81,12 @@ export function createApiClient(options) {
       });
       if (response.status === 401 && mayRetryAuth && await options.onUnauthorized?.()) {
         clearTimeout(timer);
-        return getJson(path, query, timeoutMs, false);
+        return get(path, query, timeoutMs, read, false);
       }
       if (response.status === 404) return null;
       if (response.status === 403) throw new DshTransportError(t("api.trustFence403"));
       if (!response.ok) throw new DshTransportError(`DSH HTTP ${response.status} ${path}`);
-      return await response.json();
+      return await read(response);
     } catch (error) {
       if (error instanceof DshTransportError) throw error;
       if (error?.name === "AbortError") throw new DshTransportError(t("api.timeout", { path }));
@@ -93,6 +95,15 @@ export function createApiClient(options) {
       clearTimeout(timer);
     }
   }
+
+  const getJson = (path, query = {}, timeoutMs = 30000) =>
+    get(path, query, timeoutMs, (response) => response.json());
+  /// 同一条 GET 通道读字节,用于 `/api/file?path=…`(dsh 0.1.7 本地路径图片)。
+  /// 宿主这条路由要 cookie 鉴权,且扩展页发起的 <img> 请求带 Sec-Fetch-Site:
+  /// cross-site 会被 api-request-trust 403(DNR 围栏只摘 xmlhttprequest 的头),
+  /// 所以不能直接 <img src>,必须走 fetch 再转 blob:。404 → null。
+  const getBlob = (path, query = {}, timeoutMs = 30000) =>
+    get(path, query, timeoutMs, (response) => response.blob());
 
   function parseServerResponse(envelope, expectedRpcId) {
     if (!envelope || envelope.type !== "server-response") {
@@ -156,6 +167,7 @@ export function createApiClient(options) {
       return envelope.value;
     },
     getJson,
+    getBlob,
     async settleRemoteEvent(clientId, eventId, outcome) {
       const method = "$events/result";
       const rpcId = mkId();

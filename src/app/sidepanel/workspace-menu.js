@@ -193,19 +193,24 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
     await writeStoredId(selectedId);
   }
 
+  /// 选中一个刚由宿主建好的 workspace(添加目录 / 首次使用的默认工作区),并持久化。
+  async function adopt(workspace) {
+    workspaces = deps.workspaces.workspaces;
+    selectedId = workspace.workspaceId ?? null;
+    tempSelected = false;
+    orphanCwd = null;
+    paint();
+    renderMenu();
+    onChange?.(selected());
+    await writeStoredId(selectedId);
+  }
+
   // 系统目录选择器 → workspace.create。用户取消(null)时保持原选中不变。
   async function addDirectory() {
     try {
       const created = await deps.workspaces.pickAndCreate();
       if (!created) return;
-      workspaces = deps.workspaces.workspaces;
-      selectedId = created.workspaceId ?? null;
-      tempSelected = false;
-      orphanCwd = null;
-      paint();
-      renderMenu();
-      onChange?.(selected());
-      await writeStoredId(selectedId);
+      await adopt(created);
     } catch (error) {
       showToast?.(deps.formatErrorDetails ? deps.formatErrorDetails(error) : t("workspace.addFailed"));
     }
@@ -245,6 +250,7 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
     /// 直接复用这条路径 —— 选中/持久化/失败提示都已经在里面了,菜单里那一项与
     /// 抽屉那颗按钮因此不会走岔。
     addDirectory,
+    adopt,
     // 等待 workspace/follow baseline 并恢复上次选择；失败时退化为只有「全部」。
     async refresh() {
       try {

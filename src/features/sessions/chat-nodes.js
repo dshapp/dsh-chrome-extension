@@ -8,7 +8,9 @@
 export const NodeKind = Object.freeze({
   user: "user",
   steering: "steering",
-  context: "context",
+  // 唤醒本轮的非人类消息(web `turn-trigger`)。其余普通 context 注入不进聊天记录
+  // (web contract/chat-visibility.ts isVisibleChatNode),只在 Trajectory 里看。
+  turnTrigger: "turnTrigger",
   assistant: "assistant",
   toolCall: "toolCall",
   compaction: "compaction",
@@ -54,7 +56,7 @@ export function nodeId(node) {
   switch (node.kind) {
     case NodeKind.user: return `u-${node.messageId}`;
     case NodeKind.steering: return `s-${node.messageId}`;
-    case NodeKind.context: return `c-${node.messageId}`;
+    case NodeKind.turnTrigger: return `trg-${node.messageId}`;
     case NodeKind.assistant: return `a-${node.turn}:${node.step}`;
     case NodeKind.toolCall: return `t-${node.callId}`;
     case NodeKind.compaction: return `cmp-${node.compactionId}`;
@@ -116,12 +118,29 @@ export function steeringNode({ seq, time, messageId, content }) {
   return { kind: NodeKind.steering, seq, time, messageId, content: content ?? [] };
 }
 
-export function contextNode({ seq, time, messageId, content, source, provenanceLabel, provenanceRole }) {
-  return {
-    kind: NodeKind.context, seq, time, messageId, content: content ?? [],
-    source: source ?? null, provenanceLabel: provenanceLabel ?? null,
-    provenanceRole: provenanceRole ?? "context"
-  };
+/// 唤醒本轮的非人类消息(对齐 Mac TurnTriggerNode)。source 决定标题与图标。
+export function turnTriggerNode({ seq, time, messageId, content, source }) {
+  return { kind: NodeKind.turnTrigger, seq, time, messageId, content: content ?? [], source: source ?? null };
+}
+
+/// 按 source.kind 选标题 key 与图标名(web chat/turn-trigger.ts turnTriggerDetails)。
+/// 未登记的来源用通用"收到执行请求",不臆造身份。
+export function turnTriggerDetails(source) {
+  const record = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  switch (record.kind) {
+    case "goal": return { title: "message.trigger.goal", icon: "target" };
+    case "agent-message": return { title: "message.trigger.agent", icon: "send-horizontal" };
+    case "team-message": return { title: "message.trigger.team", icon: "message-circle" };
+    case "subagent-settled": return { title: "message.trigger.subagent", icon: "git-fork" };
+    case "webhook":
+      return record.provider === "github"
+        ? { title: "message.trigger.github", icon: "git-branch" }
+        : { title: "message.trigger.webhook", icon: "globe" };
+    case "schedule": return { title: "message.trigger.schedule", icon: "clock" };
+    case "tool-jobs": return { title: "message.trigger.job", icon: "list" };
+    case "cordis-host-runner": return { title: "message.trigger.plugin", icon: "puzzle" };
+    default: return { title: "message.trigger.request", icon: "layers" };
+  }
 }
 
 /// assistant step。blocks 是稀疏槽位数组(索引由 wire 的 chunk.index 指定),

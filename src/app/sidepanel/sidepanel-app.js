@@ -34,6 +34,7 @@ import { createElementPicker } from "../../features/element-picker/element-picke
 import { isElementPickerToggleChord, elementPickerShortcutLabel } from "../../features/element-picker/element-picker-shortcut.js";
 import { createPageContext } from "../../features/page-context/page-context.js";
 import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER, steerChordLabel } from "../../features/prompt-queue/index.js";
+import { isFirstUse, initializeDefaultWorkspace } from "../../features/workspaces/default-workspace.js";
 
 export function createSidepanelApp(root, deps, options = {}) {
   // 主题句柄由入口创建(首帧要在 app 组装前就定色),app 只负责把本地镜像与
@@ -88,7 +89,10 @@ export function createSidepanelApp(root, deps, options = {}) {
         onOpenSession: (sessionId) => { void openSession(sessionId).catch((error) => showToast(format(error))); },
         onRevealPath: (path) => { void deps.workspaces.revealPath(path).catch((error) => showToast(format(error))); },
         // 历史图片只有 attachmentId,按需回读字节(web historical-images)。
-        readAttachment: (attachmentId) => deps.sessions.readAttachment?.(snap?.sessionId, attachmentId) ?? null
+        readAttachment: (attachmentId) => deps.sessions.readAttachment?.(snap?.sessionId, attachmentId) ?? null,
+        // 助手正文里的本地绝对路径图片:宿主 GET /api/file?path=…(dsh 0.1.7,
+        // web localPathMediaUrl),要鉴权,所以读成 Blob 而不是直接 <img src>。
+        readLocalImage: (path) => deps.connection.getBlob("/api/file", { path })
       };
     }
   });
@@ -430,7 +434,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     } catch (error) {
       // 插队/删除撞上 agent 刚好取走该条:队列帧已经反映了结果,不是用户能处理的失败。
       const code = error?.code;
-      if (code === "steer-unavailable" || code === "queue-item-not-found") return;
+      if (code === "session/steer-unavailable" || code === "session/queue-item-not-found") return;
       showToast(format(error));
     }
   }
@@ -449,7 +453,7 @@ export function createSidepanelApp(root, deps, options = {}) {
         await deps.sessions.updateQueue(state.sessionId, item.id, { kind: "steer" });
       } catch (error) {
         const code = error?.code;
-        if (code === "steer-unavailable" || code === "queue-item-not-found") return;
+        if (code === "session/steer-unavailable" || code === "session/queue-item-not-found") return;
         showToast(format(error));
         return;
       }
@@ -674,7 +678,12 @@ export function createSidepanelApp(root, deps, options = {}) {
   }
 
   // 后台任务入口(header chip + 明细 popover,对齐 Mac/web JobListAction)。
-  const jobList = mountJobList(elements.jobsBtn, elements.jobsMenu);
+  // 停止(job/kill)与详情实时输出(job/follow)直接走连接;名册仍由 session-service 的 job/list 流喂。
+  const jobList = mountJobList(elements.jobsBtn, elements.jobsMenu, {
+    connection: deps.connection,
+    getSessionId: () => state.sessionId,
+    notify: (message) => showToast(message)
+  });
 
   /// 上下文统计药丸 + 后台任务 chip 一起刷新。两者数据同源(runtime snapshot),
   /// 分开调用会让一条快照在两处渲染出不同时刻的状态。
@@ -1051,7 +1060,7 @@ export function createSidepanelApp(root, deps, options = {}) {
   async function newSession(options) {
     const { _retried = false, agentPreset = null } = (options && typeof options === "object" && !("target" in options))
       ? options : {};
-    const workspace = workspaceMenu?.selected() ?? null;
+    const workspace = workspaceMenu?.selected() ?? await prepareDefaultWorkspace();
     // agentPreset 只在"用创造模式创作"那条路径上传:宿主在 create 时就按它组装
     // agent,比先建再 select 少一次重建(select 是斜杠命令,会重启一次 agent)。
     const input = {
@@ -1074,8 +1083,32 @@ export function createSidepanelApp(root, deps, options = {}) {
     }
   }
 
+  /// 首次使用(没有任何工作区、会话、归档)时先让宿主建默认工作区并选中,首个会话
+  /// 与首条消息就落在 <Documents>/deepseek-harness/<默认工作区> 里。必须在 session.create
+  /// 之前:空白会话也算历史,建完再问宿主只会回无 value。失败只提示,照旧不带归属建会话
+  ///(对齐 Mac 267bcde selectInitialSession;web 此时退回目录选择器)。
+  async function prepareDefaultWorkspace() {
+    if (!workspaceMenu || !deps.workspaces?.initializeDefault) return null;
+    if (!isFirstUse({
+      selected: workspaceMenu.selected(),
+      workspaces: deps.workspaces.workspaces,
+      sessions: deps.sessions.listStore?.get?.() ?? [],
+      archivedSessionIds: deps.workspaces.archivedSessionIds
+    })) return null;
+    try {
+      const workspace = await initializeDefaultWorkspace(deps.workspaces);
+      if (!workspace) return null;
+      await workspaceMenu.adopt(workspace);
+      return workspace;
+    } catch {
+      showToast(t("workspace.defaultFailed"));
+      return null;
+    }
+  }
+
   function isSessionUnopenable(error) {
-    return ["agent-busy", "session-not-found", "internal"].includes(error?.code);
+    // 宿主错误码带命名空间(session/agent-busy …);子代理会话被直接打开时即回 session/agent-busy。
+    return ["session/agent-busy", "session/not-found", "gateway/internal"].includes(error?.code);
   }
 
   // 会话打开竞态令牌:快速切换时迟到的历史加载不得覆盖新会话。
@@ -1272,7 +1305,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     const rendered = historyDrawer?.renderedOrder?.() ?? [];
     if (rendered.length) return rendered;
     return visibleSessions(deps.sessions.listStore.get(), {
-      archivedIds: deps.workspaces?.archivedSessionIds ?? [],
+      archivedIds: deps.sessions?.archivedSessionIds?.() ?? deps.workspaces?.archivedSessionIds ?? [],
       activeSessionId: state.sessionId
     }).map((item) => item.sessionId);
   }
@@ -1622,7 +1655,9 @@ export function createSidepanelApp(root, deps, options = {}) {
       // 抽屉按工作区分组(对齐 Mac 左侧栏),所以它要的是整份 workspace 名单
       // 与归档名单,而不再是"当前选中目录"那一个过滤条件。
       workspaces: () => deps.workspaces?.workspaces ?? [],
-      archivedIds: () => deps.workspaces?.archivedSessionIds ?? [],
+      // 归档集合以会话服务为准:它在归档 / 取消归档回包时立即结算,而 workspace
+      // 服务要等 follow 帧 —— 刚取消归档的行不该在列表里多藏一拍。
+      archivedIds: () => deps.sessions?.archivedSessionIds?.() ?? deps.workspaces?.archivedSessionIds ?? [],
       orderStore: deps.sessions?.orderStore ?? null,
       pinnedStore: deps.pinnedStore ?? null,
       // 分区标题右侧的「添加目录」:与工作目录菜单里的那一项同一条路径。

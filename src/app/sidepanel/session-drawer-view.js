@@ -35,7 +35,7 @@ const STATUS_HELP_KEY = Object.freeze({
 ///(搬而不是重建 —— popover 的锚点与事件绑定都挂在那两个节点上)。
 export const SECTION_HEAD_ID = "history-section-head";
 
-function itemTitle(item) {
+export function itemTitle(item) {
   // session.list 的标题在 projections.values.title;无标题回退到去掉 "session-" 前缀的短 id。
   return item.projections?.values?.title
     || `session ${String(item.sessionId).replace(/^session-/, "").slice(0, 8)}`;
@@ -157,11 +157,16 @@ function sectionHeadHtml(label, { withActions = false } = {}) {
 /// 分组标题:整行可点折叠。组名靠左顶格(与下面的会话行同一条阅读起点),
 /// 行数与随折叠态翻转的 chevron 都收在右端 —— 左边只留文字,扫读一列组名时
 /// 不会被一排三角打断。
-function groupHeadHtml(section) {
+///
+/// 真实 workspace 的标题可拖(ctx.groupDraggable),用来调整分组顺序 —— 置顶区与
+/// 「未分组」不是 workspace,不参与。data-group-kind 给拖拽模块区分这三种。
+function groupHeadHtml(section, { draggable = false } = {}) {
   const label = section.title ?? t("sessions.groupUngrouped");
   const chevron = lucideIconSvg(section.collapsed ? "chevron-right" : "chevron-down", { size: 12 });
   return [
     `<li class="history-group${section.collapsed ? " collapsed" : ""}" data-group-id="${escapeHtml(section.id)}"`,
+    ` data-group-kind="${escapeHtml(section.kind)}"`,
+    draggable && section.kind === "workspace" ? ' draggable="true"' : "",
     ` role="button" tabindex="-1" aria-expanded="${section.collapsed ? "false" : "true"}"`,
     section.hint ? ` title="${escapeHtml(section.hint)}"` : "",
     `>`,
@@ -207,7 +212,7 @@ export function renderSections(list, { sections, groupBy, ctx }) {
       sectionHeadWritten = true;
     }
     if (section.kind === "workspace" || section.kind === "ungrouped") {
-      html.push(groupHeadHtml(section));
+      html.push(groupHeadHtml(section, { draggable: Boolean(ctx?.groupDraggable) }));
     }
     const grouped = section.kind === "workspace" || section.kind === "ungrouped";
     for (const item of section.rows) {

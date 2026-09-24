@@ -12,7 +12,7 @@
 import {
   NodeKind, AssistantStatus, RetryState, WorkflowStatus,
   nodeId, anchorSeq, assistantNode, assistantVisible, toolCallNode, toolResult,
-  userNode, steeringNode, contextNode, compactionNode, modelRetryNode,
+  userNode, steeringNode, turnTriggerNode, compactionNode, modelRetryNode,
   turnErrorNode, turnMaxTokensNode, commandNode, turnProcessNode, turnTailNode, workflowRunNode,
   unknownSurfaceNode, toAssistantBlock, emptyBlockFor
 } from "./chat-nodes.js";
@@ -23,7 +23,7 @@ import { mergeTurnRailItems, clipTurnPreview, TurnRailPreview } from "./turn-rai
 import { producedPath, presentedFiles } from "./turn-deliverables.js";
 import { changesAnnouncement } from "../changes/turn-changes.js";
 import { buildTurnProcessSpecs } from "./turn-process.js";
-import { projectReferenceLabels } from "./references.js";
+import { projectReferenceLabels, sessionRecallReferences } from "./references.js";
 import { assembleTrajectory } from "../trajectory/trajectory-model.js";
 import { getLang } from "../../shared/i18n.js";
 
@@ -156,6 +156,16 @@ export function createSessionStore() {
       inboxByTarget: new Map(),
       // 被 next-step 消费掉的 steering 消息 id
       claimedSteeringIds: new Set(),
+      // 每个 inbox target 的当前认领(web inbox.ts InboxState):
+      // target → { ids:Set, seq, human }。唤醒判定(isWaking)读它。
+      inboxClaims: new Map(),
+      // inbox 里人类来源(source.kind === "user")的消息 id,认领时据此判断批次里有没有人。
+      humanInboxIds: new Set(),
+      // currentTurn 里最近开始的 step(idle steer 只认 step 1)。
+      currentStep: 0,
+      // session-reference 召回:所属用户消息 seq(召回 seq - 1)→ references[]。
+      // 普通 context 不再成行,引用标签从这里回贴(见 references.js)。
+      sessionRecalls: new Map(),
       activeSteps: new Set(),
       // projections
       projections: new Map(),       // key → { value, seq }
@@ -434,10 +444,38 @@ export function createSessionStore() {
     pending.splice(boundedStart, removalCount, ...insertedIds);
     state.inboxByTarget.set(target, pending);
     for (const id of insertedIds) state.claimedSteeringIds.delete(id);
-    // next-step 队列被消费(非取消)= 这些消息以 steering 身份进入了本轮。
-    if (target === "next-step" && str(d.outcome) !== "canceled") {
-      for (const id of removed) state.claimedSteeringIds.add(id);
+    // 非取消的移除 = 一次认领(web inbox.ts applySplice):它取代该 target 的当前认领;
+    // 其余拼接只把重新插入的 id 从当前认领里剔掉。
+    if (removalCount > 0 && str(d.outcome) !== "canceled") {
+      // next-step 队列被消费 = 这些消息以 steering 身份进入了本轮。
+      if (target === "next-step") for (const id of removed) state.claimedSteeringIds.add(id);
+      state.inboxClaims.set(target, {
+        ids: new Set(removed),
+        seq: event.seq,
+        human: removed.some((id) => state.humanInboxIds.has(id))
+      });
+    } else {
+      const claim = state.inboxClaims.get(target);
+      if (claim) for (const id of insertedIds) claim.ids.delete(id);
     }
+    for (const item of d.inserted) {
+      if (isObject(item) && isObject(item.source) && item.source.kind === "user" && str(item.id)) {
+        state.humanInboxIds.add(item.id);
+      }
+    }
+  }
+
+  /// 非人类消息是否唤醒了本轮(web conversation-nodes/message.ts 的 waking;Mac isWaking):
+  /// 在当前 next-turn 认领里;或是 idle steer —— step 1 内、turn/start 之后的 next-step 认领,
+  /// 本轮没有 next-turn 认领,且批次里没有人类消息(有人时由人类消息开启本轮)。
+  function isWaking(id) {
+    const nextTurn = state.inboxClaims.get("next-turn");
+    if (nextTurn?.ids.has(id)) return true;
+    if (state.currentTurn === 0 || state.currentStep !== 1) return false;
+    const turnStart = state.turnStartSeqs.get(state.currentTurn);
+    const nextStep = state.inboxClaims.get("next-step");
+    if (turnStart == null || !nextStep || nextStep.seq <= turnStart || nextStep.human) return false;
+    return nextStep.ids.has(id) && (nextTurn?.seq ?? -1) < turnStart;
   }
 
   function isCompactCheckpoint(source) {
@@ -469,38 +507,20 @@ export function createSessionStore() {
     // v4(0.1.7)改成生产者自己的 kind:"compact-checkpoint"。
     if (isCompactCheckpoint(msg.source)) return;
 
-    let kind;
-    if (msg.sourceKind === "user") {
-      kind = state.claimedSteeringIds.has(msg.id) ? NodeKind.steering : NodeKind.user;
-    } else {
-      kind = NodeKind.context;
-    }
-
     const base = { seq: event.seq, time: event.time, messageId: msg.id, content: msg.content };
     let node;
-    if (kind === NodeKind.steering) {
-      node = steeringNode(base);
-    } else if (kind === NodeKind.context) {
-      const prov = contextProvenance(msg.source);
-      node = contextNode({ ...base, source: msg.source, provenanceLabel: prov.label, provenanceRole: prov.role });
+    if (msg.sourceKind === "user") {
+      node = state.claimedSteeringIds.has(msg.id) ? steeringNode(base) : userNode(base);
+    } else if (isWaking(msg.id)) {
+      node = turnTriggerNode({ ...base, source: msg.source });
     } else {
-      node = userNode(base);
+      // 普通 context 注入不进聊天记录(web isVisibleChatNode),Trajectory 仍可看。
+      // session-reference 召回只留下引用标签:它紧跟所属用户消息(seq-1)。
+      const refs = sessionRecallReferences(msg.source);
+      if (refs.length) state.sessionRecalls.set(event.seq - 1, refs);
+      return;
     }
-    state.contexts.set(`${kind}:${msg.id}`, { type: "finalized", node });
-  }
-
-  /// context 行的来源标签:插件名 / 工具名 / 泛化 "context"。
-  ///
-  /// v4(0.1.7)不再有 {kind:"plugin", plugin} 这层:kind 就是生产者名(如
-  /// "goal"、"agent-instructions"),未登记的第三方插件记作 "plugin:<name>" ——
-  /// 显示时去掉这个前缀。
-  function contextProvenance(source) {
-    if (!isObject(source)) return { label: null, role: "context" };
-    const plugin = str(source.plugin);
-    const tool = str(source.tool);
-    const kind = str(source.kind) ?? "context";
-    const producer = kind.startsWith("plugin:") ? kind.slice("plugin:".length) : null;
-    return { label: plugin ?? tool ?? producer ?? null, role: producer ?? kind };
+    state.contexts.set(`${node.kind}:${msg.id}`, { type: "finalized", node });
   }
 
   // ---- assistant 流式 ----
@@ -928,6 +948,7 @@ export function createSessionStore() {
     const turn = num(d.turn);
     if (turn == null) return;
     state.currentTurn = turn;
+    state.currentStep = 0;
     state.turnStartSeqs.set(turn, event.seq);
     state.running = true;
     const errKey = `turn-error:${turn}`;
@@ -949,6 +970,7 @@ export function createSessionStore() {
     const step = num(d.step);
     if (step == null) return;
     state.activeSteps.add(step);
+    state.currentStep = step;
     if (state.currentTurn === 0) return;
     // 记录该 step 的分发边界(TTFT 起点)。assistant context 在首个 chunk 才创建,
     // 所以起点在那里回读;若 context 已存在(乱序/重放)则直接盖上。
@@ -1504,9 +1526,12 @@ export function createSessionStore() {
         case "compaction":
         case "modelRetry":
         case "turnMaxTokens":
-        case "command":
         case "turnTail":
           built.push(ctx.node);
+          break;
+        // 切权限模式的命令行是界面自身的操作回显,聊天不显示(web isVisibleChatNode)。
+        case "command":
+          if (ctx.node.name !== "permission") built.push(ctx.node);
           break;
         case "turnErrorPending":
           if (ctx.pending.message != null) {
@@ -1615,7 +1640,7 @@ export function createSessionStore() {
       state.nodes = withProcess;
     }
     // 引用标签:recall 上下文回贴到紧随其前的用户/steering 消息。
-    projectReferenceLabels(state.nodes);
+    projectReferenceLabels(state.nodes, state.sessionRecalls);
     state.nodesDirty = false;
     // 派生缓存:流式期间每帧都要读尾节点与运行中的工具,这里一次性算好,
     // 渲染层就不用每帧复制整个 nodes 数组反向扫描(那是 O(n) 且带分配)。
@@ -1639,7 +1664,7 @@ export function createSessionStore() {
       case NodeKind.toolCall:
       case NodeKind.turnError:
       case NodeKind.command:
-      case NodeKind.context:
+      case NodeKind.turnTrigger:
         return true;
       default:
         return false;

@@ -12,6 +12,7 @@ import {
   escapeHtml, groupHeader, selectorEscape
 } from "./settings-ui.js";
 import { openPluginInstallSheet } from "./plugin-install-sheet.js";
+import { bundleText } from "../../../features/settings/plugin-meta.js";
 
 /// 宿主给的是机器码,展示要落到本地文案。认不出的码原样显示 —— 编一个更好听的
 /// 说法会掩盖"宿主加了一条新的只读原因"。
@@ -54,9 +55,11 @@ export function createMarketplaceView({
     const readOnlyReason = bundle.readOnlyReason;
     const version = bundle.version ? tag(t("plug.versionTag", { version: bundle.version }), "muted") : "";
     const result = notices.get(bundle.name);
+    // 名称与说明取包自带的多语言 meta(0.1.7),按扩展当前语言回退;技术名留给 title 提示。
+    const text = bundleText(bundle);
     return row({
-      label: escapeHtml(bundle.name) + version,
-      hint: escapeHtml(bundle.description || t("plug.noDescription"))
+      label: `<span title="${escapeHtml(bundle.name)}">${escapeHtml(text.title)}</span>` + version,
+      hint: escapeHtml(text.description || t("plug.noDescription"))
         + (readOnlyReason
           ? `<div class="set-row-hint">${escapeHtml(readOnlyKey(readOnlyReason))}</div>`
           : "")
@@ -65,7 +68,7 @@ export function createMarketplaceView({
         id: `plug-bundle-${bundle.name}`,
         checked: bundle.enabled,
         disabled: Boolean(readOnlyReason) || isBusy,
-        ariaLabel: t("plug.enableNamed", { name: bundle.name })
+        ariaLabel: t("plug.enableNamed", { name: text.title })
       }) + (bundle.removable && bundle.installed
         ? iconButton({
           id: `plug-bundle-del-${bundle.name}`,

@@ -9,6 +9,17 @@ import { t } from "../../shared/i18n.js";
 import { expandHistoryEntry } from "./chunk-rows.js";
 import { pendingInteractionStatus } from "../interactions/interaction-flow.js";
 
+/// 历史窗口按轮次对齐(对齐 web session-controller HISTORY_PAGE_OPTIONS):
+/// 一页至少 50 条消息且含两个轮次起点,绝不从轮中间切开,上限 500 条。
+/// follow 开流、session/page 首载/翻页/缺口修复都用它(web 缺口修复沿用开流时的窗口)。
+export const HISTORY_PAGE_OPTIONS = Object.freeze({
+  maxMessages: 500, turnWindow: Object.freeze({ minMessages: 50, minTurns: 2 })
+});
+/// turn rail 跳页的向前翻页窗口(对齐 web JUMP_PAGE_OPTIONS):每页至少 200 条。
+export const JUMP_PAGE_OPTIONS = Object.freeze({
+  ...HISTORY_PAGE_OPTIONS, turnWindow: Object.freeze({ minMessages: 200, minTurns: 2 })
+});
+
 /// session.create 的归属参数:workspaceId 与 cwd **互斥**,同时给会被宿主判
 /// bad-request 整体拒绝(真实后端验证过)。workspaceId 优先——它是宿主认的归属标识,
 /// cwd 只是它的显示路径。集中在这里,避免各调用点各自拼错。
@@ -55,6 +66,13 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   const controlJobs = new Map();
   const controlProjections = new Map();
   let archivedSessionIds = new Set();
+  /// 已归档会话的摘要。活动列表(listStore)把它们滤掉了,但「已归档会话」页
+  /// 要显示标题 / 工作区 / 时间 —— 所以滤掉之前先存一份在这里。来源两处:
+  /// session/list 的全量回包(宿主照样返回归档行),以及归档那一刻从 listStore
+  /// 挪出来的行。
+  const archivedSummaries = new Map();
+  const archivedListeners = new Set();
+  const notifyArchived = () => { for (const listener of archivedListeners) listener(); };
   // 永久删除与归档都是 tombstone：同一代队列里迟到的 added 不能把行复活。
   // 会话 id 不复用，因此删除集合可以安全地保留到 service 生命周期结束。
   const removedSessionIds = new Set();
@@ -189,7 +207,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   /// 窗口右端 —— 右端是 follow 快照切点与随后追加的实时尾巴,代表当前阅读位置。
   /// 轨迹台账的「加载更早」与 turn rail 的跳页共用。迟到回包/边界不可用时返回 null。
   /// 返回 { prepended, earliestSeq, hasMore, value }。
-  async function fetchEarlierPage(sessionId, token) {
+  async function fetchEarlierPage(sessionId, token, pageOptions = HISTORY_PAGE_OPTIONS) {
     const bounds = historyBounds.get(sessionId);
     const cursor = historyCursors.get(sessionId);
     if (!bounds || bounds.hasMore !== true || !Number.isInteger(bounds.earliestSeq)
@@ -201,7 +219,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
         address: { kind: "session", sessionId },
         throughSeq: cursor,
         beforeSeq: bounds.earliestSeq,
-        maxMessages: 50
+        ...pageOptions
       }
     });
     if (token !== loadToken || sessionId !== currentSessionId) return null;
@@ -240,7 +258,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     repairingGap = true;
     const generation = ++gapRepairGeneration;
     void connection.call(RPC.sessionPage, {
-      request: { address, throughSeq, maxMessages: 50 }
+      request: { address, throughSeq, ...HISTORY_PAGE_OPTIONS }
     }).then((value) => {
       if (generation !== gapRepairGeneration || sessionId !== currentSessionId) return;
       const buffered = gapRepairBuffer;
@@ -378,7 +396,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     if (!followedStreamId || !currentFollowAddress) return;
     connection.unsubscribe?.(followedStreamId);
     connection.subscribe?.(followedStreamId, STREAM.follow, {
-      request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
+      request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true }
     });
   }
 
@@ -409,7 +427,51 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
 
     setArchivedSessionIds(ids) {
       archivedSessionIds = new Set(Array.isArray(ids) ? ids : []);
-      listStore.replaceAll(listStore.get().filter((item) => !archivedSessionIds.has(item.sessionId)));
+      const kept = [];
+      for (const item of listStore.get()) {
+        if (archivedSessionIds.has(item.sessionId)) archivedSummaries.set(item.sessionId, item);
+        else kept.push(item);
+      }
+      listStore.replaceAll(kept);
+      notifyArchived();
+    },
+
+    /// 权威归档集合,按归档先后(宿主注册表的写入顺序)。
+    archivedSessionIds() { return [...archivedSessionIds]; },
+
+    /// 归档集合里仍有摘要可寻址的会话,最近归档的在前(对齐 Mac ArchivedSessionsView.rows:
+    /// 摘要已不存在的成员直接跳过,不留一个点不动的取消归档按钮)。
+    archivedItems() {
+      return [...archivedSessionIds].reverse()
+        .map((id) => archivedSummaries.get(id))
+        .filter(Boolean);
+    },
+
+    /// 归档集合或归档摘要变了。返回退订函数。
+    onArchivedChange(listener) {
+      archivedListeners.add(listener);
+      return () => archivedListeners.delete(listener);
+    },
+
+    /// 取消归档(workspace/unarchiveSession,宿主 0.1.6+)。
+    ///
+    /// 回包就是完整的归档集合,立即应用(对齐 Mac unarchiveSession →
+    /// handleSessionsArchived);随后重拉一次列表,让这一行回到活动列表 ——
+    /// 它的摘要在归档时被 listStore 滤掉了,光改集合它不会自己回来。
+    async unarchive(sessionId) {
+      const value = await connection.call(RPC.workspaceUnarchiveSession, { request: { sessionId } });
+      const ids = Array.isArray(value?.archivedSessionIds)
+        ? value.archivedSessionIds
+        : [...archivedSessionIds].filter((id) => id !== sessionId);
+      const summary = archivedSummaries.get(sessionId);
+      service.setArchivedSessionIds(ids);
+      // 先把手上的摘要放回去,列表立刻有它;refreshList 再用权威数据覆盖。
+      if (summary && !archivedSessionIds.has(sessionId)
+        && !listStore.get().some((item) => item.sessionId === sessionId)) {
+        listStore.replaceAll([...listStore.get(), { ...summary, archived: false }]);
+      }
+      try { await service.refreshList(); } catch { /* 列表下次刷新时再补 */ }
+      return ids;
     },
 
     refreshList() {
@@ -431,6 +493,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           // 与本文件其余各处解包一致地兜底。裸取的话,一个不带 items 的回包会抛
           // TypeError,而 resync() 的第一行就是它 —— 断线重连的收敛会整个失败,
           // 当前会话的 loadHistory 也跟着不执行。
+          for (const item of value?.items ?? []) {
+            if (archivedSessionIds.has(item.sessionId)) archivedSummaries.set(item.sessionId, item);
+          }
+          notifyArchived();
           let items = (value?.items ?? []).filter(
             (item) => !item.blank
               && !archivedSessionIds.has(item.sessionId)
@@ -495,7 +561,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
             await connection.call(RPC.sessionCreate, { request: { sessionId, ...location } });
           } catch (error) {
             // 归属参数与存档 cwd 不符:会话已存在,attach 不是必需的,继续读历史。
-            if (error?.code !== "session-conflict") throw error;
+            if (error?.code !== "session/conflict") throw error;
           }
         }
       }
@@ -509,7 +575,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       if (followedStreamId) connection.unsubscribe?.(followedStreamId);
       followedStreamId = `follow:${id}`;
       connection.subscribe?.(followedStreamId, STREAM.follow, {
-        request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
+        request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true }
       });
       followJobs(id);
       return id;
@@ -520,7 +586,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       const throughSeq = historyCursors.get(sessionId);
       if (!Number.isInteger(throughSeq)) return null;
       const value = await connection.call(RPC.sessionPage, {
-        request: { address: { kind: "session", sessionId }, throughSeq, maxMessages: 50 }
+        request: { address: { kind: "session", sessionId }, throughSeq, ...HISTORY_PAGE_OPTIONS }
       });
       // 等待期间用户又切换了会话:迟到的历史不得覆盖新会话的 store。
       if (token !== loadToken) return value;
@@ -550,7 +616,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     /// turn rail 的跳页:向左翻页直到窗口左边界跨过 seq,让投影命名、但尚未加载的
     /// 轮次进入窗口。绝不能走 throughSeq=seq —— 那会把窗口右端砍到该 seq,目标轮
     /// 自己的内容随之被丢出窗口,锚点行不存在,自然滚不过去。对齐 web
-    /// Session.loadThrough 的 prepend 循环:单页只有 50 条消息时继续往前翻。
+    /// Session.loadThrough 的 prepend 循环(每页用 JUMP_PAGE_OPTIONS 取更大窗口)。
     async loadThrough(sessionId, seq) {
       if (!Number.isInteger(seq) || seq < 0) return null;
       const token = ++loadToken;
@@ -562,7 +628,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           || bounds.earliestSeq < 0 || bounds.earliestSeq <= seq) {
           break;
         }
-        const page = await fetchEarlierPage(sessionId, token);
+        const page = await fetchEarlierPage(sessionId, token, JUMP_PAGE_OPTIONS);
         if (!page) break;
         if (page.prepended) changed = true;
         if (page.earliestSeq >= bounds.earliestSeq) break;
@@ -714,7 +780,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       if (followedStreamId) connection.unsubscribe?.(followedStreamId);
       followedStreamId = `follow:${childId}`;
       connection.subscribe?.(followedStreamId, STREAM.follow, {
-        request: { address: currentFollowAddress, maxMessages: 50, assistantStream: true }
+        request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true }
       });
       followJobs(childId);
       return null;
@@ -1103,7 +1169,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       const throughSeq = historyCursors.get(sessionId);
       if (!Number.isInteger(throughSeq)) return;
       const value = await connection.call(RPC.sessionPage, {
-        request: { address: currentFollowAddress, throughSeq, maxMessages: 50 }
+        request: { address: currentFollowAddress, throughSeq, ...HISTORY_PAGE_OPTIONS }
       }).catch(() => null);
       if (!value || token !== loadToken || sessionId !== currentSessionId) return;
       invalidateGapRepair();

@@ -50,18 +50,41 @@ test("plugin-manager:installBundle 默认 enabled,approvedBuilds 为空时不出
   const c = recorder();
   const service = createPluginManagerService(c);
 
+  // 宿主签名 installBundle(spec, options?):选项包在 options 里(Mac PluginInstallPayload)。
   await service.installBundle("@scope/pkg", { requestId: "rid-2" });
   assert.deepEqual(c.calls[0].args, {
-    spec: "@scope/pkg", enabled: true, requestId: "rid-2"
+    spec: "@scope/pkg", options: { enabled: true, requestId: "rid-2" }
   });
 
   await service.installBundle("@scope/pkg", {
     requestId: "rid-3", enabled: false, approvedBuilds: ["@scope/pkg"]
   });
   assert.deepEqual(c.calls[1].args, {
-    spec: "@scope/pkg", enabled: false, requestId: "rid-3",
-    approvedBuilds: ["@scope/pkg"]
+    spec: "@scope/pkg",
+    options: { enabled: false, requestId: "rid-3", approvedBuilds: ["@scope/pkg"] }
   });
+});
+
+test("plugin-manager:0.1.7 下载源 —— registry 进 options,null 照发,undefined 省略", async () => {
+  const c = recorder();
+  const service = createPluginManagerService(c);
+
+  await service.inspectPlugin("pkg", { registry: "https://registry.npmmirror.com/" });
+  await service.inspectPlugin("pkg", { registry: null });
+  await service.inspectPlugin("pkg", { registry: undefined });
+  await service.installBundle("pkg", { requestId: "r", registry: null });
+  await service.installBundle("pkg", { requestId: "r", registry: "https://registry.npmjs.org/" });
+  await service.pluginRegistries();
+  await service.fastestRegistry();
+
+  assert.deepEqual(c.calls[0].args, { spec: "pkg", options: { registry: "https://registry.npmmirror.com/" } });
+  assert.deepEqual(c.calls[1].args, { spec: "pkg", options: { registry: null } });
+  assert.deepEqual(c.calls[2].args, { spec: "pkg" });
+  assert.deepEqual(c.calls[3].args.options, { enabled: true, requestId: "r", registry: null });
+  assert.deepEqual(c.calls[4].args.options, { enabled: true, requestId: "r", registry: "https://registry.npmjs.org/" });
+  assert.equal(c.calls[5].method, "pluginManager/registries");
+  assert.equal(c.calls[6].method, "pluginRegistryProbe/fastest");
+  assert.deepEqual(c.calls[5].args, {});
 });
 
 test("preset:0.1.7 只剩列表;删掉的预设端点不再暴露", async () => {

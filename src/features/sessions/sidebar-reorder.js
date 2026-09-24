@@ -15,7 +15,8 @@
  * @param {string|null} overId 落点所在行的 id(拖到列表末尾空白处时为 null)。
  * @param {boolean} after   落在 overId 那一行的下半部分(即插到它**后面**)。
  * @param {string[]} visible 当前渲染出来的行 id,按显示顺序。
- * @param {string[]} full    完整列表的行 id,按显示顺序;visible 是它的前缀。
+ * @param {string[]} full    完整列表的行 id,按显示顺序;visible 是它的有序子集
+ *                          (折叠组画前 5 个闲置行 + 全部运行中行,不一定是前缀)。
  * @returns {{movedId: string, beforeId: string|null}|null}
  *          要提交的移动;拖回原位等无效操作返回 null。
  */
@@ -47,12 +48,12 @@ export function resolveReorder({ movedId, overId, after = false, visible = [], f
   let beforeId;
   if (landed + 1 < next.length) {
     beforeId = next[landed + 1];
-  } else if (complete.length > rows.length) {
-    // 落在最后一条**渲染出来的**行之后,但后面还有折叠起来的行:
-    // 锚点取第一条折叠行 —— 重排一个前缀不会动到它后面的任何东西。
-    beforeId = complete[rows.length];
   } else {
-    beforeId = null;                              // 真的到末尾了
+    // 落在最后一条**渲染出来的**行之后:插到它现在紧跟的那一行之后,即完整
+    // 列表里该行的下一条(折叠行,或真到末尾时为 null),折叠行各守原位
+    //(对齐 Mac 267bcde SidebarReorder)。
+    const at = complete.indexOf(next[landed - 1]);
+    beforeId = at === -1 ? null : complete.slice(at + 1).find((id) => id !== movedId) ?? null;
   }
   return { movedId, beforeId };
 }

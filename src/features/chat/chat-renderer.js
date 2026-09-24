@@ -223,7 +223,8 @@ export function agentStatusLabel(snapshot, { awaitingTurnStart = false } = {}) {
   if (!snapshot.running) return null;
   const nodes = snapshot.nodes ?? [];
   const last = snapshot.lastNode ?? nodes[nodes.length - 1];
-  if (!last || last.kind === NodeKind.user) return t("statusWaitingModel");
+  // 唤醒本轮的通知与用户消息同级:刚开轮、模型还没出字。
+  if (!last || last.kind === NodeKind.user || last.kind === NodeKind.turnTrigger) return t("statusWaitingModel");
 
   // 有任何工具在跑就报它——工具行本身有运行态图标,这里给出同样的文案,
   // 方便该行滚出可视区时仍能确认状态。优先读 store 缓存的标量,避免每帧

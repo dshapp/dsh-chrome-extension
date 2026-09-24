@@ -19,6 +19,7 @@ import { PLUGIN_CARDS, availableCards } from "./plugin-config-cards.js";
 import { createPluginCardViews } from "./plugin-card-view.js";
 import { createMarketplaceView } from "./plugin-marketplace.js";
 import { createPluginActionsUi } from "./plugin-actions-ui.js";
+import { entryText } from "../../../features/settings/plugin-meta.js";
 
 const PHASE_TEXT = {
   pending: "inv.pending",
@@ -27,14 +28,6 @@ const PHASE_TEXT = {
   failed: "inv.failed",
   unloading: "inv.unloading"
 };
-
-/// 模块短名:@scope/dsh-xxx → dsh-xxx,cordis:include → include。
-function moduleShortName(moduleName) {
-  const raw = String(moduleName ?? "");
-  if (raw.includes(":")) return raw.slice(raw.lastIndexOf(":") + 1);
-  if (raw.startsWith("@")) return raw.slice(raw.indexOf("/") + 1);
-  return raw;
-}
 
 export function createPluginsPane({ host, sheet, deps, settingsService, showToast, pluginActions, settingsDialog }) {
   let activeTab = "marketplace";
@@ -150,10 +143,12 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
   function filteredInventory() {
     const needle = inventorySearch.trim().toLowerCase();
     if (!needle) return inventory;
-    return inventory.filter((entry) => (
-      String(entry.moduleName ?? "").toLowerCase().includes(needle)
-      || String(entry.entryId ?? "").toLowerCase().includes(needle)
-    ));
+    // 译后的标题/说明与技术名一起参与匹配(web PluginInventorySettingsTab.matches)。
+    return inventory.filter((entry) => {
+      const { title, description } = entryText(entry);
+      return [entry.moduleName, entry.entryId, title, description]
+        .some((value) => String(value ?? "").toLowerCase().includes(needle));
+    });
   }
 
   function phaseLabel(phase) {
@@ -163,18 +158,20 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
 
   function renderInventoryRow(entry) {
     const open = inventoryExpanded === entry.entryId;
+    const text = entryText(entry);
     const stateKind = entry.enabled
       ? (entry.fiberPhase === "failed" ? "err" : entry.fiberPhase === "active" ? "ok" : "busy")
       : "muted";
     const head = `<button class="set-disclosure${open ? " open" : ""}" type="button"`
       + ` data-inv="${escapeHtml(entry.entryId)}" aria-expanded="${open}">`
       + `<span class="set-disclosure-caret" aria-hidden="true">${lucideIconSvg(open ? "chevron-down" : "chevron-right", { size: 13 })}</span>`
-      + `<span class="set-disclosure-text"><span class="set-row-label">${escapeHtml(moduleShortName(entry.moduleName))}</span></span>`
+      + `<span class="set-disclosure-text"><span class="set-row-label">${escapeHtml(text.title)}</span></span>`
       + `<span class="set-status ${stateKind}"><i aria-hidden="true"></i>`
       + `${escapeHtml(entry.enabled ? t("inv.enabledTag") : t("inv.disabledTag"))}</span>`
       + `</button>`;
     if (!open) return `<div class="set-card">${head}</div>`;
-    const detail = `<div class="set-mono">${escapeHtml(entry.entryId)}</div>`
+    const detail = (text.description ? `<div class="set-row-hint">${escapeHtml(text.description)}</div>` : "")
+      + `<div class="set-mono">${escapeHtml(entry.entryId)}</div>`
       + row({
         label: escapeHtml(t("inv.configuration")),
         control: escapeHtml(entry.enabled ? t("inv.enabledTag") : t("inv.disabledTag"))

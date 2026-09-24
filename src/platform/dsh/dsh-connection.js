@@ -84,6 +84,11 @@ export function createDshConnection(options) {
       await ensureStarted();
       return api.getJson(path, query, timeoutMs);
     },
+    /// 同上,读字节(/api/file 本地路径图片)。404 → null。
+    async getBlob(path, query, timeoutMs) {
+      await ensureStarted();
+      return api.getBlob(path, query, timeoutMs);
+    },
     async settleRemoteEvent(clientId, eventId, outcome) {
       await ensureStarted();
       return api.settleRemoteEvent(clientId, eventId, outcome);

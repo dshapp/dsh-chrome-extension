@@ -10,6 +10,9 @@ import { t } from "../../shared/i18n.js";
 import { buildSidebarSections } from "../../features/sessions/sidebar-sections.js";
 import { renderSections, renderResultRows, renderLoading, SECTION_HEAD_ID } from "./session-drawer-view.js";
 import { mountHistoryViewOptions } from "./history-view-options.js";
+import { createRepaintHold } from "../../features/sessions/history-repaint-hold.js";
+import { mountArchivedSessions } from "./archived-sessions-view.js";
+import { createHistoryRowActions } from "./history-row-actions.js";
 
 export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, {
   // 宿主的 workspace 名单(分组模式按它划分),以及已归档 id(永远不进列表)。
@@ -35,14 +38,16 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   const closeButton = drawer.querySelector("#session-drawer-close");
   const title = document.querySelector("#hdr-title");
   let activeSessionId = null;
-  // 正在跑 fork/rename/archive 的会话 id:同一行的操作按钮在往返期间禁用。
-  const rowBusy = new Set();
   let allItems = [];
   let renderedItems = [];
   let sections = [];
   // 键盘导航的高亮行下标(-1 = 无选中)。与 activeSessionId(当前打开的会话)是两回事:
   // 前者是"光标在哪",后者是"哪个会话是当前的"。
   let selectedIndex = -1;
+  // 打开抽屉后,第一次分区渲染要把含当前会话的组展开(见 paint)。
+  let revealPending = false;
+  // 按住 / 拖拽期间不重画,原因见 history-repaint-hold.js。
+  const hold = createRepaintHold(list, (options) => { if (isOpen()) paint(options); });
 
   function isOpen() { return drawer.classList.contains("open"); }
 
@@ -55,6 +60,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     document.body.classList.add("session-drawer-open");
     entry.setAttribute("aria-expanded", "true");
     search.value = "";
+    revealPending = true;
+    // 每次打开都从会话列表开始,而不是停在上次看的归档页。
+    archivedView.close({ restoreFocus: false });
     // listStore 一直被 host 实时帧维护着,打开抽屉直接渲染这份 warm 快照即可,
     // 不再先清空成 loading 去等一次全量 session/list RPC(对齐 Web 端侧栏直接读
     // snapshot store 的做法)。只有冷启动还没有任何基线时才落 loading。
@@ -145,7 +153,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       activeSessionId,
       selectedIndex,
       shortcutLabels,
-      draggable: viewOptions?.isDraggable() ?? true
+      draggable: viewOptions?.isDraggable() ?? true,
+      groupDraggable: viewOptions?.isGroupDraggable?.() ?? false
     };
   }
 
@@ -172,20 +181,15 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     // 视图选项菜单开着时不重建列表:菜单是分区标题行的子节点,innerHTML 一换
     // 它就被摘出 top layer 当场消失。攒着,等菜单关上再画。
     if (viewOptions?.isMenuOpen?.()) { viewOptions.deferRepaint({ resetSelection }); return; }
+    if (hold.held()) { hold.defer({ resetSelection }); return; }
     const query = search.value.trim();
     if (query) { renderRows(matchingItems(query), { resetSelection }); return; }
-    const built = buildSidebarSections({
-      sessions: allItems,
-      workspaces: workspaces() ?? [],
-      archivedIds: archivedIds() ?? [],
-      pinnedIds: pinnedStore?.order ?? [],
-      groupBy: viewOptions?.groupBy(),
-      orderBy: viewOptions?.orderBy(),
-      collapsedGroupIds: viewOptions?.collapsedIds() ?? [],
-      expandedGroupIds: viewOptions?.expandedIds() ?? [],
-      activeSessionId,
-      sortRows: listStore?.sortBy ? (rows, orderBy, ids) => listStore.sortBy(rows, orderBy, ids) : null
-    });
+    let built = buildSections();
+    // 抽屉打开后的第一次分区渲染:含当前会话的组若是折着的,展开它(只这一次)。
+    if (revealPending && built.sections.length) {
+      revealPending = false;
+      if (viewOptions?.reveal?.(built.activeGroupId)) built = buildSections();
+    }
     sections = built.sections;
     clampSelection(built.renderedIds.length, resetSelection);
     renderedItems = renderSections(list, {
@@ -196,6 +200,23 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     // 常驻的视图选项与「添加目录」搬回刚画出来的分区标题行(搬而不是重建:
     // popover 的锚点与事件绑定都挂在那几个节点上)。
     viewOptions?.mountInto(list.querySelector(`#${SECTION_HEAD_ID} .history-section-actions`));
+  }
+
+  function buildSections() {
+    return buildSidebarSections({
+      sessions: allItems,
+      workspaces: workspaces() ?? [],
+      archivedIds: archivedIds() ?? [],
+      pinnedIds: pinnedStore?.order ?? [],
+      groupBy: viewOptions?.groupBy(),
+      orderBy: viewOptions?.orderBy(),
+      collapsedGroupIds: viewOptions?.collapsedIds() ?? [],
+      expandedGroupIds: viewOptions?.expandedIds() ?? [],
+      activeSessionId,
+      sortRows: listStore?.sortBy ? (rows, orderBy, ids) => listStore.sortBy(rows, orderBy, ids) : null,
+      // 子代理在跑的父会话同运行中行一样不占折叠名额(web runningSubagentCount > 0)。
+      isRunningSubagentRoot: listStore?.isRunningSubagentRoot ? (id) => listStore.isRunningSubagentRoot(id) : null
+    });
   }
 
   async function refresh({ resetSelection = false, showLoading = false } = {}) {
@@ -217,6 +238,16 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     sections: () => sections,
     rerender: (options) => paint(options),
     onAddWorkspace
+  });
+
+  const rowActions = createHistoryRowActions({
+    list, sessions: deps.sessions, pinnedStore, activeSessionId: () => activeSessionId,
+    hooks: { hide, openSession, newSession, refresh, paint, showToast, formatErrorDetails: deps.formatErrorDetails }
+  });
+
+  // 抽屉最底部的「已归档会话」入口与它打开的归档页(Mac ArchivedSessionsButton)。
+  const archivedView = mountArchivedSessions({
+    drawer, sessions: deps.sessions, workspaces, showToast, onBack: () => search.focus()
   });
 
   // 实时同步:后台帧的偷看只写 listStore(运行状态点、待审批/草稿徽章、
@@ -259,6 +290,13 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     if (!isOpen()) return false;
     // 输入法组字确认候选时也会派发 Enter/上下键:那是选字,不是操作列表。
     if (event.isComposing) return false;
+    // 归档页开着时,方向键/回车不该去驱动背后那份看不见的会话列表;Esc 退回列表。
+    if (archivedView.isActive()) {
+      if (event.key !== "Escape") return false;
+      event.preventDefault();
+      archivedView.close();
+      return true;
+    }
     switch (event.key) {
       case "ArrowDown": event.preventDefault(); moveSelection(1); return true;
       case "ArrowUp": event.preventDefault(); moveSelection(-1); return true;
@@ -302,61 +340,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       openSession(sessionId);
       return;
     }
-    // 置顶是乐观更新:账本立即变,0.1.7 宿主模式下的 RPC 在后台结算(失败回滚 + toast),
-    // 所以这里不需要在途标记。
-    if (actionButton.dataset.action === "pin") {
-      pinnedStore?.setPinned?.(sessionId, !pinnedStore.isPinned(sessionId));
-      paint();
-      return;
-    }
-    // fork / archive 都会改变会话集合,且宿主往返期间抽屉保持打开、按钮仍可点。
-    // 没有在途标记的话,连点两下会 fork 出两个子会话,或在归档当前会话时多建
-    // 一个空白会话。整行按钮一起禁用并给出进行中样式。
-    if (rowBusy.has(sessionId)) return;
-    rowBusy.add(sessionId);
-    setRowBusy(row, true);
-    try {
-      if (actionButton.dataset.action === "fork") {
-        const forkedId = await deps.sessions.fork(sessionId);
-        hide();
-        openSession(forkedId);
-      } else if (actionButton.dataset.action === "rename") {
-        const name = prompt(t("session.renamePrompt"));
-        if (name) { await deps.sessions.rename(sessionId, name); refresh(); }
-      } else if (actionButton.dataset.action === "archive") {
-        // 归档不是删除:宿主保留日志,只是从活动列表移出。
-        const archived = await deps.sessions.archive(sessionId, { confirmStop: confirmArchiveActive });
-        if (archived === null) return;
-        if (sessionId === activeSessionId) {
-          // 当前转录已经不属于活动列表；继续停在这里会留下一个标题仍选中、
-          // 但列表里找不到的幽灵会话。与 Mac 一致，归档当前项后进入新会话。
-          hide();
-          await newSession();
-        } else {
-          refresh();
-        }
-      }
-    } catch (error) {
-      // 与全局一致用 toast:alert 会阻塞 UI 线程,且和应用其余部分的报错风格不符。
-      showToast?.(deps.formatErrorDetails(error));
-    } finally {
-      rowBusy.delete(sessionId);
-      // 行可能已被 refresh() 重建或随归档消失,重新查一次当前 DOM 里的它。
-      setRowBusy(list.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`), false);
-    }
+    await rowActions.run(actionButton.dataset.action, row);
   });
-
-  /// 归档一个还在跑的会话前的确认(0.1.7 workspace/session-active)。
-  function confirmArchiveActive() {
-    return Promise.resolve(window.confirm(t("session.archiveActiveConfirm")));
-  }
-
-  /// 整行的操作按钮统一进入/退出在途态。
-  function setRowBusy(row, busy) {
-    if (!row) return;
-    row.classList.toggle("is-busy", busy);
-    for (const button of row.querySelectorAll("button[data-action]")) button.disabled = busy;
-  }
 
   return {
     show() { if (!isOpen()) open(); },
@@ -365,6 +350,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     /// 语言切换后重画菜单与列表。
     relabel() {
       viewOptions?.relabel();
+      archivedView.relabel();
       if (isOpen()) paint();
     },
     setActive(sessionId, sessionTitle) {

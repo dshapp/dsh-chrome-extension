@@ -25,8 +25,13 @@ export const RPC = Object.freeze({
   workspaceCreate: "workspace/create",
   workspaceRename: "workspace/rename",
   workspaceDelete: "workspace/delete",
+  // 0.1.7:首次使用的默认工作区 {request:{directoryName,title}}。仅注册表与会话历史都为空时
+  // 建 <Documents>/deepseek-harness/<directoryName>;已有默认则返回它;首次使用结束后 ok 但无 value。
+  workspaceInitializeDefault: "workspace/initializeDefault",
   // 0.1.7:有活在跑的会话会被拒成 workspace/session-active,带 stopActivity:true 重试即先停再归档。
   workspaceArchiveSession: "workspace/archiveSession",
+  // 0.1.6+:取消归档,回包是完整的归档集合 {archivedSessionIds}。
+  workspaceUnarchiveSession: "workspace/unarchiveSession",
   // 0.1.7 起置顶由宿主保存(注册表级,最近置顶的在前),workspace/follow 以 pinned 帧广播。
   workspacePinSession: "workspace/pinSession",
   workspaceUnpinSession: "workspace/unpinSession",
@@ -88,7 +93,11 @@ export const RPC = Object.freeze({
   pluginManagerRemoveBundle: "pluginManager/removeBundle",
   pluginManagerInspect: "pluginManager/inspect",
   pluginManagerInstallBundle: "pluginManager/installBundle",
-  pluginManagerCancelInstall: "pluginManager/cancelInstall"
+  pluginManagerCancelInstall: "pluginManager/cancelInstall",
+  // 0.1.7 安装下载源:宿主配置的首选源/回退/pnpm 自身指向的 URL({registry, fallbackRegistries, resolved}),
+  // 以及并行 ping npmjs/npmmirror 取最快者(string | null)。对齐 Mac pluginManagerRegistries / pluginRegistryProbeFastest。
+  pluginManagerRegistries: "pluginManager/registries",
+  pluginRegistryProbeFastest: "pluginRegistryProbe/fastest"
 });
 
 export const STREAM = Object.freeze({
@@ -97,6 +106,9 @@ export const STREAM = Object.freeze({
   control: "session/control",
   // 0.1.7:每会话一条后台任务名册流,帧 {type:"rows", jobs} 整组替换。
   jobs: "job/list",
+  // 0.1.7:单个任务的输出观测流 {request:{sessionId?, jobId, from?}}。帧 opened{job,from}
+  // → output{chunks:[{text,gapBefore?}], next, lossy?}* → 终态 status{job} 后正常关闭。
+  jobFollow: "job/follow",
   follow: "session/follow"
 });
 

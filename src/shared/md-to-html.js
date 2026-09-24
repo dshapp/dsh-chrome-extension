@@ -2,7 +2,7 @@
 // 支持:标题(h1–h4)、fenced code、行内 code、粗体/斜体/删除线、链接、图片、
 // 数学公式、无序/有序列表、任务列表、分隔线、引用、表格(含对齐)、段落。
 import { autoLinkUrls } from "./auto-link.js";
-import { isSafeImageSrc } from "./image-src.js";
+import { isLocalImagePath, isSafeImageSrc } from "./image-src.js";
 import { splitMathSegments, renderMath } from "./math-render.js";
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
@@ -18,7 +18,12 @@ function escapeAttribute(text) {
 // 行内规则(数学之外的部分)。抽出来是因为数学段要跳过这一整套:
 // KaTeX 产出的 HTML 里带 _ ^ * 之类字符,再过一遍 markdown 行内规则会被
 // 当成斜体/粗体切碎。
-function renderInlineMarkup(escaped) {
+//
+// options.localImages:为 true 时把绝对本地路径图片(见 isLocalImagePath)产出成
+// 无 src 的占位 <img data-local-path>,由调用方经宿主 /api/file 读成 blob: 再挂 src
+//(features/chat/local-images.js)。只有助手正文开它 —— 对齐 web 只在
+// AssistantMarkdown 传 pathImages;其余调用点保持原样文字输出。
+function renderInlineMarkup(escaped, options) {
   let out = escaped;
   // 行内 code 通常已被 renderInline 挖成占位符,这条规则因此多数时候不命中。
   // 保留它是为了让本函数**自身成立**:它不假设调用方一定做过挖取。
@@ -27,15 +32,22 @@ function renderInlineMarkup(escaped) {
   out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");
   // 图片必须排在链接之前:两者只差一个前导 "!",链接规则先跑会把
   // ![alt](src) 的 [alt](src) 部分吃掉,只剩一个孤零零的 "!"。
-  out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, src) =>
-    (isSafeImageSrc(src)
-      // src 已是转义态(escapeHtml 先行),直接进属性,不可二次转义。
-      // alt 已是转义态(escapeHtml 先行),这里只补单引号 —— 再跑一次
-      // escapeAttribute 会把 &quot; 二次转义成 &amp;quot;,把正文写坏。
-      ? `<img src="${src}" alt="${alt.replace(/'/g, "&#39;")}" loading="lazy" referrerpolicy="no-referrer">`
-      // 白名单外的地址按字面文本留在正文:用户能看见模型到底写了什么,
-      // 而一个空 src 的 <img> 只会留下碎图标,把问题藏起来。
-      : match));
+  out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, src) => {
+    // src 已是转义态(escapeHtml 先行),直接进属性,不可二次转义。
+    // alt 已是转义态(escapeHtml 先行),这里只补单引号 —— 再跑一次
+    // escapeAttribute 会把 &quot; 二次转义成 &amp;quot;,把正文写坏。
+    const altAttr = alt.replace(/'/g, "&#39;");
+    if (isSafeImageSrc(src)) {
+      return `<img src="${src}" alt="${altAttr}" loading="lazy" referrerpolicy="no-referrer">`;
+    }
+    // 占位不带 src:加载前浏览器按 alt 显示文字;失败时调用方换成 alt 文字。
+    if (options?.localImages && isLocalImagePath(src)) {
+      return `<img class="md-local-img" data-local-path="${src}" alt="${altAttr}">`;
+    }
+    // 白名单外的地址按字面文本留在正文:用户能看见模型到底写了什么,
+    // 而一个空 src 的 <img> 只会留下碎图标,把问题藏起来。
+    return match;
+  });
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
   out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
@@ -61,7 +73,7 @@ const MATH_SLOT_END = "\u0000";
 const CODE_SLOT = "\u0000code:";
 const CODE_SLOT_END = "\u0000";
 
-function renderInline(text) {
+function renderInline(text, options) {
   const escaped = escapeHtml(text);
 
   // 1) 先把行内 code 挖成占位符,内容原样留存。
@@ -78,7 +90,7 @@ function renderInline(text) {
   const segments = splitMathSegments(withoutCode);
   // 常见情况:没有公式,直接走原有管线,不付切分与回填的代价。
   if (segments.length === 1 && segments[0].kind === "text") {
-    return restoreCode(renderInlineMarkup(withoutCode));
+    return restoreCode(renderInlineMarkup(withoutCode, options));
   }
 
   const rendered = [];
@@ -96,7 +108,7 @@ function renderInline(text) {
     masked += MATH_SLOT + rendered.length + MATH_SLOT_END;
     rendered.push(html);
   }
-  const out = renderInlineMarkup(masked);
+  const out = renderInlineMarkup(masked, options);
   const withMath = rendered.length
     ? out.replace(/\u0000math:(\d+)\u0000/g, (_, index) => rendered[Number(index)] ?? "")
     : out;
@@ -173,14 +185,14 @@ function splitFencedBlocks(markdown) {
   return blocks;
 }
 
-function renderTextBlock(lines) {
+function renderTextBlock(lines, options) {
   const html = [];
   let listItems = null;
   let listOrdered = false;
   let paragraph = [];
   const flushParagraph = () => {
     if (paragraph.length) {
-      html.push(`<p>${renderInline(paragraph.join("\n"))}</p>`);
+      html.push(`<p>${renderInline(paragraph.join("\n"), options)}</p>`);
       paragraph = [];
     }
   };
@@ -189,9 +201,9 @@ function renderTextBlock(lines) {
       const tag = listOrdered ? "ol" : "ul";
       const items = listItems.map((item) => {
         // task 为布尔值即 GFM 任务项;null 是普通项。
-        if (item.task == null) return `<li>${renderInline(item.text)}</li>`;
+        if (item.task == null) return `<li>${renderInline(item.text, options)}</li>`;
         const checked = item.task ? " checked" : "";
-        return `<li class="task-list-item"><input type="checkbox" disabled${checked}> ${renderInline(item.text)}</li>`;
+        return `<li class="task-list-item"><input type="checkbox" disabled${checked}> ${renderInline(item.text, options)}</li>`;
       }).join("");
       html.push(`<${tag}>${items}</${tag}>`);
       listItems = null;
@@ -205,7 +217,7 @@ function renderTextBlock(lines) {
       flushParagraph(); flushList();
       // 保留语义层级;尺寸由 .msg-agent h1…h6 限定,不会溢到侧栏标题。
       const level = heading[1].length;
-      html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      html.push(`<h${level}>${renderInline(heading[2], options)}</h${level}>`);
       continue;
     }
     // 分隔线:---/***/___ 独占一行(至少 3 个)。
@@ -238,10 +250,10 @@ function renderTextBlock(lines) {
       }
       i--; // for 循环会 i++,这里回退一格
       let table = '<table class="md-table"><thead><tr>';
-      table += header.map((cell, ci) => `<th${alignClass(ci)}>${renderInline(cell)}</th>`).join("");
+      table += header.map((cell, ci) => `<th${alignClass(ci)}>${renderInline(cell, options)}</th>`).join("");
       table += "</tr></thead><tbody>";
       for (const row of rows) {
-        table += "<tr>" + header.map((_, ci) => `<td${alignClass(ci)}>${renderInline(row[ci] || "")}</td>`).join("") + "</tr>";
+        table += "<tr>" + header.map((_, ci) => `<td${alignClass(ci)}>${renderInline(row[ci] || "", options)}</td>`).join("") + "</tr>";
       }
       table += "</tbody></table>";
       html.push(table);
@@ -268,7 +280,7 @@ function renderTextBlock(lines) {
     const quote = /^>\s?(.*)$/.exec(line);
     if (quote) {
       flushParagraph(); flushList();
-      html.push(`<blockquote>${renderInline(quote[1])}</blockquote>`);
+      html.push(`<blockquote>${renderInline(quote[1], options)}</blockquote>`);
       continue;
     }
     flushList();
@@ -279,10 +291,11 @@ function renderTextBlock(lines) {
   return html.join("");
 }
 
-export function mdToHtml(markdown) {
+/// options.localImages 见 renderInlineMarkup:只有助手正文传 true。
+export function mdToHtml(markdown, options) {
   return splitFencedBlocks(String(markdown ?? ""))
     .map((block) => block.kind === "code"
       ? `<pre data-language="${escapeAttribute(block.lang || "text")}"><code>${escapeHtml(block.lines.join("\n"))}</code></pre>`
-      : renderTextBlock(block.lines))
+      : renderTextBlock(block.lines, options))
     .join("");
 }

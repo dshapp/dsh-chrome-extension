@@ -216,6 +216,12 @@ span.ref-chip { cursor: default; }
   margin-block: 0.375rem;
   display: block;
 }
+/* 本地路径图片(经 /api/file 读回,local-images.js):对齐 web MarkdownText .image
+   与 Mac 7d3e1cd —— 原始尺寸,只按列宽缩,不另设高度上限。与文字同段的图同样
+   独占一行显示(web 的 .image 也是 display:block)。 */
+.md-body img.md-local-img { max-block-size: none; }
+/* 读取失败时替换成的 alt 文字(web .imageAlt)。 */
+.md-body .md-img-alt { color: var(--text-dim); font-style: italic; }
 
 /* 语法着色。类名是 hljs 的输出契约,取值走 foundation.css 的主题变量,
    所以明暗切换时着色跟着走。未列出的 token 继承 --code-text,不会变成裸色。 */
@@ -392,32 +398,33 @@ span.ref-chip { cursor: default; }
 }
 
 
-/* ══ 新增:节点行(context / chip / turnTail / workflow / unknown) ══ */
+/* ══ 新增:节点行(turn-trigger / chip / turnTail / workflow / unknown) ══ */
 
-/* context:插件注入的上下文,记录里只留入口行 */
-.context-node {
+/* turn-trigger:唤醒本轮的非人类通知(web TurnTriggerNodeView):一行标题,点开行内看正文 */
+.turn-trigger {
   align-self: flex-start; inline-size: 100%;
   font-size: 0.75rem; color: var(--text-dim);
 }
-.context-summary {
-  display: flex; gap: 0.5rem; align-items: center; inline-size: 100%;
+.turn-trigger-header {
+  display: flex; gap: 0.375rem; align-items: center; max-inline-size: 100%;
   cursor: pointer;
   border: 0; background: none; color: inherit; font: inherit; text-align: start;
   padding: 0.25rem 0.5rem; border-radius: var(--radius);
 }
-.context-summary:hover { background: var(--bg-raised); }
-.context-label {
-  flex: none; padding: 0 0.375rem; border-radius: 999px;
-  background: var(--bg-raised); border: 1px solid var(--border-soft);
-  color: var(--text-faint); font-size: 0.6875rem;
-}
-.context-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 注入上下文里的图片行内出图(对齐 Mac ContextRow 的 MessageGallery):
-   一张按单图尺寸铺开,多张退成方块缩略图。点击进详情看大图。 */
-.context-imgs { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 0.5rem 0.25rem; }
+.turn-trigger-header:hover { background: var(--bg-raised); color: var(--text); }
+.turn-trigger-icon, .turn-trigger-chevron { display: inline-flex; flex: none; }
+.turn-trigger-icon svg, .turn-trigger-chevron svg { display: block; }
+.turn-trigger-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-trigger-time { flex: none; color: var(--text-faint); }
+.turn-trigger-chevron { color: var(--text-faint); transition: transform 120ms ease; }
+.turn-trigger[data-open="true"] .turn-trigger-chevron { transform: rotate(180deg); }
+.turn-trigger-body { padding: 0.25rem 0.5rem 0.375rem; }
+.turn-trigger-explanation { margin: 0 0 0.375rem; color: var(--text-faint); }
+/* 通知正文里的图片:一张按单图尺寸铺开,多张退成方块缩略图 */
+.context-imgs { display: flex; flex-wrap: wrap; gap: 5px; padding-block-end: 0.375rem; }
 .context-imgs img {
   display: block; max-inline-size: 100%; max-block-size: 220px;
-  border-radius: var(--radius); cursor: zoom-in;
+  border-radius: var(--radius);
 }
 .context-imgs.multi img { max-inline-size: 96px; max-block-size: 96px; }
 .context-imgs img.img-loading { opacity: 0.35; }
@@ -425,12 +432,9 @@ span.ref-chip { cursor: default; }
   min-inline-size: 60px; min-block-size: 40px;
   background: var(--bg-raised); border: 1px dashed var(--border);
 }
-/* 详情弹窗里的图片不可再点(已经是大图),按弹窗宽度铺满 */
-.context-detail .context-imgs { padding: 0 0 0.5rem; flex-direction: column; }
-.context-detail .context-imgs img { max-inline-size: 100%; max-block-size: none; cursor: default; }
-/* 正文只在详情弹窗里出现:不自带高度上限,交给弹窗那一条滚动 */
+/* 正文行内展开:限高自带滚动,长通知不把记录流撑开 */
 .context-body {
-  margin: 0; padding: 0.5rem;
+  margin: 0; padding: 0.5rem; max-block-size: 320px; overflow: auto;
   background: var(--code-bg); border-radius: var(--radius);
   white-space: pre-wrap; overflow-wrap: anywhere;
   font-size: 0.75rem; color: var(--code-text);
@@ -865,8 +869,7 @@ dialog.card-detail[open] { display: flex; flex-direction: column; }
 .card-detail-body .tool-args pre,
 .card-detail-body .tool-output pre,
 .card-detail-body .plan-inline,
-.card-detail-body .compaction-body,
-.card-detail-body .context-body { max-height: none; overflow: visible; }
+.card-detail-body .compaction-body { max-height: none; overflow: visible; }
 
 /* ── 会话 turn 轨道:浮在消息区右缘的轮次刻度(对齐 web TurnNavigator) ── */
 #turn-rail {

@@ -9,11 +9,13 @@
 // 三项皆 0 时退化为 "Thought for a while"(由渲染层处理)。
 import { NodeKind, anchorSeq, nodeTurn, assistantHasVisibleContent } from "./chat-nodes.js";
 
-/// 不参与折叠、始终独立成行的种类(web TURN_PROCESS_INDEPENDENT_KINDS)。
+/// 不参与折叠、始终独立成行的种类(web TURN_PROCESS_INDEPENDENT_KINDS / process-groups.ts INDEPENDENT)。
+/// turnTrigger 与 user/steering 同级:它说明谁唤醒了本轮,是回答的框架而不是过程证据,
+/// 不能被折进它自己开启的过程组(对齐 Mac 267bcde isProcessMember)。
 export const PROCESS_INDEPENDENT_KINDS = new Set([
   NodeKind.user,
   NodeKind.steering,
-  NodeKind.context,
+  NodeKind.turnTrigger,
   NodeKind.turnProcess,
   NodeKind.turnError,
   NodeKind.turnMaxTokens,

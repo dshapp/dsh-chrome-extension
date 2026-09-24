@@ -20,17 +20,15 @@ export function sessionRecallReferences(source) {
   return seen;
 }
 
-/// 用户消息引用标签投影:recall 上下文节点 seq 紧跟其用户消息(seq-1)。
-export function projectReferenceLabels(nodes) {
-  const byMessageSeq = new Map();
-  for (const node of nodes) {
-    if (node.kind !== "context") continue;
-    const refs = sessionRecallReferences(node.source);
-    if (refs.length) byMessageSeq.set(node.seq - 1, refs);
-  }
+/// 用户消息引用标签投影:recall 上下文 seq 紧跟其用户消息(seq-1)。
+/// 0.1.7 起普通 context 不再成行(web isVisibleChatNode),recall 由 store 在
+/// user/message 折叠时按"所属消息 seq"记进 recallsByMessageSeq(对齐 Mac noteReferencedSessions)。
+/// @param {Array} nodes 已排序的聊天节点
+/// @param {Map<number, Array>} recallsByMessageSeq 用户消息 seq → references[]
+export function projectReferenceLabels(nodes, recallsByMessageSeq) {
   for (const node of nodes) {
     if (node.kind !== "user" && node.kind !== "steering") continue;
-    const refs = byMessageSeq.get(node.seq) ?? null;
+    const refs = recallsByMessageSeq?.get(node.seq) ?? null;
     node.referenceSessions = refs;
     node.referenceLabels = refs ? refs.map((ref) => ref.label) : null;
   }

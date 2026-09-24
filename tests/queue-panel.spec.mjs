@@ -108,3 +108,32 @@ test("队列清空后面板隐藏,重新排入后再显示", () => {
   assert.equal(panel.hidden, false);
   assert.equal(panel.querySelector(".queue-text").textContent, "又一条");
 });
+
+test("编辑框是多行 textarea:原文换行(含首行换行)原样回填", () => {
+  const { panel } = mount(rows(["\n第一行\n第二行"]), { running: true });
+  panel.querySelector('[data-item-id="m1"] [data-action="edit"]').click();
+  const input = panel.querySelector(".queue-edit-input");
+  assert.equal(input.tagName, "TEXTAREA");
+  assert.equal(input.value, "\n第一行\n第二行");
+});
+
+test("Shift+Enter 换行不提交;Enter 保存时保留换行与首尾空白,全空白不提交", async () => {
+  const calls = [];
+  const { panel } = mount(rows(["原文"]), {
+    running: true,
+    onAction: async (itemId, action) => { calls.push([itemId, action]); }
+  });
+  panel.querySelector('[data-item-id="m1"] [data-action="edit"]').click();
+  const input = panel.querySelector(".queue-edit-input");
+  const shiftEnter = new dom.window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+  input.dispatchEvent(shiftEnter);
+  assert.equal(shiftEnter.defaultPrevented, false, "Shift+Enter 交给 textarea 自己换行");
+  input.value = "  \n\t";
+  input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
+  assert.deepEqual(calls, [], "全空白不提交");
+  input.value = " 第一行\n第二行 ";
+  input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await flush();
+  assert.deepEqual(calls, [["m1", { kind: "edit", text: " 第一行\n第二行 " }]]);
+});

@@ -10,6 +10,7 @@ import { mdToHtml, readFence, isClosingFence } from "../../shared/md-to-html.js"
 import { decorateCodeBlocks, mayContainMath } from "./chat-view.js";
 import { highlightCodeBlocks } from "./code-highlight.js";
 import { ensureKatex, isKatexReady } from "./katex-loader.js";
+import { hydrateLocalImages } from "./local-images.js";
 
 /// 与 web 一致:最后这两个块视为仍在变化,不做冻结。
 export const UNSTABLE_TAIL_BLOCKS = 2;
@@ -42,8 +43,11 @@ export function stableCut(markdown, unstableBlocks = UNSTABLE_TAIL_BLOCKS) {
 }
 
 /// 渲染/更新一个"增量 markdown"宿主元素(内部自建 .md-head + .md-tail)。
-export function renderIncrementalMarkdown(host, text, { streaming = false, force = false } = {}) {
+/// loadLocalImage:给了就开 md-to-html 的 localImages,把本地路径占位图经它读成
+/// blob:(local-images.js,对齐 web AssistantMarkdown pathImages);只有助手正文传。
+export function renderIncrementalMarkdown(host, text, { streaming = false, force = false, loadLocalImage = null } = {}) {
   const source = String(text ?? "");
+  const md = loadLocalImage ? { localImages: true } : undefined;
   let state = host.__inc;
   if (!state) {
     state = host.__inc = { text: null, cut: undefined, head: null, tail: null };
@@ -56,13 +60,15 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
   if (!force && state.text === source) return;
   const cut = stableCut(source);
   if (cut !== state.cut) {
-    state.head.innerHTML = cut == null ? "" : mdToHtml(source.slice(0, cut));
-    state.tail.innerHTML = mdToHtml(cut == null ? source : source.slice(cut));
+    state.head.innerHTML = cut == null ? "" : mdToHtml(source.slice(0, cut), md);
+    state.tail.innerHTML = mdToHtml(cut == null ? source : source.slice(cut), md);
     state.cut = cut;
   } else {
-    state.tail.innerHTML = mdToHtml(source.slice(cut ?? 0));
+    state.tail.innerHTML = mdToHtml(source.slice(cut ?? 0), md);
   }
   state.text = source;
+  // "](/" 是占位图产出的必要条件,没有就不扫 DOM(流式每帧都会走到这里)。
+  if (md && source.includes("](/")) hydrateLocalImages(host, loadLocalImage);
 
   decorateCodeBlocks(host);
   void highlightCodeBlocks(host, { streaming });
@@ -73,7 +79,7 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
       if (!ready || !host.isConnected) return;
       state.cut = undefined;
       state.text = null;
-      renderIncrementalMarkdown(host, source, { streaming, force: true });
+      renderIncrementalMarkdown(host, source, { streaming, force: true, loadLocalImage });
     });
   }
 }

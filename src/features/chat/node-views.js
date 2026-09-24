@@ -5,7 +5,7 @@
 // renderer 靠 nodeId 决定复用还是重建。
 import { t } from "../../shared/i18n.js";
 import { mdToHtml, escapeHtml, readFence, isClosingFence } from "../../shared/md-to-html.js";
-import { NodeKind, AssistantStatus, ToolRowState } from "../sessions/chat-nodes.js";
+import { NodeKind, AssistantStatus, ToolRowState, turnTriggerDetails } from "../sessions/chat-nodes.js";
 import { toolRowModel, resultText, hasResultText, ToolVariant } from "./tool-row-model.js";
 import { resolveMention, deliverablesBasename } from "../sessions/turn-deliverables.js";
 import { getToolIconSvg, getToolPresentation } from "./tool-presentation.js";
@@ -110,7 +110,7 @@ function applyImageSource(img, source, context = {}) {
   });
 }
 
-// ---------- user / steering / context ----------
+// ---------- user / steering / turn-trigger ----------
 
 function makeCopyButton(getText) {
   const copy = el("button", "act-btn");
@@ -290,7 +290,7 @@ export function createSteeringNode(node, context = {}) {
   return createUserNode(node, context);
 }
 
-/// 注入上下文的纯文本部分。
+/// 通知正文的纯文本部分。
 ///
 /// 不能用 blocksToText:它把图片块折成 "[image]" 占位符,而图片在这里是**正文**
 /// (插件工具的截图往往是整条消息的全部内容),占位符只会把摘要行变成一句
@@ -303,64 +303,61 @@ function contextText(content) {
     .trim();
 }
 
-/// 注入上下文里的图片(插件工具截图、粘贴的参考图)。
+/// 通知正文里的图片(插件工具截图、粘贴的参考图)。
 /// 历史消息里只有 attachment 引用,草稿/乐观消息才内联 data —— 两种都收。
-function contextImageStrip(images, context, onOpen) {
+function contextImageStrip(images, context) {
   const strip = el("div", images.length > 1 ? "context-imgs multi" : "context-imgs");
   for (const image of images) {
     const img = document.createElement("img");
     img.alt = image.name || "";
     applyImageSource(img, image, context);
-    if (onOpen) {
-      img.addEventListener("click", onOpen);
-      img.title = t("card.viewDetail");
-    }
     strip.append(img);
   }
   return strip;
 }
 
-/// context:插件/工具注入的上下文。记录里只留一行入口,全文进弹窗 ——
-/// 但图片例外,它们直接在行内出图。
-///
-/// 对齐 Mac 的 ContextRow:一行只写着 "tools-ptc" 等于把截图从记录里藏掉了,
-/// 而截图恰恰是这类消息的全部内容。图片行内渲染,点击进详情看大图。
-export function createContextNode(node, context = {}) {
-  const label = node.provenanceLabel || node.provenanceRole || "context";
-  const text = contextText(node.content);
-  const { images } = splitUserContent(node.content);
-  const wrap = el("div", "context-node");
-  const trigger = el("button", "context-summary");
-  trigger.type = "button";
-  trigger.append(el("span", "context-label", label));
-  trigger.append(el("span", "context-preview", text.slice(0, 80)));
-  const openDetail = () => openContextDetail({ title: label, text, images, context });
-  trigger.addEventListener("click", openDetail);
-  wrap.append(trigger);
-  if (images.length) wrap.append(contextImageStrip(images, context, openDetail));
-  return wrap;
-}
+/// turn-trigger:唤醒本轮的非人类消息(定时任务、后台任务结束、子代理回报、目标续跑、webhook…)。
+/// 对齐 web chat/TurnTriggerNodeView.tsx 与 Mac TurnTriggerRow:独立的一行通知,
+/// 标题/图标按 source.kind 选(turnTriggerDetails),默认收起;展开后行内显示说明与原通知正文。
+/// 正文(可能几百 KB)与图片只在首次展开时构建,收起的通知不挂正文。
+export function createTurnTriggerNode(node, context = {}) {
+  const details = turnTriggerDetails(node.source);
+  const wrap = el("section", "turn-trigger");
+  wrap.dataset.turnTrigger = "";
+  const header = el("button", "turn-trigger-header");
+  header.type = "button";
+  header.setAttribute("aria-expanded", "false");
+  const icon = el("span", "turn-trigger-icon");
+  icon.append(lucideIcon(details.icon, { size: 14 }));
+  const chevron = el("span", "turn-trigger-chevron");
+  chevron.append(lucideIcon("chevron-down", { size: 12 }));
+  header.append(icon, el("span", "turn-trigger-title", t(details.title)),
+    el("span", "turn-trigger-time", fmtTime(node.time)), chevron);
+  wrap.append(header);
 
-/// 上下文详情:图片在上、正文在下。正文仍然分片渲染(注入块可能几百 KB)。
-function openContextDetail({ title, text, images, context }) {
+  let body = null;
   let cancel = null;
-  const dialog = openCardDetail({
-    title,
-    // 只有文本才可复制;纯图片的注入不给复制键(对齐 Mac:结构化 UI 不给复制)。
-    copyText: text ? () => text : null,
-    build: () => {
-      const host = el("div", "context-detail");
-      if (images.length) host.append(contextImageStrip(images, context, null));
+  header.addEventListener("click", () => {
+    const open = header.getAttribute("aria-expanded") !== "true";
+    header.setAttribute("aria-expanded", String(open));
+    wrap.dataset.open = open ? "true" : "false";
+    if (!body) {
+      body = el("div", "turn-trigger-body");
+      body.append(el("p", "turn-trigger-explanation", t("message.trigger.explanation")));
+      const { images } = splitUserContent(node.content);
+      if (images.length) body.append(contextImageStrip(images, context));
+      const text = contextText(node.content);
       if (text) {
         const pre = el("pre", "context-body");
         cancel = appendChunked(pre, chunkText(text));
-        host.append(pre);
+        body.append(pre);
       }
-      return host;
+      wrap.append(body);
     }
+    body.hidden = !open;
   });
-  dialog?.addEventListener("close", () => { cancel?.(); cancel = null; }, { once: true });
-  return dialog;
+  wrap.dispose = () => { cancel?.(); cancel = null; };
+  return wrap;
 }
 
 // ---------- assistant ----------
@@ -380,12 +377,15 @@ export function createAssistantNode(node, context = {}) {
 /// 侧栏在模型打印大文件时直接卡死。折叠让每帧的解析量有上界。
 /// assistant 正文:超长时前 AGENT_FOLD_LIMIT 字符走增量 markdown,余下进"查看全部"弹窗。
 /// 元素跨帧复用,冻结前缀的 DOM(含着色)不会每帧重建。
-function updateAgentText(body, text, mentions = null) {
+///
+/// loadLocalImage(context.readLocalImage):正文里的本地绝对路径图片经宿主 /api/file
+/// 读回(web AssistantMarkdown pathImages),没有就保持原样文字。
+function updateAgentText(body, text, mentions = null, loadLocalImage = null) {
   const fold = foldMessageText(text, AGENT_FOLD_LIMIT);
   // 截断处可能落在未闭合的代码围栏里,原样渲染会把后面的正文吞进代码块。
   // 补一行收尾围栏,让这一段仍是合法 markdown。
   const preview = fold.folded ? closeOpenFence(fold.preview) : text;
-  renderIncrementalMarkdown(body, preview);
+  renderIncrementalMarkdown(body, preview, { loadLocalImage });
   decorateMentions(body, mentions);
 
   let more = body.querySelector(":scope > .msg-user-more");
@@ -582,7 +582,8 @@ function updateBlockPart(part, block, mentions, context = {}) {
   if (part.kind === "reasoning") {
     updateReasoningBlock(part.el, block.text);
   } else if (part.kind === "text") {
-    updateAgentText(part.el, block.text, mentions);
+    updateAgentText(part.el, block.text, mentions,
+      typeof context.readLocalImage === "function" ? context.readLocalImage : null);
   } else if (part.kind === "other") {
     updateUnknownBlock(part.el, block.value);
   } else if (part.kind === "imageGroup") {
@@ -1687,7 +1688,7 @@ export function createNodeElement(node, context) {
   switch (node.kind) {
     case NodeKind.user: return createUserNode(node, context);
     case NodeKind.steering: return createSteeringNode(node, context);
-    case NodeKind.context: return createContextNode(node, context);
+    case NodeKind.turnTrigger: return createTurnTriggerNode(node, context);
     case NodeKind.assistant: return createAssistantNode(node, context);
     case NodeKind.toolCall: return createToolNode(node, context);
     case NodeKind.compaction: return createCompactionNode(node);
@@ -1708,6 +1709,8 @@ export function updateNodeElement(element, node, context) {
   switch (node.kind) {
     case NodeKind.assistant: updateAssistantNode(element, node, context); return true;
     case NodeKind.toolCall: updateToolNode(element, node, context); return true;
+    // 通知内容不可变(id 即 messageId):重折窗口换了节点对象也保留原元素与展开态。
+    case NodeKind.turnTrigger: return true;
     default: return false;
   }
 }

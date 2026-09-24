@@ -11,16 +11,38 @@
 //    在列表里留下一行"什么都没发生过"的幽灵。
 // 2. **置顶优先于分组**:置顶是用户明确摆出来的安排,所以它排在两种分组模式
 //    之上,并且被置顶的行不再出现在下面的分组里(否则同一行会出现两次)。
-// 3. **折叠组只画前 5 行**(Mac `collapsedGroupRowLimit`),其余折进
-//    「展开其余 N 个会话」。
+// 3. **折叠组只画前 5 个闲置行**(Mac `collapsedGroupRowLimit`),其余折进
+//    「展开其余 N 个会话」;空白、运行中、有子代理在跑的行不占名额、始终显示
+//    (web `collapsedSessionRows` / Mac `SessionQuickSwitch.collapsedRows`)。
 // 4. **组内排序**:updated → 时间倒序;status → 注意力档位;manual → 真实
 //    workspace 用宿主给的 sessionIds 顺序(那就是它的手动序),未分组/单列表
 //    用浏览器本地账本。
 //
 // 分组本身不参与排序档:orderBy 只决定**组内**的行怎么排(Mac 的取舍)。
 
-/// 折叠状态下每个分组最多画几行(Mac SessionQuickSwitch.collapsedGroupRowLimit)。
+/// 折叠状态下每个分组最多画几个闲置行(Mac SessionQuickSwitch.collapsedGroupRowLimit)。
 export const COLLAPSED_GROUP_ROW_LIMIT = 5;
+
+/**
+ * 「展开其余」折叠:只有闲置行计入 limit;空白、运行中、子代理在跑的父会话
+ * 始终留下,活着的工作绝不藏在「展开其余」后面。保持原顺序(渲染行是完整
+ * 成员的有序子集,不一定是前缀)。对齐 web `collapsedSessionRows` 与 Mac
+ * `SessionQuickSwitch.collapsedRows`。
+ *
+ * @param {Array} rows 组内已排好序的行。
+ * @param {number} limit 闲置行名额。
+ * @param {(item: object) => boolean} [isLive] 额外判定"有子代理在跑"(行本身可能闲置)。
+ * @returns {Array} 要画的行。
+ */
+export function collapsedRows(rows, limit, isLive = null) {
+  let idle = 0;
+  return rows.filter((item) => {
+    if (item.blank || item.running || isLive?.(item)) return true;
+    if (idle >= limit) return false;
+    idle += 1;
+    return true;
+  });
+}
 
 /// 单列表模式一次最多画几行。Mac 的单列表不截断 —— 那是一个会自己虚拟化的
 /// 原生 List;这里每次重画都是整块 innerHTML,上千行会让流式输出期间的每一帧
@@ -77,8 +99,10 @@ function defaultSort(rows) {
  * @param {string|null} options.activeSessionId 当前会话。
  * @param {(rows: Array, orderBy: string, workspaceSessionIds: Array<string>|null) => Array} [options.sortRows]
  *        组内排序器,通常注入 listStore.sortBy。
- * @param {number} [options.rowLimit] 折叠时每组画几行(测试可调)。
- * @returns {{sections: Array, renderedIds: Array<string>}}
+ * @param {(sessionId: string) => boolean} [options.isRunningSubagentRoot]
+ *        该会话是否有子代理后裔在跑,通常注入 listStore.isRunningSubagentRoot。
+ * @param {number} [options.rowLimit] 折叠时每组画几个闲置行(测试可调)。
+ * @returns {{sections: Array, renderedIds: Array<string>, activeGroupId: string|null}}
  */
 export function buildSidebarSections({
   sessions = [],
@@ -91,8 +115,12 @@ export function buildSidebarSections({
   expandedGroupIds = [],
   activeSessionId = null,
   sortRows = null,
+  isRunningSubagentRoot = null,
   rowLimit = COLLAPSED_GROUP_ROW_LIMIT
 } = {}) {
+  const isLive = typeof isRunningSubagentRoot === "function"
+    ? (item) => isRunningSubagentRoot(item.sessionId)
+    : null;
   const sort = typeof sortRows === "function" ? sortRows : defaultSort;
   const collapsed = new Set(collapsedGroupIds ?? []);
   const expanded = new Set(expandedGroupIds ?? []);
@@ -145,9 +173,10 @@ export function buildSidebarSections({
         title: workspace.title || basename(workspace.path),
         hint: workspace.path ?? null,
         rows: sort(rows, orderBy, memberIds),
-        collapsed: collapsed.has(groupId) && !containsActive(rows, activeSessionId),
+        collapsed: collapsed.has(groupId),
         expanded: expanded.has(groupId),
-        rowLimit
+        rowLimit,
+        isLive
       }));
     }
     const ungrouped = rest.filter((item) => !claimed.has(item.sessionId));
@@ -157,24 +186,29 @@ export function buildSidebarSections({
         id: UNGROUPED_GROUP_ID,
         title: null,
         rows: sort(ungrouped, orderBy, null),
-        collapsed: collapsed.has(UNGROUPED_GROUP_ID) && !containsActive(ungrouped, activeSessionId),
+        collapsed: collapsed.has(UNGROUPED_GROUP_ID),
         expanded: expanded.has(UNGROUPED_GROUP_ID),
-        rowLimit
+        rowLimit,
+        isLive
       }));
     }
   }
 
   // 渲染序 = 快捷键序:⌘K+数字、↑/↓、⌘[/⌘] 都走这一份,永远指向屏幕上真有的行。
   const renderedIds = sections.flatMap((item) => item.rows.map((row) => row.sessionId));
-  return { sections, renderedIds };
+  return { sections, renderedIds, activeGroupId: activeGroupOf(sections, activeSessionId) };
 }
 
 /// 组装一段分区:把"折叠/截断"这件事在这里算完,视图只管画。
-function section({ kind, id, workspaceId = null, title, hint = null, rows, collapsed, expanded, rowLimit }) {
+/// isLive 只给「展开其余」式的分组折叠用;单列表的 FLAT_ROW_LIMIT 是渲染上限
+/// 兜底,置顶区不截断,都不传。
+function section({ kind, id, workspaceId = null, title, hint = null, rows, collapsed, expanded, rowLimit, isLive = undefined }) {
   const all = rows ?? [];
   const limited = collapsed
     ? []
-    : (expanded || all.length <= rowLimit ? all : all.slice(0, rowLimit));
+    : expanded || all.length <= rowLimit
+      ? all
+      : isLive !== undefined ? collapsedRows(all, rowLimit, isLive) : all.slice(0, rowLimit);
   return {
     kind,
     id,
@@ -183,7 +217,7 @@ function section({ kind, id, workspaceId = null, title, hint = null, rows, colla
     hint,
     rows: limited,
     // 这一组的**完整**成员(含被折叠/截断掉的),拖拽解析锚点时要用:
-    // 落在最后一条可见行之后、而后面还有折起来的行时,锚点取第一条折叠行。
+    // 落在最后一条可见行之后时,锚点取完整成员里紧跟其前一行的那一条。
     allIds: all.map((item) => item.sessionId),
     total: all.length,
     hiddenCount: collapsed ? 0 : all.length - limited.length,
@@ -192,11 +226,16 @@ function section({ kind, id, workspaceId = null, title, hint = null, rows, colla
   };
 }
 
-/// 含当前会话的那个组不许保持折叠(Mac `containsCurrent`):用户刚打开的
-/// 会话藏在一个折起来的组里,列表看上去就像"我的会话不见了"。
-function containsActive(rows, activeSessionId) {
-  if (!activeSessionId) return false;
-  return rows.some((item) => item.sessionId === activeSessionId);
+/// 当前会话落在哪个分组里(按完整成员算,折叠的组也算)。
+///
+/// 对齐 Mac `containsCurrent`:它只在**挂载时**起作用(onAppear 里
+/// `collapsed = stored && !containsCurrent`)—— 抽屉打开那一下把这个组展开,
+/// 免得"我的会话不见了";之后用户照样可以把它折起来。所以这里只报告是哪一组,
+/// 由视图层在打开抽屉时决定展开,而不是每次渲染都强行覆盖折叠态 —— 那样的话
+/// 点这个组的标题永远没反应。
+function activeGroupOf(sections, activeSessionId) {
+  if (!activeSessionId) return null;
+  return sections.find((item) => item.allIds.includes(activeSessionId))?.id ?? null;
 }
 
 function basename(path) {

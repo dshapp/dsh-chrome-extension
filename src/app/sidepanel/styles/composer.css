@@ -41,12 +41,17 @@
   color: var(--text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 多行编辑框(对齐 web QueueDock .editor):JS 按内容设高度,
+   六行(20px 行高)+ 内边距 + 边框封顶,之后滚动;所在行上下留白,长高时不贴边。 */
 .queue-edit-input {
-  flex: 1 1 auto; min-inline-size: 0; block-size: 1.75rem;
-  padding: 0 0.5rem;
+  flex: 1 1 auto; min-inline-size: 0;
+  box-sizing: border-box; min-block-size: 1.75rem; max-block-size: 128px;
+  margin: 4px 0;
+  padding: 3px 0.5rem;
   border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg); color: var(--text);
-  font: inherit; font-size: 0.8125rem;
+  font: inherit; font-size: 0.8125rem; line-height: 20px;
+  overflow-y: auto; resize: none;
 }
 .queue-edit-input:focus { outline: none; border-color: var(--accent); }
 .queue-actions { flex: none; display: flex; align-items: center; gap: 0.125rem; }
@@ -1498,6 +1503,20 @@
 .set-sheet-field .set-input { width: 100%; }
 .set-sheet-label { font-size: 12px; color: var(--text-dim); }
 .set-sheet-text { font-size: 12.5px; line-height: 1.55; color: var(--text-dim); margin: 0 0 10px; }
+/* 预设模式说明(web PresetGuideDialog.module.css 的简化版):行内两个入口 + 弹窗正文。 */
+.pset-guide-links { display: flex; gap: 12px; margin-top: 4px; }
+.pset-guide-panel { font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.pset-guide-section + .pset-guide-section { margin-top: 16px; }
+.pset-guide-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 6px; }
+.pset-guide-section-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.pset-guide-panel p { margin: 0 0 10px; }
+.pset-guide-panel[data-guide-page="usage"] p { color: var(--text-dim); }
+.pset-guide-task {
+  display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 8px;
+  padding: 9px 11px; border-radius: 8px; background: var(--border-soft);
+}
+.pset-guide-task-text { flex: 1; min-width: 0; }
+.pset-guide-copy { flex-shrink: 0; }
 .set-sheet-error { font-size: 12px; color: var(--danger); min-height: 15px; }
 .set-code {
   margin: 0; padding: 10px;
@@ -1656,6 +1675,45 @@ a.srv-url:hover { text-decoration: underline; }
 }
 .jobs-detail-label { color: var(--text-faint); }
 .jobs-detail-value { margin: 0; overflow-wrap: anywhere; }
+/* 0.1.7:分段标题 / 停止键 / 退出码 / 实时输出(对齐 web JobListAction.module.css 与 Mac CardDetailSheet)。 */
+.jobs-section-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0.4rem 0.5rem 0.15rem; font-size: 0.72rem; color: var(--text-faint);
+}
+.jobs-section-toggle, .jobs-section-clear {
+  display: inline-flex; align-items: center; gap: 0.25rem; padding: 0;
+  border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.jobs-section-clear:hover, .jobs-section-toggle:hover { color: var(--text); }
+.jobs-section-chevron {
+  inline-size: 0.4rem; block-size: 0.4rem; margin-inline-end: 0.15rem;
+  border-inline-end: 1.5px solid currentColor; border-block-end: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s;
+}
+.jobs-section-chevron.open { transform: rotate(45deg); }
+.jobs-row-line { display: flex; align-items: center; gap: 0.25rem; }
+.jobs-row-line > .jobs-row { flex: 1; min-inline-size: 0; }
+.act-btn.jobs-stop { flex: none; color: var(--danger); }
+.act-btn.jobs-stop:disabled { opacity: 0.45; cursor: default; }
+.jobs-stop-glyph { display: block; inline-size: 0.55rem; block-size: 0.55rem; border-radius: 1px; background: currentColor; }
+.jobs-detail-value .act-btn.jobs-stop { display: inline-grid; vertical-align: middle; margin-inline-start: 0.5rem; }
+.jobs-detail-value.exit-nonzero { color: var(--danger); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.jobs-output { display: flex; flex-direction: column; gap: 0.3rem; margin-block-start: 0.75rem; }
+.jobs-output-head { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; }
+.jobs-output-live {
+  inline-size: 6px; block-size: 6px; border-radius: 50%;
+  background: var(--ok); animation: pulse 1.2s infinite;
+}
+.jobs-output-live[hidden], .jobs-output-note[hidden] { display: none; }
+.jobs-output-note { font-size: 0.75rem; color: var(--text-faint); }
+.jobs-output-note.error { color: var(--danger); }
+.jobs-output-text {
+  margin: 0; min-block-size: 6rem; max-block-size: 22rem; overflow: auto;
+  padding: 0.5rem; border: 1px solid var(--border); border-radius: 0.375rem;
+  background: var(--code-bg); font: 0.75rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.jobs-output-text.empty { color: var(--text-faint); }
 
 /* Git 入口。两行竖排(分支名 / ±行数)照 Mac WorkspaceGitAction 的 VStack:
    两行短文本比一行长文本占的横向宽度小得多,这是长分支名不至于把计数挤到
@@ -1814,4 +1872,12 @@ a.srv-url:hover { text-decoration: underline; }
 .history-item.drop-after { box-shadow: inset 0 -2px 0 0 var(--link); }
 .history-item[draggable="true"] { cursor: grab; }
 .history-item[draggable="true"]:active { cursor: grabbing; }
+/* 分组拖拽(history-group-drag.js):落点按整组算,所以"插到组后面"的线画在
+   组内最后一个元素(可能是会话行或「展开其余」)的下沿。标题仍是 pointer 光标 ——
+   它首先是一个点击折叠的按钮,拖动是次要手势。 */
+.history-group.group-dragging { opacity: 0.4; }
+.history-group.group-drop-before { box-shadow: inset 0 2px 0 0 var(--link); }
+.history-item.group-drop-after,
+.history-more-row.group-drop-after,
+.history-group.group-drop-after { box-shadow: inset 0 -2px 0 0 var(--link); }
 

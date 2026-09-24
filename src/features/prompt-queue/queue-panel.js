@@ -12,7 +12,7 @@ import { t } from "../../shared/i18n.js";
 import { blocksToText } from "../sessions/chat-nodes.js";
 import { lucideIconSvg } from "../chat/file-icons.js";
 
-/// 仅当每个内容块都是纯文本时才可编辑 —— 图片/附件无法用单行输入框无损表达,
+/// 仅当每个内容块都是纯文本时才可编辑 —— 图片/附件无法用文本编辑框无损表达,
 /// 保存会静默丢掉它们(对齐 Mac QueueInteractionState.editableText)。
 export function editableText(message) {
   const blocks = message?.content;
@@ -54,6 +54,13 @@ function queueSignature(queued, running, mutable) {
   ]);
 }
 
+/// 先归零再读 scrollHeight(否则旧高度成了地板);scrollHeight 不含边框,
+/// 而 border-box 高度含,补上差值(对齐 web QueueEditor)。
+function autoResizeEditor(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight}px`;
+}
+
 /// 渲染排队面板。
 ///
 /// @param items   session/queue 快照
@@ -91,6 +98,7 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
     element.innerHTML = queued.map((item) => renderRow(item)).join("");
     const input = element.querySelector(".queue-edit-input");
     if (input) {
+      autoResizeEditor(input);
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     }
@@ -100,9 +108,10 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
     const editing = editingId === item.id;
     const busy = busyId === item.id;
     const draft = editing ? editableText(item.message) ?? "" : "";
+    // textarea 的 HTML 解析会吞掉紧跟开标签的一个换行:先垫一个,草稿自身的首行换行才保得住。
     const body = editing
-      ? `<input class="queue-edit-input" type="text" value="${escapeHtml(draft)}"
-           placeholder="${escapeHtml(t("queue.itemPlaceholder"))}" aria-label="${escapeHtml(t("queue.editItem"))}">`
+      ? `<textarea class="queue-edit-input" rows="1"
+           placeholder="${escapeHtml(t("queue.itemPlaceholder"))}" aria-label="${escapeHtml(t("queue.editItem"))}">\n${escapeHtml(draft)}</textarea>`
       : `<span class="queue-text" title="${escapeHtml(blocksToText(item.message?.content))}">${escapeHtml(blocksToText(item.message?.content))}</span>`;
     return [
       `<div class="queue-row${busy ? " is-busy" : ""}" data-item-id="${escapeHtml(item.id)}">`,
@@ -147,7 +156,7 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
     dispatch(itemId, kind);
   });
 
-  // Enter 保存、Escape 取消:与 Mac 端编辑框键位一致。
+  // Enter 保存、Shift+Enter 换行、Escape 取消:与 composer 及 web QueueEditor 键位一致。
   element.addEventListener("keydown", (event) => {
     const input = event.target.closest(".queue-edit-input");
     if (!input) return;
@@ -156,13 +165,20 @@ export function createQueuePanel(items, { onAction, onError, running = false, mu
     // 输入框可能已经脱离所属行(重渲染竞态下事件仍会冒泡上来),此时没有可提交的
     // 目标 —— 与上面 click 分支的 !row 处理保持一致,直接放过。
     if (!row) return;
-    if (event.key === "Enter") { event.preventDefault(); commitEdit(row.dataset.itemId, input); }
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitEdit(row.dataset.itemId, input); }
     else if (event.key === "Escape") { event.preventDefault(); editingId = null; render(); }
   });
 
+  // 编辑框随内容长高,到 CSS max-height 后滚动(对齐 web QueueEditor 的 layout effect)。
+  element.addEventListener("input", (event) => {
+    const input = event.target.closest?.(".queue-edit-input");
+    if (input) autoResizeEditor(input);
+  });
+
+  /// 原样保存(保留换行与首尾空白),只拒绝全空白 —— 对齐 web saveEdit 与 Mac 267bcde。
   function commitEdit(itemId, input) {
-    const text = (input?.value ?? "").trim();
-    if (!text) return;
+    const text = input?.value ?? "";
+    if (!text.trim()) return;
     dispatch(itemId, { kind: "edit", text });
   }
 

@@ -69,6 +69,19 @@ export function createWorkspaceService(connection, { onArchivedChange, onPinnedC
       const value = await connection.call(RPC.workspaceCreate, { request: { path } });
       return value.workspace;
     },
+    /// 首次使用的默认工作区(对齐 web WorkspaceModel.initializeDefault):资格全由宿主判
+    ///(注册表与会话历史都为空),不合格回 ok 无 value → null。拿到的行立刻并入本地列表,
+    /// 不等 workspace/follow 的 upsert —— 调用方紧接着就要在它里面建会话。
+    async initializeDefault({ directoryName, title }) {
+      const value = await connection.call(RPC.workspaceInitializeDefault, { request: { directoryName, title } });
+      const item = value?.workspace;
+      if (!item?.workspaceId) return null;
+      if (!workspaces.some((row) => row.workspaceId === item.workspaceId)) {
+        workspaces = [...workspaces, item];
+        notify();
+      }
+      return item;
+    },
     // 选择目录 → 建 workspace(若已存在则幂等返回)。
     async pickAndCreate() {
       const path = await this.pickDirectory();
