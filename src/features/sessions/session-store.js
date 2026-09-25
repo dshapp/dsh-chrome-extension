@@ -211,8 +211,9 @@ export function createSessionStore() {
       trajectory: null,
       trajectoryLang: null,
       // 本轮产出词表(turn → 产出路径,首见顺序去重)与 present 交付清单(turn → 声明)。
-      // 两者都是免观察派生,回合尾行先于迟到的 present/落定结果渲染后会停留在空状态;
-      // deliverablesRevision 在词表实际变化时递增,尾行读它即可重渲染(对齐 mac 5af61e6)。
+      // 词表只喂正文的行内 mention(页脚 chip 行已按上游 f937f4e23b 删除)。两者都是
+      // 免观察派生,收尾正文会先于迟到的 present/落定结果渲染;deliverablesRevision 在
+      // 词表实际变化时递增,正文与尾行读它即可重渲染(对齐 mac 5af61e6)。
       producedPathsByTurn: new Map(),
       presentedByTurn: new Map(),
       // 每轮最新一条 `workspace/changes` 公告的 seq(turn → seq)。摘要与逐文件
@@ -1600,7 +1601,7 @@ export function createSessionStore() {
       if (node.kind === NodeKind.assistant) node.closing = closingByTurn.get(node.turn) === node;
     }
     // 本轮产出词表:从 settled 非 error 的变更调用解析参数。词表实际变化时递增 revision,
-    // 供回合尾行与 mention 词表重渲染(对齐 mac indexRows)。
+    // 供交付卡与正文的 mention 词表重渲染(对齐 mac indexRows)。
     // 递归进 subCalls:本机 DSH 走 PTC(run_code)时 write/edit 都是 root 程序下的
     // tool/ptc-dispatch 子调用,只看 root 会让所有产出文件都消失。
     const producedBefore = state.producedPathsByTurn;

@@ -74,7 +74,8 @@ export function createSidepanelApp(root, deps, options = {}) {
       return {
         cwd: state.cwd,
         home: state.hostHome,
-        // 本轮产出词表与 present 交付清单(web ui-deliverables / mac TurnDeliverables)。
+        // 本轮产出词表(只喂正文的行内 mention;上游 f937f4e23b 已删掉它的页脚 chip 行)
+        // 与 present 交付清单(web ui-deliverables / mac TurnDeliverables)。
         producedPaths: (turn) => snap?.producedPathsByTurn?.get?.(turn) ?? [],
         presentedFiles: (turn) => snap?.presentedByTurn?.get?.(turn) ?? [],
         deliverablesRevision: snap?.deliverablesRevision ?? null,
@@ -86,7 +87,7 @@ export function createSidepanelApp(root, deps, options = {}) {
         loadChangesSummary: (seq) => deps.changes?.loadSummary?.(snap?.sessionId, seq) ?? null,
         changesDiff: (seq, index) => deps.changes?.diff?.(snap?.sessionId, seq, index) ?? null,
         loadChangesDiff: (seq, index) => deps.changes?.loadDiff?.(snap?.sessionId, seq, index) ?? null,
-        // 行内 mention / 产出 chip / 交付卡点击:侧栏是扩展页,file: 打不开,
+        // 行内 mention / 交付卡点击:侧栏是扩展页,file: 打不开,
         // 统一走宿主 openPath。打开失败不再静默吞:宿主对不存在的路径会回错,
         // 用户看到 toast 才知道"点了没反应"是路径问题而不是按钮坏了。
         onOpenPath: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },

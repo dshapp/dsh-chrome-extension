@@ -1,7 +1,6 @@
 // 文件类型图标:取自 lucide(https://github.com/lucide-icons/lucide)的 stroke 线稿,
-// 24×24、stroke=currentColor,和 Web ui-primitives FileTypeIcon / LinkIcon 的分类口径一致:
-// - present 交付卡用细分类(fileTypeIconName,对齐 classifyFileType);
-// - 产出 chip / 行内 mention 用 6 类粗分类(linkIconName,对齐 classifyLinkPath)。
+// 24×24、stroke=currentColor,和 Web ui-primitives FileTypeIcon 的分类口径一致:
+// - present 交付卡用细分类(fileTypeIconName,对齐 classifyFileType)。
 // 只内联用到的图标,不引入整包 lucide。
 import { fileExtension } from "./user-content.js";
 
@@ -548,19 +547,4 @@ const KIND_ICON = Object.freeze({
 /// present 交付卡 / 文件卡的细分类图标名(web FileTypeIcon)。
 export function fileTypeIconName(name) {
   return KIND_ICON[fileTypeKind(name)] ?? "file";
-}
-
-/// 产出 chip / 行内 mention 的 6 类粗分类图标名(web LinkIcon.classifyLinkPath)。
-export function linkIconName(name) {
-  switch (fileTypeKind(name)) {
-    case "code":
-    case "html": return "file-code";
-    case "image": return "file-image";
-    case "excel":
-    case "pdf":
-    case "ppt":
-    case "word": return "file-text";
-    case "folder": return "folder";
-    default: return "file";
-  }
 }

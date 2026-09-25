@@ -17,7 +17,7 @@ import { parseXMLMessageCards } from "./user-xml-cards.js";
 import { createUserXmlCards } from "./user-xml-cards-view.js";
 import { attachCopyFeedback } from "./copy-feedback.js";
 import { foldMessageText, chunkText } from "./long-message.js";
-import { lucideIcon, fileTypeIconName, linkIconName, fileTypeKind } from "./file-icons.js";
+import { lucideIcon, fileTypeIconName, fileTypeKind } from "./file-icons.js";
 import { buildUnifiedDiff, unifiedDiffText } from "./unified-diff.js";
 
 /// assistant 正文的折叠阈值。比用户消息的 1000 宽松得多:模型回答本来就长,
@@ -1263,8 +1263,7 @@ function buildTurnStatPill({ className, icon, label, title, headline, build }) {
 /// seq 落点(`data.seq`),而 assistant step 的 seq 落在未闭合的轮次内部,服务端会以
 /// OPEN_TURN 拒绝。所以整个记录里只有这一行能发起分叉。
 export function createTurnTailNode(node, context = {}) {
-  const { onFork, producedPaths, presentedFiles, onOpenPath, onRevealPath } = context;
-  const produced = typeof producedPaths === "function" ? (producedPaths(node.turn) ?? []) : [];
+  const { onFork, presentedFiles, onOpenPath, onRevealPath } = context;
   const presented = typeof presentedFiles === "function" ? (presentedFiles(node.turn) ?? []) : [];
   // 产出/present 的 path 是工作区相对路径;宿主 openWorkspacePath 只按自己的 cwd
   // 解析(实测相对路径会被 open 到宿主 home),所以这里先按会话 cwd 补成绝对路径。
@@ -1279,15 +1278,15 @@ export function createTurnTailNode(node, context = {}) {
   const hasUsage = totalTokens > 0;
   const runMs = node.runMs;
   const hasTime = runMs != null && runMs > 0;
-  // 收尾消息、本轮用量、本轮用时三者皆无时,才彻底不占行(对齐 web/Mac 的 gate)。
+  // 收尾消息、本轮用量、本轮用时三者皆无、且既无改动记录也无交付文件时,才彻底不占行
+  // (对齐 web selectDeliverables / Mac 的 gate:产出词表不再贡献页脚)。本轮产出的路径
+  // 只喂给正文的行内 mention(见 updateAssistantNode),不再有自己的一行。
   const hasActions = node.messageId != null || hasUsage || hasTime;
-  if (!hasActions && !produced.length && !presented.length && changesSeq == null) return null;
+  if (!hasActions && !presented.length && changesSeq == null) return null;
 
   const wrap = el("div", "turn-tail-node");
-  // 顺序对齐 web:改动文件卡在最上,其后才是产出 chips 与交付卡。
+  // 顺序对齐 web Deliverables.tsx:改动文件卡在最上,其后才是交付卡。
   if (changesSeq != null) wrap.append(buildChangedFiles(changesSeq, context, openPath));
-  // 产出 chips 在收尾正文与图标动作之间(web TurnTail chain / mac ProducedFilesRow)。
-  if (produced.length) wrap.append(buildProducedFiles(produced, openPath));
   if (presented.length) wrap.append(buildPresentedFiles(presented, openPath, revealPath));
 
   if (hasActions) {
@@ -1360,30 +1359,6 @@ function fileBadge(path) {
   return extension ? extension.slice(0, 4) : "·";
 }
 
-/// 本轮产出 chips:最多 6 个(web ProducedFiles SHOWN_LIMIT),余量折成 "+N 文件"。
-/// chip 上是文件名,title 给全路径(重名时的消歧)。
-function buildProducedFiles(paths, onOpen) {
-  const row = el("div", "turn-produces");
-  row.append(el("span", "turn-produces-label", t("turn.produced")));
-  const shown = paths.slice(0, 6);
-  for (const path of shown) {
-    const chip = el("button", "turn-produce-chip");
-    chip.type = "button";
-    chip.title = path;
-    chip.setAttribute("aria-label", t("turn.openFile", { name: path }));
-    const chipIcon = el("span", "turn-produce-icon");
-    chipIcon.append(lucideIcon(linkIconName(path), { size: 13 }));
-    chip.append(chipIcon);
-    chip.append(el("span", "turn-produce-name", deliverablesBasename(path)));
-    if (typeof onOpen === "function") chip.addEventListener("click", () => onOpen(path));
-    row.append(chip);
-  }
-  if (paths.length > shown.length) {
-    row.append(el("span", "turn-produce-more", t("turn.moreFiles", { n: String(paths.length - shown.length) })));
-  }
-  return row;
-}
-
 /// "在文件管理器中显示"的平台文案(web presented.finder / presented.explorer)。
 function revealLabel() {
   const platform = navigator.userAgentData?.platform || navigator.platform || "";
@@ -1418,7 +1393,7 @@ function bindPresentMenuDismiss() {
 function buildPresentedFiles(files, onOpen, onReveal) {
   bindPresentMenuDismiss();
   const wrap = el("div", "turn-presents");
-  wrap.append(el("span", "turn-produces-label", t("turn.presented")));
+  wrap.append(el("span", "turn-presents-label", t("turn.presented")));
   const grid = el("div", "turn-present-grid");
   grid.dataset.single = files.length === 1 ? "true" : "false";
   const openFile = (path) => { if (typeof onOpen === "function") onOpen(path); };
@@ -1492,15 +1467,15 @@ function buildPresentedFiles(files, onOpen, onReveal) {
   wrap.append(grid);
   if (files.length > 4) {
     let expanded = false;
-    const more = el("button", "turn-present-more", t("turn.showAll", { n: String(files.length) }));
+    const more = el("button", "turn-present-more", t("presented.all", { n: String(files.length) }));
     more.type = "button";
     more.setAttribute("aria-expanded", "false");
     more.addEventListener("click", () => {
       expanded = !expanded;
       render(expanded);
       more.textContent = expanded
-        ? t("turn.collapseAll", { n: String(files.length) })
-        : t("turn.showAll", { n: String(files.length) });
+        ? t("presented.collapse")
+        : t("presented.all", { n: String(files.length) });
       more.setAttribute("aria-expanded", String(expanded));
     });
     wrap.append(more);
@@ -1508,13 +1483,14 @@ function buildPresentedFiles(files, onOpen, onReveal) {
   return wrap;
 }
 
+/// 折叠前可见的行数:web ChangedFiles 的 COLLAPSED_ROWS,也是收尾消息的摘要高度。
+const COLLAPSED_ROWS = 4;
+
 /// 本轮改动文件卡(web ui-deliverables ChangedFiles / mac ChangedFilesCard)。
 ///
 /// 两段式:耐久事件只公告"这一轮有改动记录",清单与逐文件对比要按公告的 seq
 /// 去宿主读。所以这张卡先挂一个**空占位**,摘要落地后自己填 —— 宿主不再提供
 /// (会话被回收后 404)时占位保持隐藏,而不是画一张空卡或报错。
-const CHANGED_FILES_SHOWN = 3;
-
 function buildChangedFiles(seq, context, openPath) {
   const card = el("div", "turn-changes");
   card.hidden = true;
@@ -1527,8 +1503,7 @@ function buildChangedFiles(seq, context, openPath) {
     tile.append(lucideIcon("file-pen", { size: 13 }));
     header.append(tile);
     const titles = el("div", "turn-changes-titles");
-    titles.append(el("span", "turn-changes-title",
-      summary.total === 1 ? t("changes.titleOne") : t("changes.title", { n: String(summary.total) })));
+    titles.append(el("span", "turn-changes-title", t("changes.title", { n: String(summary.total) })));
     const stat = el("span", "turn-changes-stat");
     if (summary.added > 0) stat.append(el("span", "turn-changes-added", t("changes.added", { n: String(summary.added) })));
     if (summary.deleted > 0) stat.append(el("span", "turn-changes-deleted", t("changes.deleted", { n: String(summary.deleted) })));
@@ -1537,7 +1512,7 @@ function buildChangedFiles(seq, context, openPath) {
     card.append(header);
 
     const list = el("ul", "turn-changes-list");
-    const shown = expanded ? summary.files : summary.files.slice(0, CHANGED_FILES_SHOWN);
+    const shown = expanded ? summary.files : summary.files.slice(0, COLLAPSED_ROWS);
     shown.forEach((file) => {
       // index 必须取自完整清单:diff 路由按摘要里的下标寻址,折叠后的切片下标会错位。
       const index = summary.files.indexOf(file);
@@ -1561,14 +1536,14 @@ function buildChangedFiles(seq, context, openPath) {
     });
     card.append(list);
 
-    if (summary.files.length > CHANGED_FILES_SHOWN) {
+    if (summary.files.length > COLLAPSED_ROWS) {
       const toggle = el("button", "turn-changes-toggle");
       toggle.type = "button";
       toggle.setAttribute("aria-expanded", String(expanded));
       toggle.append(lucideIcon(expanded ? "chevron-up" : "chevron-down", { size: 13 }));
       toggle.append(el("span", null, expanded
         ? t("changes.collapse")
-        : t("changes.showAll", { n: String(summary.files.length) })));
+        : t("changes.all", { n: String(summary.files.length) })));
       toggle.addEventListener("click", () => { expanded = !expanded; paint(summary); });
       card.append(toggle);
     }
@@ -1612,8 +1587,10 @@ function openChangedFileDetail(seq, index, file, context, openPath) {
       const fill = (diff) => {
         body.replaceChildren();
         if (!diff) { body.append(el("div", "diff-note", t("changes.unavailable"))); return; }
-        if (diff.kind === "binary") { body.append(el("div", "diff-note", t("changes.binary"))); return; }
-        if (diff.kind === "oversized") { body.append(el("div", "diff-note", t("changes.oversized"))); return; }
+        // 详情里要给一句能独立读懂的说明(web diff.binary / diff.oversized),
+        // 而卡片行上只是"二进制 / 过大"两个计数位。
+        if (diff.kind === "binary") { body.append(el("div", "diff-note", t("diff.binary"))); return; }
+        if (diff.kind === "oversized") { body.append(el("div", "diff-note", t("diff.oversized"))); return; }
         // 行级对比超时:宿主退化成整文件替换,明说一句,别让读者以为文件全被重写了。
         if (diff.coarse) body.append(el("div", "diff-note", t("changes.coarse")));
         if (!diff.hunks.length) { body.append(el("div", "diff-note", t("changes.identical"))); return; }

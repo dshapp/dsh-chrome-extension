@@ -118,7 +118,7 @@ mark.find-hit.current { background: var(--accent); color: #fff; outline: 1px sol
   background: var(--bg-raised); overflow: hidden;
 }
 .file-icon { flex: none; display: inline-flex; color: var(--text-faint); }
-.file-icon svg, .turn-produce-icon svg, .turn-present-icon svg { display: block; }
+.file-icon svg, .turn-present-icon svg { display: block; }
 .file-content { display: flex; flex-direction: column; min-inline-size: 0; }
 .file-name { font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-meta { font-size: 0.6875rem; color: var(--text-faint); }
@@ -586,33 +586,11 @@ button.turn-tail-stat[aria-expanded="true"] { background: var(--bg-raised); colo
   }
 }
 
-/* 本轮产出 / present 交付:页脚上方的 chip 行与交付卡(web TurnTail chain / mac ProducedFilesRow)。 */
+/* present 交付:页脚上方的交付卡(web Deliverables.tsx)。本轮产出的 chip 行
+   已按上游 f937f4e23b 删除 —— 产出路径只喂正文的行内 mention。 */
 .turn-tail-node { display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; }
-.turn-produces {
-  display: flex; align-items: center; gap: 0.375rem 0.25rem; flex-wrap: wrap;
-  padding-inline: 0.125rem;
-}
-/* label 与 chips 同为页脚索引文字,不参与 chip 的增高。 */
-.turn-produces-label { flex: none; font-size: 0.6875rem; color: var(--text-faint); }
-/* 产出 chip:与 .turn-tail-stat / .turn-present-open 同一套药丸语言 ——
-   同高、圆角 999px、--bg-raised 底 + --border 边;默认 --text-dim,
-   hover/focus 才升到 --accent(和交付卡的 border-color 反馈一致)。 */
-.turn-produce-chip {
-  display: inline-flex; align-items: center; gap: 0.3125rem;
-  max-inline-size: 12rem; min-width: 0; block-size: 1.375rem; padding-inline: 0.5rem;
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--bg-raised); color: var(--text-dim);
-  font: inherit; font-size: 0.6875rem; line-height: 1; cursor: pointer;
-  transition: color .12s, border-color .12s, background .12s;
-}
-.turn-produce-chip:hover { border-color: var(--accent); color: var(--accent); }
-/* 键盘可达:与 .turn-present-card:focus-visible 用同一内描边,不叠外发光。 */
-.turn-produce-chip:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
-/* 图标默认比文字更淡,hover 时随 chip 一起提亮。 */
-.turn-produce-icon { flex: none; display: inline-flex; color: var(--text-faint); transition: color .12s; }
-.turn-produce-chip:hover .turn-produce-icon { color: inherit; }
-.turn-produce-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.turn-produce-more { font-size: 0.6875rem; color: var(--text-faint); }
+/* label 与卡片同为页脚索引文字,不参与卡片的增高。 */
+.turn-presents-label { flex: none; font-size: 0.6875rem; color: var(--text-faint); }
 /* present 交付卡:web Deliverables / PresentedFileCard。
    弹性两列:卡片各按行宽一半伸缩(flex-basis 随行宽,不写死宽度),
    一行两张;仅单文件时独占一行。 */

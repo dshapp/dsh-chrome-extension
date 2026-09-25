@@ -43,6 +43,13 @@ const summaryBody = {
   ]
 }
 
+/// 5 个文件:用来钉住"超过 4 行才折叠"(COLLAPSED_ROWS 对齐 web ChangedFiles)。
+const fiveFileBody = {
+  ...summaryBody,
+  total: 5,
+  files: [...summaryBody.files, { path: 'src/c.js', display: 'src/c.js', added: 0, deleted: 0 }]
+}
+
 const diffBody = {
   kind: 'text',
   path: 'src/a.js',
@@ -140,7 +147,7 @@ test('服务:传输失败不写缓存,下一次渲染可以重试', async () => 
   assert.equal(connection.calls.length, 2)
 })
 
-test('渲染:摘要落地后页脚长出改动文件卡,前 3 行可见、其余折叠', async () => {
+test('渲染:4 行以内不折叠,超过 4 行才折出「全部 N 个文件」', async () => {
   const connection = fakeConnection({ '/api/changes.summary': summaryBody, '/api/changes.diff': diffBody })
   const changes = createChangesService(connection)
   const context = {
@@ -158,15 +165,35 @@ test('渲染:摘要落地后页脚长出改动文件卡,前 3 行可见、其余
   await changes.loadSummary('s1', 7)
   await Promise.resolve()
   assert.equal(card.hidden, false)
-  assert.match(card.querySelector('.turn-changes-title').textContent, /4/)
-  assert.equal(card.querySelectorAll('.turn-changes-row').length, 3, '默认只显示 3 行')
-  const counts = [...card.querySelectorAll('.turn-changes-counts')].map((n) => n.textContent)
+  assert.equal(card.querySelector('.turn-changes-title').textContent, '已编辑 4 个文件')
+  assert.equal(card.querySelectorAll('.turn-changes-row').length, 4, '4 行全都展示')
+  assert.equal(card.querySelector('.turn-changes-toggle'), null, '不超过 4 行不给折叠入口')
+
+  // 第 5 个文件落地后才有折叠:默认 4 行,展开后 5 行。
+  const five = fakeConnection({ '/api/changes.summary': fiveFileBody, '/api/changes.diff': diffBody })
+  const changes5 = createChangesService(five)
+  const context5 = {
+    cwd: '/ws',
+    changesSeq: () => 7,
+    changesSummary: (seq) => changes5.summary('s1', seq),
+    loadChangesSummary: (seq) => changes5.loadSummary('s1', seq),
+    changesDiff: (seq, index) => changes5.diff('s1', seq, index),
+    loadChangesDiff: (seq, index) => changes5.loadDiff('s1', seq, index)
+  }
+  const card5 = createTurnTailNode(tailNode(), context5).querySelector('.turn-changes')
+  await changes5.loadSummary('s1', 7)
+  await Promise.resolve()
+  assert.equal(card5.querySelector('.turn-changes-title').textContent, '已编辑 5 个文件')
+  assert.equal(card5.querySelectorAll('.turn-changes-row').length, 4, '默认只显示 4 行')
+  assert.equal(card5.querySelector('.turn-changes-toggle').textContent, '全部 5 个文件')
+  const counts = [...card5.querySelectorAll('.turn-changes-counts')].map((n) => n.textContent)
   assert.match(counts[0], /\+10/)
-  card.querySelector('.turn-changes-toggle').dispatchEvent(new dom.window.MouseEvent('click'))
-  assert.equal(card.querySelectorAll('.turn-changes-row').length, 4, '展开后显示全部')
-  const all = [...card.querySelectorAll('.turn-changes-counts')].map((n) => n.textContent)
+  card5.querySelector('.turn-changes-toggle').dispatchEvent(new dom.window.MouseEvent('click'))
+  assert.equal(card5.querySelectorAll('.turn-changes-row').length, 5, '展开后显示全部')
+  assert.equal(card5.querySelector('.turn-changes-toggle').textContent, '收起')
+  const all = [...card5.querySelectorAll('.turn-changes-counts')].map((n) => n.textContent)
   assert.ok(all.some((text) => text.includes('二进制') || text.includes('binary')))
-  assert.ok(all.some((text) => text.includes('文件过大') || text.includes('too large')))
+  assert.ok(all.some((text) => text.includes('过大') || text.includes('too large')))
 })
 
 test('渲染:点一行打开详情,宿主 hunks 画成 diff', async () => {
@@ -207,7 +234,7 @@ test('渲染:点一行打开详情,宿主 hunks 画成 diff', async () => {
 
 test('diff 视图:二进制/过大/无行级改动各自给一句说明而不是空白', async () => {
   const cases = [
-    [{ kind: 'binary', path: 'a', display: 'a' }, /二进制|binary/],
+    [{ kind: 'binary', path: 'a', display: 'a' }, /二进制文件|Binary file/],
     [{ kind: 'oversized', path: 'a', display: 'a' }, /文件过大|too large/],
     [{ kind: 'text', path: 'a', display: 'a', hunks: [], coarse: false }, /没有行级改动|No line changes/]
   ]
