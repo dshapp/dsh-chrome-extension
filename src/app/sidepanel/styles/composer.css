@@ -1445,6 +1445,11 @@
 .mle-advanced { display: flex; gap: 8px; padding: 2px 11px 7px; }
 .mle-field { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .mle-field-label { font-size: 10.5px; color: var(--text-faint); }
+/* 输入类型声明(文本/图像):与容量字段同排,勾选即写进该行的声明字段。 */
+.mle-input-types { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; border: 0; padding: 0; margin: 0; }
+.mle-mod { display: flex; align-items: center; gap: 5px; font-size: 11.5px; cursor: pointer; }
+.mle-mod input { accent-color: var(--accent, currentColor); }
+.mle-mod input:disabled { cursor: default; }
 .mle-empty { padding: 6px 11px; }
 .mle-picker {
   margin: 6px 11px; border: 1px solid var(--border); border-radius: 8px;

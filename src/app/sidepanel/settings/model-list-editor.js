@@ -33,8 +33,10 @@ function knownIds(rows) {
  * @param {(mode: "soft"|"hard") => void} options.requestRender 重画回调
  * @param {(error: unknown) => string} options.formatErrorDetails
  * @param {boolean} options.allowFetch 该适配器是否注册了模型发现(仅 pi-ai)
+ * @param {"inputModalities"|"input"} [options.inputField] 目录条目里声明输入
+ *   类型的字段,按适配器命名(deepseek 系为 inputModalities,pi-ai 为 input)。
  */
-export function createModelCatalogEditor({ context, discover, requestRender, formatErrorDetails, allowFetch }) {
+export function createModelCatalogEditor({ context, discover, requestRender, formatErrorDetails, allowFetch, inputField = "input" }) {
   const state = {
     rows: [],
     owned: false,
@@ -95,7 +97,7 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
   function models() {
     return state.rows
       .filter((row) => String(row.modelId ?? "").trim())
-      .map((row) => catalogRowToModel(row));
+      .map((row) => catalogRowToModel(row, inputField));
   }
 
   function visibleCandidates() {
@@ -127,9 +129,26 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
         ? '<div class="mle-advanced">'
           + capacityField(row, index, "contextWindow", placeholders.contextWindow)
           + capacityField(row, index, "maxTokens", placeholders.maxTokens)
+          + inputTypesHtml(row, index)
           + "</div>"
         : "")
       + "</div>";
+  }
+
+  /// 输入类型声明(对齐 web ModelInputTypes):未触碰时展示回退值(文本),
+  /// 勾选状态写进行里的 inputTypes;文本在只剩它一项时锁住,目录永远有效。
+  function inputTypesHtml(row, index) {
+    const selected = row.inputTypes ?? ["text"];
+    const disabled = context().disabled;
+    const box = (id, checked, locked, label) =>
+      '<label class="mle-mod"><input type="checkbox" id="' + id + '"'
+      + (checked ? " checked" : "") + (disabled || locked ? " disabled" : "") + " />"
+      + escapeHtml(label) + "</label>";
+    return '<fieldset class="mle-input-types" aria-label="' + escapeHtml(t("cat.inputTypes") + " " + (index + 1)) + '">'
+      + '<legend class="mle-field-label">' + escapeHtml(t("cat.inputTypes")) + "</legend>"
+      + box("mle-mod-text-" + index, selected.includes("text"), selected.length === 1 && selected.includes("text"), t("cat.inputText"))
+      + box("mle-mod-image-" + index, selected.includes("image"), false, t("cat.columnImage"))
+      + "</fieldset>";
   }
 
   function capacityField(row, index, field, placeholder) {
@@ -238,7 +257,7 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
     const byId = new Map(state.rows.map((row) => [String(row.modelId ?? "").trim(), row]));
     for (const candidate of candidates) {
       if (!state.picked.has(candidate.id)) continue;
-      if (!byId.has(candidate.id)) byId.set(candidate.id, catalogRowFromModel(candidate));
+      if (!byId.has(candidate.id)) byId.set(candidate.id, catalogRowFromModel(candidate, inputField));
     }
     state.rows = [...byId.values()];
     state.owned = true; state.touched = true;
@@ -275,6 +294,22 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
         requestRender("soft");
       });
       maxInput?.addEventListener("blur", () => { settleCapacity(index, "maxTokens"); });
+      for (const modality of ["text", "image"]) {
+        root.querySelector("#mle-mod-" + modality + "-" + index)?.addEventListener("change", (event) => {
+          const selected = row.inputTypes ?? ["text"];
+          const next = ["text", "image"].filter((value) =>
+            value === modality ? event.target.checked : selected.includes(value));
+          row.inputTypes = next;
+          // DeepSeek 拒绝对纯文本模型保留图像请求限额,取消图像时一并丢掉,
+          // 免得保存出一条 schema 会拒的条目(对齐 web)。
+          if (inputField === "inputModalities" && !next.includes("image")) {
+            delete row.raw.imagePixelBudget;
+            delete row.raw.imageMaxBytes;
+          }
+          state.owned = true; state.touched = true;
+          requestRender("soft");
+        });
+      }
       root.querySelector("#mle-exp-" + index)?.addEventListener("click", () => {
         if (state.expanded.has(index)) state.expanded.delete(index);
         else state.expanded.add(index);
@@ -294,7 +329,7 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
       });
     });
     root.querySelector("#mle-add")?.addEventListener("click", () => {
-      state.rows.push(catalogRowFromModel({}));
+      state.rows.push(catalogRowFromModel({}, inputField));
       state.owned = true; state.touched = true;
       requestRender("hard");
     });

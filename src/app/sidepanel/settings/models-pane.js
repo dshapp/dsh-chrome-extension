@@ -5,7 +5,7 @@
 import { t } from "../../../shared/i18n.js";
 import {
   section, row, textInput, button, iconButton,
-  tag, iconStatusLine, notice, spinner, escapeHtml, selectorEscape
+  tag, iconStatusLine, notice, spinner, escapeHtml, selectorEscape, providerDisplayName
 } from "./settings-ui.js";
 import { providerKeyState, addableProviders, deriveKeyRef } from "../../../features/settings/settings-service.js";
 import { openProviderEditor } from "./provider-editor-sheet.js";
@@ -40,7 +40,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
 
   function renderProviderRow(entry) {
     const keyState = providerKeyState(entry);
-    const name = entry.entry.displayName || entry.entry.provider;
+    const name = providerDisplayName(entry.entry);
     const label = escapeHtml(name)
       + (entry.entry.declared === true ? tag(t("prov.customTag")) : "");
     // Mac 的整行本体就是那个按钮,雪佛龙只是装饰符号;删除是行内唯一的独立控件,
@@ -51,7 +51,10 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
       + `<span class="set-chevron" aria-hidden="true">${lucideIconSvg("chevron-right", { size: 14 })}</span>`;
     return row({
       label,
-      hint: iconStatusLine(t(KEY_STATE_TEXT[keyState]), KEY_STATE_KIND[keyState], KEY_STATE_ICON[keyState]),
+      // 账号路由没有"密钥"概念,不渲染状态行(对齐 web 无凭据圆点)。
+      hint: keyState
+        ? iconStatusLine(t(KEY_STATE_TEXT[keyState]), KEY_STATE_KIND[keyState], KEY_STATE_ICON[keyState])
+        : "",
       control: trailing,
       id: `prov-row-${entry.entry.provider}`
     }).replace('<div class="set-row"', `<div class="set-row clickable" role="button" aria-label="${escapeHtml(name)}"`);
@@ -218,7 +221,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
 
   // ── 删除确认 ──
   function confirmRemove(entry) {
-    const name = entry.entry.displayName || entry.entry.provider;
+    const name = providerDisplayName(entry.entry);
     const derived = deriveKeyRef(entry.entry.provider);
     const managesCredential = entry.apiKeyEnv === derived
       && entry.credential?.configured === true && entry.credential?.writable === true;

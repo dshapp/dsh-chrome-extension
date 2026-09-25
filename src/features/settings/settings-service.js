@@ -90,24 +90,35 @@ export function formatCapacitySpelling(tokens) {
   return String(tokens);
 }
 
+/// 从模型对象读输入类型声明。优先读 profile 自己的声明字段,找不到再看
+/// 另一个适配器的字段 —— llm/discoverModels 的候选永远带 inputModalities,
+/// 而 pi-ai profile 把同一声明写成 input(对齐 web 的 inputField 约定)。
+export function storedInputTypes(model, inputField) {
+  const other = inputField === "input" ? "inputModalities" : "input";
+  const value = model?.[inputField] ?? model?.[other];
+  return Array.isArray(value) && value.length ? [...value] : undefined;
+}
+
 /// 把一条已存模型对象摊成编辑器行。原始对象存在 raw 里,编辑器只拥有
-/// id / 名称 / 两个容量字段,其余(description、compat、inputModalities、
-/// reasoning 等)原样带着走 —— 整表重写时不能把它们丢掉。对齐 web 的
+/// id / 名称 / 两个容量字段与输入类型,其余(description、compat、reasoning
+/// 等)原样带着走 —— 整表重写时不能把它们丢掉。对齐 web 的
 /// DeepSeekModelDraft 与 ModelListEditor。
-export function catalogRowFromModel(model) {
+export function catalogRowFromModel(model, inputField = "input") {
   const raw = typeof model === "object" && model !== null && !Array.isArray(model) ? model : {};
   return {
     raw: { ...raw },
     modelId: typeof raw.id === "string" ? raw.id : "",
     name: typeof raw.name === "string" ? raw.name : "",
     contextWindow: formatCapacitySpelling(typeof raw.contextWindow === "number" ? raw.contextWindow : null),
-    maxTokens: formatCapacitySpelling(typeof raw.maxTokens === "number" ? raw.maxTokens : null)
+    maxTokens: formatCapacitySpelling(typeof raw.maxTokens === "number" ? raw.maxTokens : null),
+    // undefined 表示未触碰:继承已存值或路由默认,不写进保存结果。
+    inputTypes: storedInputTypes(raw, inputField)
   };
 }
 
 /// 一组已存模型 → 编辑器行。
-export function catalogRowsFromModels(models) {
-  return (Array.isArray(models) ? models : []).map(catalogRowFromModel);
+export function catalogRowsFromModels(models, inputField = "input") {
+  return (Array.isArray(models) ? models : []).map((model) => catalogRowFromModel(model, inputField));
 }
 
 /// 从 profile 的 models 数组还原编辑器行。
@@ -117,8 +128,9 @@ export function hydrateCatalogRows(settingsPath, namespaceValue) {
 }
 
 /// 一行草稿折回模型对象:清空的字段要真正离开对象(交回适配器默认),
-/// 其余未知字段从 raw 原样保留。
-export function catalogRowToModel(row) {
+/// 其余未知字段从 raw 原样保留。输入类型只在用户碰过(非 undefined)时
+/// 才写入 —— 没碰过的行继续继承路由默认,与 web ModelInputTypes 一致。
+export function catalogRowToModel(row, inputField = "input") {
   const entry = { ...(row.raw ?? {}) };
   // 就地赋值而不是先删后加:已有的键保持原来的位置,键序不变 —— 否则
   // 一行没动过的目录在 JSON.stringify 比较里也会显得"脏了"。
@@ -132,6 +144,7 @@ export function catalogRowToModel(row) {
   apply("contextWindow", context != null ? context : undefined);
   const maxTokens = parseCapacitySpelling(row.maxTokens);
   apply("maxTokens", maxTokens != null ? maxTokens : undefined);
+  if (row.inputTypes !== undefined) apply(inputField, [...row.inputTypes]);
   return entry;
 }
 
@@ -159,12 +172,12 @@ export function validateCatalogRows(rows) {
 
 /// 模型目录写回 op;rows 全空且已存目录时是 unset(回到适配器自带列表),
 /// 全空且本来就没存过则不产生 op。
-export function modelCatalogOp(rows, settingsPath, savedCatalogPresent) {
+export function modelCatalogOp(rows, settingsPath, savedCatalogPresent, inputField = "input") {
   const path = [...settingsPath, "models"];
   const entries = [];
   for (const row of rows) {
     if (!String(row.modelId ?? "").trim()) continue;
-    entries.push(catalogRowToModel(row));
+    entries.push(catalogRowToModel(row, inputField));
   }
   if (!entries.length) {
     return savedCatalogPresent ? { op: "unset", path } : null;
@@ -188,7 +201,8 @@ export function modelCatalogMatchesSaved(rows, saved) {
     return String(row.modelId ?? "").trim() === String(stored.modelId ?? "").trim()
       && String(row.name ?? "").trim() === String(stored.name ?? "").trim()
       && normalizedCapacityText(row.contextWindow) === normalizedCapacityText(stored.contextWindow)
-      && normalizedCapacityText(row.maxTokens) === normalizedCapacityText(stored.maxTokens);
+      && normalizedCapacityText(row.maxTokens) === normalizedCapacityText(stored.maxTokens)
+      && JSON.stringify(row.inputTypes ?? null) === JSON.stringify(stored.inputTypes ?? null);
   });
 }
 
@@ -218,9 +232,11 @@ export function shouldAutoFetchModels({ baseURL, apiKey, fetchedFrom, locked }) 
   return autoFetchEndpointKey(baseURL, apiKey) !== fetchedFrom;
 }
 
-/// 一条 provider 行的密钥状态,用于行副标题。
+/// 一条 provider 行的密钥状态,用于行副标题。账号路由以登录态认证,
+/// 没有"密钥"概念,返回 null 表示不渲染状态(web 账号行没有凭据圆点)。
 export function providerKeyState(row) {
-  if (!row) return "missing";
+  if (!row) return null;
+  if (row.entry?.provider === "deepseek-account") return null;
   if (row.credential?.configured === true) return "configured";
   return row.apiKeyEnv == null ? "notRequired" : "missing";
 }
@@ -247,6 +263,14 @@ export function createSettingsService(connection) {
     return current;
   }
 
+  /// 提供方目录排序,对齐 web joinProviderDirectory:账号路由第一、
+  /// 官方 DeepSeek 第二,其余保持声明顺序。
+  function directoryRank(provider) {
+    if (provider === "deepseek-account") return 0;
+    if (provider === "deepseek-official") return 1;
+    return 2;
+  }
+
   async function providers() {
     const [configurable, routed] = await Promise.all([
       connection.call(RPC.llmConfigurableProviders, {}),
@@ -254,7 +278,12 @@ export function createSettingsService(connection) {
     ]);
     const active = new Set((Array.isArray(routed) ? routed : routed?.providers ?? []).map((item) => item.id ?? item.provider));
     const rows = (Array.isArray(configurable) ? configurable : configurable?.providers ?? [])
-      .map((entry) => ({ ...entry, active: active.has(entry.provider), routable: active.has(entry.provider) }));
+      .map((entry, index) => ({ entry, index }))
+      .sort((left, right) => {
+        const byRank = directoryRank(left.entry.provider) - directoryRank(right.entry.provider);
+        return byRank !== 0 ? byRank : left.index - right.index;
+      })
+      .map(({ entry }) => ({ ...entry, active: active.has(entry.provider), routable: active.has(entry.provider) }));
     return { providers: rows };
   }
   return {
@@ -337,7 +366,7 @@ export function createSettingsService(connection) {
       const namespaces = new Map(
         (settingsResult?.namespaces ?? []).map((namespace) => [namespace.ns, namespace])
       );
-      const rows = (providerResult?.providers ?? []).map((entry) => {
+      let rows = (providerResult?.providers ?? []).map((entry) => {
         const namespace = namespaces.get(entry.settingsNs);
         const path = entry.settingsPath ?? [];
         const profile = jsonValueAt(path, namespace?.value);
@@ -348,12 +377,28 @@ export function createSettingsService(connection) {
           removable: Boolean(path.length)
             && jsonPathExists(namespace?.user, path)
             && !jsonPathExists(namespace?.base, path),
-          apiKeyEnv: typeof profile?.apiKeyEnv === "string" ? profile.apiKeyEnv : null,
+          // web 从不为账号路由推导密钥引用:它以登录态认证。
+          apiKeyEnv: entry.provider === "deepseek-account" ? null
+            : typeof profile?.apiKeyEnv === "string" ? profile.apiKeyEnv : null,
           credential: null
         };
       });
+      // web accountAvailable:账号路由只在模型目录真的带有非空 deepseek-account
+      // 分组(即账号已登录)时才列出,否则隐藏 —— 未登录也渲染的账号行就是
+      // 第二条删不掉的 DeepSeek。
+      if (rows.some((row) => row.entry.provider === "deepseek-account")) {
+        const catalog = await connection.call(RPC.sessionModels, {}).catch(() => null);
+        const group = Array.isArray(catalog?.groups)
+          ? catalog.groups.find((candidate) => candidate.id === "deepseek-account") : null;
+        if (!group || !Array.isArray(group.models) || !group.models.length) {
+          rows = rows.filter((row) => row.entry.provider !== "deepseek-account");
+        }
+      }
       let credentialError = null;
-      const refs = [...new Set(rows.map((row) => row.apiKeyEnv).filter(Boolean))].sort();
+      const refs = [...new Set(rows
+        .filter((row) => row.entry.provider !== "deepseek-account")
+        .map((row) => row.apiKeyEnv)
+        .filter(Boolean))].sort();
       if (refs.length) {
         try {
           const value = await connection.call(RPC.credentialsDescribe, { refs });

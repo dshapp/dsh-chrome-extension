@@ -18,6 +18,13 @@ export function selectorEscape(value) {
   return String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, (char) => "\\" + char);
 }
 
+/// 提供方行的显示名。账号路由的宿主名是纯英文,与 web 一致地本地化
+/// (对齐 Mac modelProviderDisplayName)。
+export function providerDisplayName(entry) {
+  if (entry?.provider === "deepseek-account") return t("prov.deepSeekAccount");
+  return entry?.displayName || entry?.provider || "";
+}
+
 /// 一个分组(Mac Section):可选表头与表尾说明。
 /// header 走转义,headerHtml 原样插入 —— 分组标题要带数量徽标(groupHeader),
 /// 那已经是一段 HTML,再转义一次就会把标签显示成文字。

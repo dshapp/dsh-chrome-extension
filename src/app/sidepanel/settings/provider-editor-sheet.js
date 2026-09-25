@@ -19,8 +19,22 @@ import {
 } from "../../../features/settings/settings-service.js";
 import { createModelCatalogEditor } from "./model-list-editor.js";
 import { protocolChoices } from "./custom-provider-sheet.js";
+import { providerDisplayName } from "./settings-ui.js";
 
-const LAYOUT_BY_NS = { "llm-deepseek": "deepseek", "llm-pi-ai": "pi-ai" };
+const LAYOUT_BY_NS = {
+  "llm-deepseek": "deepseek",
+  // 账号路由:web 的账号卡片 —— 只有模型目录,没有密钥/地址字段。
+  "llm-deepseek-account": "deepseek-account",
+  "llm-pi-ai": "pi-ai"
+};
+
+/// 目录条目里声明输入类型的字段按适配器命名:deepseek 系叫 inputModalities,
+/// pi-ai 写作 input(对齐 web 的 inputField)。
+const INPUT_FIELD_BY_LAYOUT = {
+  deepseek: "inputModalities",
+  "deepseek-account": "inputModalities",
+  "pi-ai": "input"
+};
 
 const KEY_FAILURE_TEXT = { blank: "prov.keyBlank", illegalCharacters: "prov.keyFormatInvalid" };
 
@@ -40,6 +54,7 @@ export function openProviderEditor({
   const path = entry.settingsPath ?? [];
   const namespace = state?.namespaces.get(ns);
   const layout = LAYOUT_BY_NS[ns] ?? "unknown";
+  const inputField = INPUT_FIELD_BY_LAYOUT[layout] ?? "input";
   const declared = entry.declared === true;
   const effective = jsonValueAt(path, namespace?.value);
   const schema = namespace?.schema;
@@ -60,6 +75,7 @@ export function openProviderEditor({
 
   const editor = createModelCatalogEditor({
     allowFetch: layout === "pi-ai",
+    inputField,
     discover: (request) => settingsService.discoverModels(request),
     formatErrorDetails: (error) => deps.formatErrorDetails(error),
     requestRender: (mode) => { if (mode === "hard") repaint(); else repaintSoft(); },
@@ -89,7 +105,8 @@ export function openProviderEditor({
   });
   editor.setRows(
     catalogRowsFromModels(
-      jsonPathExists(userDraft, ["models"]) ? userDraft.models : effective?.models
+      jsonPathExists(userDraft, ["models"]) ? userDraft.models : effective?.models,
+      inputField
     ),
     userOwnsModels
   );
@@ -139,6 +156,12 @@ export function openProviderEditor({
   function body() {
     const row = current();
     const locked = row?.credential?.configured === true && row?.credential?.writable === false;
+    if (layout === "deepseek-account") {
+      // web 账号卡片:只有模型目录。路由用登录态认证,没有密钥与地址可改。
+      return editor.html()
+        + (catalogFailureText() ? notice(catalogFailureText()) : "")
+        + (message ? notice(message) : "");
+    }
     const keyRow = stackedRow({
       label: escapeHtml(t("prov.apiKey")),
       control: textInput({
@@ -265,7 +288,7 @@ export function openProviderEditor({
       }
       if (keyValue) await settingsService.setCredential(keyRef(), keyValue);
       sheet.close(sheetToken);
-      await onSaved?.(entry.displayName || entry.provider);
+      await onSaved?.(providerDisplayName(entry));
     } catch (error) {
       if (!sheet.owns(sheetToken)) return;
       message = translateSaveError(error);
@@ -275,7 +298,7 @@ export function openProviderEditor({
   }
 
   sheetToken = sheet.open({
-    title: entry.displayName || entry.provider,
+    title: providerDisplayName(entry),
     body: body(),
     actions: "",
     bind: (_root, generation) => { sheetToken = generation; repaint(); }

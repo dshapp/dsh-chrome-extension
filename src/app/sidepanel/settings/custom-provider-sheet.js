@@ -80,6 +80,7 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
 
   const editor = createModelCatalogEditor({
     allowFetch: true,
+    inputField: "input", // 自定义路由走 pi-ai,输入类型声明在条目的 input 上。
     discover: (request) => settingsService.discoverModels(request),
     formatErrorDetails: (error) => deps.formatErrorDetails(error),
     requestRender: (mode) => { if (mode === "hard") repaint(); else repaintSoft(); },
