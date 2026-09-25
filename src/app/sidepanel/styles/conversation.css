@@ -531,7 +531,8 @@ button.turn-tail-stat {
   display: inline-flex; align-items: center; gap: 0.25rem;
   min-width: 0; block-size: 1.5rem; padding: 0 0.4rem;
   border: 0; border-radius: 999px; background: none;
-  color: var(--text-faint); font: inherit; font-size: inherit;
+  /* 字号与同行 .msg-timestamp 一致(11px),不继承正文字号。 */
+  color: var(--text-faint); font: inherit; font-size: 11px;
   font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
 }
 button.turn-tail-stat svg { inline-size: 13px; block-size: 13px; flex: none; }
