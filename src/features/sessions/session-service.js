@@ -696,23 +696,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       return connection.call(RPC.sessionUpdateQueue, { request: { sessionId, itemId, action } });
     },
 
-    /// 全文搜索历史会话(标题 + 内容)。
-    ///
-    /// 部分部署会关闭 session-query 索引并回 internal 错误;那不是故障,
-    /// 只是这台宿主没开这个能力。此时返回 null,调用方回退到本地标题过滤,
-    /// 而不是把一个红色报错甩给用户。
+    /// 宿主内容搜索(session/search):{ items: [{sessionId, snippet}], hasMore }。
+    /// 部署可能关闭它(openAt: never);失败由调用方当作没有内容命中处理。
     async search(query) {
-      try {
-        return await connection.call(RPC.sessionSearch, { request: { query } });
-      } catch (error) {
-        // 0.1.2 网关会给领域错误码加命名空间（实机为 gateway/internal），
-        // 不能只认裸 internal，否则关闭索引的标准部署会把可降级状态冒泡成红错。
-        if (String(error?.code ?? "").split("/").at(-1) === "internal"
-          && /search is disabled|SessionQueryError/i.test(error.message ?? "")) {
-          return null;
-        }
-        throw error;
-      }
+      return connection.call(RPC.sessionSearch, { request: { query } });
     },
 
     /// 归档会话:从活动列表移出(非删除,宿主保留日志)。

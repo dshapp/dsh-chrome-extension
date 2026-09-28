@@ -239,30 +239,32 @@ export function renderSections(list, { sections, groupBy, ctx }) {
 }
 
 /**
- * 画一串没有分区的行(搜索结果走这条路 —— 结果集取代名册,Mac 也是这样)。
+ * 画搜索结果(平铺 —— 结果集取代名册,Mac 也是这样)。对齐 web SearchResults:
+ * 宿主结果未到时是 pending(不说「无匹配」),到了且为空才说;hasMore 提示缩小范围。
  *
  * @param {Element} list `<ul>` 容器。
  * @param {object} options
- * @param {Array} options.items 结果行。
- * @param {number} options.overflow 被截断掉的条数(0 表示没截断)。
+ * @param {Array} options.items 结果行(已截断)。
+ * @param {boolean} options.pending 宿主内容搜索是否还在路上。
+ * @param {boolean} options.hasMore 是否还有未显示的命中。
+ * @param {number} options.limit 结果上限(提示文案用)。
  * @param {object} options.ctx 行渲染上下文。
  * @returns {Array} 实际画出来的行。
  */
-export function renderResultRows(list, { items, overflow = 0, ctx }) {
-  if (!items.length) {
-    list.innerHTML = `<li class="history-empty">${escapeHtml(t("sessions.empty"))}</li>`;
-    return [];
-  }
-  list.innerHTML = items
-    .map((item, index) => rowHtml(item, { index, groupId: FLAT_GROUP_ID, ctx }))
-    .join("")
-    + (overflow > 0
-      ? `<li class="history-more">${escapeHtml(t("sessions.more", { n: String(overflow) }))}</li>`
-      : "");
+export function renderResultRows(list, { items, pending = false, hasMore = false, limit = 0, ctx }) {
+  let html = items.map((item, index) => rowHtml(item, { index, groupId: FLAT_GROUP_ID, ctx })).join("");
+  if (pending) html += loadingHtml(t("sessions.searchPending"));
+  else if (!items.length) html += `<li class="history-empty">${escapeHtml(t("sessions.noMatches"))}</li>`;
+  if (hasMore) html += `<li class="history-more">${escapeHtml(t("sessions.searchHasMore", { n: String(limit) }))}</li>`;
+  list.innerHTML = html;
   return [...items];
 }
 
 /// 冷启动还没有任何基线时的加载态。
 export function renderLoading(list) {
-  list.innerHTML = `<li class="history-loading" role="status" aria-live="polite"><span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>${escapeHtml(t("sessions.loading"))}</li>`;
+  list.innerHTML = loadingHtml(t("sessions.loading"));
+}
+
+function loadingHtml(label) {
+  return `<li class="history-loading" role="status" aria-live="polite"><span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>${escapeHtml(label)}</li>`;
 }

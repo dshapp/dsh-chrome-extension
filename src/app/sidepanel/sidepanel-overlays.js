@@ -8,6 +8,9 @@
 // 抽屉从左侧滑入(对齐 Mac 的左侧栏),入口是顶栏最左那颗带标题的按钮。
 import { t } from "../../shared/i18n.js";
 import { buildSidebarSections } from "../../features/sessions/sidebar-sections.js";
+import {
+  deriveSearchResults, normalizeSearchQuery, sanitizeSearchQuery, SEARCH_DEBOUNCE_MS, SEARCH_RESULT_LIMIT
+} from "../../features/sessions/session-search.js";
 import { renderSections, renderResultRows, renderLoading, SECTION_HEAD_ID } from "./session-drawer-view.js";
 import { mountHistoryViewOptions } from "./history-view-options.js";
 import { createRepaintHold } from "../../features/sessions/history-repaint-hold.js";
@@ -60,6 +63,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     document.body.classList.add("session-drawer-open");
     entry.setAttribute("aria-expanded", "true");
     search.value = "";
+    clearTimeout(searchDebounceTimer);
+    remote = { query: "", pending: false, items: [], hasMore: false };
     revealPending = true;
     // 每次打开都从会话列表开始,而不是停在上次看的归档页。
     archivedView.close({ restoreFocus: false });
@@ -94,37 +99,32 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   scrim.addEventListener("click", () => hide({ restoreFocus: true }));
   closeButton?.addEventListener("click", () => hide({ restoreFocus: true }));
 
-  // 搜索:优先用宿主的全文索引(能搜到正文);索引未开启时回退到本地标题过滤。
-  let searchToken = 0;
+  // 搜索(对齐 web WorkspaceBrowser):本地标题/工作区命中即时出现,宿主内容命中
+  // 250ms 防抖后接在后面。remote 只属于它的 query —— 换词立刻作废旧命中并进入
+  // pending;宿主失败(如部署关闭了 session/search)就只剩本地命中,不另行提示。
+  let remote = { query: "", pending: false, items: [], hasMore: false };
   let searchDebounceTimer = null;
-  // 一次性渲染的行数上限,超出部分折叠为提示行(搜索结果与单列表都吃这条)。
-  const MAX_RENDERED_ROWS = 500;
+  function currentQuery() { return normalizeSearchQuery(search.value); }
   search.addEventListener("input", () => {
-    const query = search.value.trim();
-    const token = ++searchToken;
+    const clean = sanitizeSearchQuery(search.value);
+    if (clean !== search.value) search.value = clean;
+    const query = currentQuery();
+    if (query !== remote.query) {
+      clearTimeout(searchDebounceTimer);
+      remote = { query, pending: query !== "", items: [], hasMore: false };
+      const pending = remote;
+      if (query) searchDebounceTimer = setTimeout(() => void runRemoteSearch(pending), SEARCH_DEBOUNCE_MS);
+    }
     // 搜索词一变,结果集就是新的 —— 高亮统一回到第一行。
     paint({ resetSelection: true });
-    if (!query) return;
-    // 远端全文搜索按 250ms 防抖:连续输入只发最后一次请求。
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => {
-      searchDebounceTimer = null;
-      void runRemoteSearch(query, token);
-    }, 250);
   });
 
-  async function runRemoteSearch(query, token) {
-    try {
-      const remote = await deps.sessions.search(query);
-      if (token !== searchToken || !remote) return;   // 迟到的结果 / 索引未开启
-      const hits = remote.items ?? remote.results ?? [];
-      if (!hits.length) return;
-      const byId = new Map(allItems.map((item) => [item.sessionId, item]));
-      const merged = hits
-        .map((hit) => byId.get(hit.sessionId) ?? { sessionId: hit.sessionId, updatedAt: hit.updatedAt })
-        .filter(Boolean);
-      if (merged.length) renderRows(merged, { resetSelection: true });
-    } catch { /* 搜索失败不打断输入 */ }
+  async function runRemoteSearch(pending) {
+    let page = null;
+    try { page = await deps.sessions.search(pending.query); } catch { /* 只显示本地命中 */ }
+    if (remote !== pending) return;   // 迟到的旧查询
+    remote = { query: pending.query, pending: false, items: page?.items ?? [], hasMore: page?.hasMore === true };
+    if (isOpen()) paint();
   }
 
   // 抽屉之外的点击关掉它。抽屉内的 popover(视图选项)虽然画在 top layer 里,
@@ -135,15 +135,6 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     if (path.includes(drawer) || path.includes(entry) || path.includes(scrim)) return;
     hide();
   });
-
-  /// 搜索词过滤(本地标题匹配)。分组/排序由 buildSidebarSections 负责,
-  /// 所以这里只管"哪些行参与"。
-  function matchingItems(query) {
-    const q = query.trim().toLowerCase();
-    if (!q) return allItems;
-    return allItems.filter((item) =>
-      (item.projections?.values?.title || item.sessionId).toLowerCase().includes(q));
-  }
 
   /// 行渲染上下文:实时状态都从 listStore 现取,置顶态从账本现取。
   function rowContext() {
@@ -158,14 +149,22 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     };
   }
 
-  /// 画一串没有分区的行(搜索结果)。
-  function renderRows(items, { resetSelection = false } = {}) {
-    const visible = items.length > MAX_RENDERED_ROWS ? items.slice(0, MAX_RENDERED_ROWS) : items;
+  /// 画搜索结果(平铺,没有分区)。
+  function renderSearch(query, { resetSelection = false } = {}) {
+    const results = deriveSearchResults({
+      sessions: allItems,
+      workspaces: workspaces() ?? [],
+      archivedIds: archivedIds() ?? [],
+      query,
+      remote
+    });
     sections = [];
-    clampSelection(visible.length, resetSelection);
+    clampSelection(results.items.length, resetSelection);
     renderedItems = renderResultRows(list, {
-      items: visible,
-      overflow: items.length - visible.length,
+      items: results.items,
+      pending: remote.pending,
+      hasMore: results.hasMore,
+      limit: SEARCH_RESULT_LIMIT,
       ctx: rowContext()
     });
   }
@@ -182,8 +181,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     // 它就被摘出 top layer 当场消失。攒着,等菜单关上再画。
     if (viewOptions?.isMenuOpen?.()) { viewOptions.deferRepaint({ resetSelection }); return; }
     if (hold.held()) { hold.defer({ resetSelection }); return; }
-    const query = search.value.trim();
-    if (query) { renderRows(matchingItems(query), { resetSelection }); return; }
+    const query = currentQuery();
+    if (query) { renderSearch(query, { resetSelection }); return; }
     let built = buildSections();
     // 抽屉打开后的第一次分区渲染:含当前会话的组若是折着的,展开它(只这一次)。
     if (revealPending && built.sections.length) {

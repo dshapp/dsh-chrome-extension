@@ -139,7 +139,8 @@ test("一条会话都没有时给空态,但分区标题仍在(视图选项要有
 test("搜索结果是一串平铺的行,超出上限时补一行提示", () => {
   const rendered = renderResultRows(list(), {
     items: [session("a"), session("b")],
-    overflow: 3,
+    hasMore: true,
+    limit: 20,
     ctx: ctx()
   });
   assert.equal(rendered.length, 2);

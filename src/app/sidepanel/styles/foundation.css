@@ -560,6 +560,8 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 .h-actions button { padding: 3px; }
 .h-actions button:hover { color: var(--text); background: var(--bg-raised); }
 .history-empty { color: var(--text-faint); text-align: center; padding: 20px 0; font-size: 13px; }
+/* 截断提示(搜索 hasMore / 单列表溢出):次要脚注,与行标题同一起点。 */
+.history-more { color: var(--text-faint); padding: 8px 10px; font-size: 12px; }
 /* 列表加载态:三点 wave 复用 conversation.css 的 .typing-dots,这里只有行内布局。 */
 .history-loading {
   display: flex;
