@@ -19,6 +19,7 @@ import { attachCopyFeedback } from "./copy-feedback.js";
 import { foldMessageText, chunkText } from "./long-message.js";
 import { lucideIcon, fileTypeIconName, fileTypeKind } from "./file-icons.js";
 import { buildUnifiedDiff, unifiedDiffText } from "./unified-diff.js";
+import { questionReplyContent } from "../interactions/timed-questions.js";
 
 /// assistant 正文的折叠阈值。比用户消息的 1000 宽松得多:模型回答本来就长,
 /// 过早折叠会破坏正常阅读。这里要挡的是"打印整个文件"那一类,所以取一个
@@ -321,6 +322,8 @@ function contextImageStrip(images, context) {
 /// 标题/图标按 source.kind 选(turnTriggerDetails),默认收起;展开后行内显示说明与原通知正文。
 /// 正文(可能几百 KB)与图片只在首次展开时构建,收起的通知不挂正文。
 export function createTurnTriggerNode(node, context = {}) {
+  const reply = questionReplyContent(node.source, node.content);
+  if (reply) return createQuestionReplyNode(node, reply);
   const details = turnTriggerDetails(node.source);
   const wrap = el("section", "turn-trigger");
   wrap.dataset.turnTrigger = "";
@@ -357,6 +360,30 @@ export function createTurnTriggerNode(node, context = {}) {
     body.hidden = !open;
   });
   wrap.dispose = () => { cancel?.(); cancel = null; };
+  return wrap;
+}
+
+/// 限时提问的迟到回答(dsh 0.2 source=user-question-reply,web QuestionReplyView / Mac
+/// TurnTriggerRow.questionReply):用户自己的简短答复,问答对直接铺开,没有可展开的正文。
+function createQuestionReplyNode(node, reply) {
+  const wrap = el("section", "turn-trigger question-reply");
+  wrap.dataset.turnTrigger = "";
+  if (reply.callId) wrap.dataset.questionReply = reply.callId;
+  const header = el("div", "turn-trigger-header");
+  const icon = el("span", "turn-trigger-icon");
+  icon.append(lucideIcon("corner-down-left", { size: 14 }));
+  header.append(icon, el("span", "turn-trigger-title", t("question.replyLabel")),
+    el("span", "turn-trigger-time", fmtTime(node.time)));
+  wrap.append(header);
+  const list = el("dl", "question-reply-pairs");
+  for (const pair of reply.pairs) {
+    const row = el("div", "question-reply-pair");
+    row.append(el("dt", "question-reply-question", pair.question || pair.header || ""));
+    row.append(el("dd", "question-reply-answer",
+      t("question.replyAnswer") + (pair.answers.length ? pair.answers.join(", ") : t("question.replySkipped"))));
+    list.append(row);
+  }
+  wrap.append(list);
   return wrap;
 }
 
@@ -1092,16 +1119,17 @@ function compactTokenCount(value) {
   return t("turn.usageCount", { count: formatCompactTokens(value) });
 }
 
-/// 整秒向下取整的时长:不足一分钟 "{s}s",过一分钟 "{m}m {ss}s"(web formatRunDuration)。
-function formatRunDuration(ms) {
+/// 整秒向下取整的时长,单元制(web formatRunDuration,0.2):每个数字后跟本地化单位、
+/// 不补零,满 60 秒出分、满 60 分出时 —— "5s" / "2m 5s" / "1h 0m 3s"、"5秒" / "2分5秒"。
+export function formatRunDuration(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
-  const pad2 = (n) => String(n).padStart(2, "0");
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor(total / 60) % 60;
   const seconds = total % 60;
-  if (hours > 0) return t("duration.hours", { hours: String(hours), minutes: pad2(minutes), seconds: pad2(seconds) });
-  if (minutes > 0) return t("duration.minutes", { minutes: String(minutes), seconds: pad2(seconds) });
-  return t("duration.seconds", { seconds: String(seconds) });
+  let text = "";
+  if (hours > 0) text += String(hours) + t("duration.hourUnit");
+  if (total >= 60) text += String(minutes) + t("duration.minuteUnit");
+  return text + String(seconds) + t("duration.secondUnit");
 }
 
 /// 亚秒延迟读数:十秒以内一位小数,超过取整(web formatLatencySeconds)。

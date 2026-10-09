@@ -3,6 +3,8 @@
 import { t } from "../../shared/i18n.js";
 import { renderMenuItems } from "./sidepanel-overlays.js";
 import { RPC } from "../../platform/dsh/rpc-methods.js";
+import { renderModelMenu, modelMenuEntries } from "./model-menu.js";
+import { orderModelProviders } from "../../features/models/model-ranking.js";
 // full-access 的识别与确认框都在这里:设置页的"默认权限"行也要走同一道确认,
 // 两个入口必须问同一个问题、给同一个对话框。
 import { confirmFullAccess as askFullAccess, isFullAccessOption } from "./permission-confirm.js";
@@ -181,14 +183,9 @@ export function createComposerDock({ elements, deps, state, showToast, format })
       // 查不到(目录里没有这个模型)才退回 id,总比空着强。
       elements.modelLabel.textContent = modelDisplayName(sessionModels) || "—";
 
-      const entries = (sessionModels.groups ?? []).flatMap((group) => group.models.map((model) => ({
-        id: `${group.id}::${model.id}`,
-        label: model.name || model.id,
-        // 不再给 hint:分组标题已经写着 provider 名,行内再挂一份 <small> 是重复信息。
-        section: group.name,
-        provider: group.id,
-        model: model.id
-      })));
+      // 供应商顺序对齐 web 0.2 orderModelProviders:account → official → 其余目录顺序。
+      const groups = orderModelProviders(sessionModels.groups ?? []);
+      const entries = modelMenuEntries(groups);
 
       // 推理档作为独立分组附在模型之后,选中后只改 reasoningEffort、不动模型。
       const efforts = sessionModels.reasoningEfforts ?? sessionModels.current?.reasoningEfforts ?? [];
@@ -204,9 +201,11 @@ export function createComposerDock({ elements, deps, state, showToast, format })
         ? `${sessionModels.current.provider}::${sessionModels.current.model}`
         : null;
 
-      renderMenuItems(elements.modelMenu, all, {
+      // 目录超过 4 个模型时顶部出搜索框(web ModelSelect showSearch),组内按名称排名、空组隐藏。
+      renderModelMenu(elements.modelMenu, {
+        groups,
+        extraEntries: effortEntries,
         selectedId,
-        groupBy: (entry) => entry.section,
         onSelect: async (id) => {
           const entry = all.find((m) => m.id === id);
           if (!entry || !state.sessionId) return;

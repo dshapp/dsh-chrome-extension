@@ -345,6 +345,26 @@
 }
 .menu-item.selected { background: var(--user-bubble); font-weight: 600; }
 .menu-group-label { font-size: 11px; color: var(--text-faint); padding: 6px 10px 2px; }
+/* 模型菜单的搜索框(dsh 0.2:目录超过 4 个模型才出现)。滚动时钉在顶部。 */
+.menu-search {
+  position: sticky;
+  inset-block-start: -0.375rem;
+  z-index: 1;
+  display: block;
+  inline-size: 100%;
+  box-sizing: border-box;
+  margin: -0.375rem 0 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border: 0;
+  border-block-end: 1px solid var(--border);
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.menu-search::placeholder { color: var(--text-faint); }
+.menu-search-list .menu-empty { padding: 6px 10px; color: var(--text-faint); }
 
 /* 发送按钮(三态:idle/stop) */
 /* 不再 margin-left:auto —— 靠右推挤由它前面的 #stats-btn 负责。
@@ -735,6 +755,35 @@
   display: flex; align-items: center; gap: 0.375rem;
   min-inline-size: 0; padding-block-start: 0.25rem;
 }
+/* 限时提问的等待状态(dsh 0.2):倒计时 + 「慢慢回答」/ 会一直等 / 已继续仍可回答。 */
+.question-wait {
+  display: inline-flex; align-items: baseline; gap: 0.375rem;
+  min-inline-size: 0; overflow: hidden;
+  font-size: 0.75rem; color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.question-wait[hidden] { display: none; }
+.question-wait-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.question-wait-take {
+  flex: none; padding: 0; border: 0; background: none;
+  color: var(--text); font: inherit; cursor: pointer; text-decoration: underline dotted;
+}
+.question-wait-take:hover { text-decoration: underline; }
+/* 收起的 continued 提问:输入框上方一条可重开的提示(web 从工具行重开)。 */
+#question-hidden-bar {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin: 0 0.75rem 0.375rem;
+  padding: 0.375rem 0.5rem 0.375rem 0.75rem;
+  border: 1px solid var(--border); border-radius: 0.75rem;
+  background: var(--bg-input);
+  font-size: 0.8125rem; color: var(--text-dim);
+}
+#question-hidden-bar[hidden] { display: none; }
+#question-hidden-bar .question-hidden-text {
+  flex: 1 1 auto; min-inline-size: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#question-hidden-bar svg { flex: none; inline-size: 0.875rem; block-size: 0.875rem; }
 
 /* 卡片按钮:参考 UI 的胶囊形 —— 次要项描边中性,主要项实心反色。 */
 .btn {

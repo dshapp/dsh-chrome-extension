@@ -26,6 +26,7 @@ import { buildTurnProcessSpecs } from "./turn-process.js";
 import { projectReferenceLabels, sessionRecallReferences } from "./references.js";
 import { assembleTrajectory } from "../trajectory/trajectory-model.js";
 import { getLang } from "../../shared/i18n.js";
+import { userQuestionsProjection, continuedQuestions, presentedQuestion } from "../interactions/timed-questions.js";
 
 /// 单个 assistant step 最多寻址的块索引。远高于真实回复的块数,远低于会造成问题的分配量。
 const MAX_BLOCK_INDEX = 1024;
@@ -117,6 +118,17 @@ export function createSessionStore() {
   let permissionMemoProjection = null;
   let permissionMemoCatalog = null;
   let permissionMemoValue = null;
+  // continued 提问的本地 UI 状态,按会话存在闭包里(同 permissionCatalog 的理由):
+  // 切走再切回会 reset state,但用户收起的面板不该因此又弹出来。
+  //   hidden:用户关掉的面板(web nav.close),输入框上方留一条可重开的提示;
+  //   replied:本端刚回答过、inbox 投影还没反映出来的 callId,避免重复作答。
+  const hiddenQuestionCalls = new Map();
+  const repliedQuestionCalls = new Map();
+  const callSet = (map, sessionId) => {
+    let set = map.get(sessionId);
+    if (!set) { set = new Set(); map.set(sessionId, set); }
+    return set;
+  };
 
   function permissionSelection() {
     if (permissionMemoProjection !== state.permissions || permissionMemoCatalog !== permissionCatalog) {
@@ -202,6 +214,9 @@ export function createSessionStore() {
       jobs: [],
       pendingApproval: null,
       pendingQuestion: null,
+      // dsh 0.2 userQuestions 投影:{active:[{callId, questions, state}], settled}。
+      // continued 行在 waterfall 结束后仍可回答(userQuestions/answer)。
+      userQuestions: null,
       // materialize 结果
       nodes: [],
       nodesDirty: true,
@@ -515,7 +530,9 @@ export function createSessionStore() {
     let node;
     if (msg.sourceKind === "user") {
       node = state.claimedSteeringIds.has(msg.id) ? steeringNode(base) : userNode(base);
-    } else if (isWaking(msg.id)) {
+    } else if (isWaking(msg.id) || msg.sourceKind === "user-question-reply") {
+      // 限时提问的迟到回答是用户自己的答复(web question-reply 节点):
+      // 不管它有没有唤醒本轮都要显示,渲染层按 source 画成问答对。
       node = turnTriggerNode({ ...base, source: msg.source });
     } else {
       // 普通 context 注入不进聊天记录(web isVisibleChatNode),Trajectory 仍可看。
@@ -1473,6 +1490,9 @@ export function createSessionStore() {
       case "subagent":
         state.subagent = isObject(value) ? value : null;
         break;
+      case "userQuestions":
+        state.userQuestions = value == null ? null : userQuestionsProjection(value);
+        break;
       case "plan":
         // 折算目标态:pending 时取反(乐观显示切换中的方向)。
         state.planMode = isObject(value)
@@ -1766,6 +1786,25 @@ export function createSessionStore() {
 
   // ---- 对外快照 ----
 
+  /// 输入框上方的提问席位:实时 waterfall 优先,其次是可迟到回答的 continued 问题。
+  function questionSeat() {
+    const sessionId = state.sessionId;
+    const continued = continuedQuestions({
+      sessionId,
+      projection: state.userQuestions,
+      queue: state.queue,
+      replied: repliedQuestionCalls.get(sessionId)
+    });
+    return {
+      continuedQuestions: continued,
+      presentedQuestion: presentedQuestion({
+        pending: state.pendingQuestion,
+        continued,
+        hidden: hiddenQuestionCalls.get(sessionId)
+      })
+    };
+  }
+
   function snapshot() {
     if (state.nodesDirty) rebuildNodes();
     return {
@@ -1801,6 +1840,7 @@ export function createSessionStore() {
       jobs: state.jobs,
       pendingApproval: state.pendingApproval,
       pendingQuestion: state.pendingQuestion,
+      ...questionSeat(),
       producedPathsByTurn: state.producedPathsByTurn,
       presentedByTurn: state.presentedByTurn,
       changesSeqByTurn: state.changesSeqByTurn,
@@ -1822,6 +1862,11 @@ export function createSessionStore() {
     setJobs(jobs) { state.jobs = Array.isArray(jobs) ? jobs : []; },
     setApproval(approval) { state.pendingApproval = approval ?? null; },
     setQuestion(question) { state.pendingQuestion = question ?? null; },
+    /// continued 提问的面板收起/重开(只改本地 UI,不发任何东西给宿主)。
+    hideQuestion(sessionId, callId) { if (sessionId && callId) callSet(hiddenQuestionCalls, sessionId).add(callId); },
+    reopenQuestion(sessionId, callId) { hiddenQuestionCalls.get(sessionId)?.delete(callId); },
+    /// 本端已经把迟到回答交给宿主:在 inbox 投影跟上之前别再把它当可回答的问题。
+    markQuestionReplied(sessionId, callId) { if (sessionId && callId) callSet(repliedQuestionCalls, sessionId).add(callId); },
     setRunning(running) { state.running = Boolean(running); },
     /// 已加载窗口之前是否还有更早历史。变化会影响 turn process 折叠,所以要重折节点。
     setHasMore(hasMore) {

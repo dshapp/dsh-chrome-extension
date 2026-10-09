@@ -1,7 +1,7 @@
 // 侧栏应用主体:DOM 编排 + 帧分发。
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
-import { t } from "../../shared/i18n.js";
+import { t, getLang } from "../../shared/i18n.js";
 import { createChatRenderer, agentStatusLabel, isThinking, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
@@ -355,16 +355,50 @@ export function createSidepanelApp(root, deps, options = {}) {
     if (!takeover) return null;
     if (takeover.kind === "approval") return `approval:${takeover.approval.approvalId}`;
     const q = takeover.question;
+    // continued 提问没有 waterfall(rpcId),以 ask_user_question 的 callId 为键。
+    if (q.continued) return `question:call:${q.callId}`;
     return `question:${q.rpcId ?? (q.questions ?? []).map((i) => i.id).join(":")}`;
   }
 
+  // 被收起的 continued 提问:输入框上方一条提示,点「回答」重新打开(web 从工具行重开)。
+  const hiddenQuestionBar = document.createElement("div");
+  hiddenQuestionBar.id = "question-hidden-bar";
+  hiddenQuestionBar.hidden = true;
+  elements.composer.before(hiddenQuestionBar);
+  let renderedHiddenKey = null;
+
+  function renderHiddenQuestionBar(snapshot) {
+    const hidden = snapshot.presentedQuestion ? null : (snapshot.continuedQuestions ?? [])[0] ?? null;
+    const key = hidden ? `${hidden.callId}:${getLang()}` : null;
+    if (key === renderedHiddenKey) return;
+    renderedHiddenKey = key;
+    hiddenQuestionBar.hidden = !hidden;
+    hiddenQuestionBar.replaceChildren();
+    if (!hidden) return;
+    const text = document.createElement("span");
+    text.className = "question-hidden-text";
+    text.textContent = hidden.questions?.[0]?.question || t("question.waitContinued");
+    text.title = t("question.waitContinued");
+    const reopen = document.createElement("button");
+    reopen.type = "button";
+    reopen.className = "btn";
+    reopen.textContent = t("question.hiddenReopen");
+    reopen.addEventListener("click", () => deps.sessions.reopenQuestion(hidden.sessionId, hidden.callId));
+    hiddenQuestionBar.append(lucideIcon("circle-help", { size: 14 }), text, reopen);
+  }
+
   function renderTakeover(snapshot) {
+    renderHiddenQuestionBar(snapshot);
     const takeover = resolveTakeover({
-      question: snapshot.pendingQuestion,
+      question: snapshot.presentedQuestion ?? snapshot.pendingQuestion,
       approval: snapshot.pendingApproval
     });
     const key = takeoverKey(takeover);
-    if (key === renderedTakeoverKey) return;
+    if (key === renderedTakeoverKey) {
+      // 同一张提问卡的新版本(限时提问的倒计时起点到了、被持有):原地刷新等待状态行。
+      if (takeover?.kind === "question") takeoverCard?.update?.(takeover.question);
+      return;
+    }
 
     takeoverCard?.dispose?.();
     takeoverCard?.remove();
@@ -378,13 +412,17 @@ export function createSidepanelApp(root, deps, options = {}) {
       return;
     }
 
-    const onRespond = (eventId, result) => deps.sessions.respondInteraction(eventId, result);
+    // continued 提问(dsh 0.2)没有 waterfall:回答走 userQuestions/answer,取消只是收起。
+    const onRespond = takeover.kind === "question" && takeover.question.continued
+      ? (_eventId, result) => deps.sessions.respondContinuedQuestion(takeover.question, result)
+      : (eventId, result) => deps.sessions.respondInteraction(eventId, result);
     if (takeover.kind === "approval") {
       takeoverCard = createApprovalCard(takeover.approval, { onRespond, store: deps.sessions.store });
     } else {
       // 计划审阅有专用卡;不是计划审阅才落到通用问答向导。
+      const onHold = (question) => deps.sessions.holdQuestion?.(question.eventId);
       takeoverCard = tryCreatePlanReviewCard(takeover.question, { onRespond })
-        ?? createQuestionCard(takeover.question, { onRespond });
+        ?? createQuestionCard(takeover.question, { onRespond, onHold });
     }
     elements.composerTakeover.replaceChildren(takeoverCard);
     elements.composerTakeover.hidden = false;

@@ -54,7 +54,7 @@ export function deriveSearchResults({ sessions, workspaces, archivedIds, query, 
   for (const item of sessions ?? []) {
     byId.set(item.sessionId, item);
     if (!visible(item)) continue;
-    if (displayTitle(item).toLowerCase().includes(q) || label(item).toLowerCase().includes(q)) local.push(item);
+    if (sessionTitle(item).toLowerCase().includes(q) || label(item).toLowerCase().includes(q)) local.push(item);
   }
   local.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.sessionId < b.sessionId ? -1 : 1));
 
@@ -73,9 +73,12 @@ export function deriveSearchResults({ sessions, workspaces, archivedIds, query, 
   return { items: ordered.slice(0, limit), hasMore: Boolean(remote?.hasMore) || ordered.length > limit };
 }
 
-/// web displayTitle:标题投影(control 流实时写进 listStore)→ cwd basename → sessionId。
-function displayTitle(item) {
-  return item.projections?.values?.title || basename(item.cwd) || item.sessionId;
+/// 会话自己的标题(web 0.2 tree.ts:`session.title?.trim() ?? ''`),未命名为空串。
+/// 0.2 起标题匹配不再回落到目录名或 sessionId:行上已经不显示它们(显示「未命名」),
+/// 用看不见的兜底文本命中只会让结果看起来莫名其妙。目录名仍由工作区标签那一臂命中。
+export function sessionTitle(item) {
+  const title = item?.projections?.values?.title;
+  return typeof title === "string" ? title.trim() : "";
 }
 
 function basename(path) {

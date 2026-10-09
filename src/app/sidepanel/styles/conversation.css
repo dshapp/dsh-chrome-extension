@@ -420,6 +420,13 @@ span.ref-chip { cursor: default; }
 .turn-trigger[data-open="true"] .turn-trigger-chevron { transform: rotate(180deg); }
 .turn-trigger-body { padding: 0.25rem 0.5rem 0.375rem; }
 .turn-trigger-explanation { margin: 0 0 0.375rem; color: var(--text-faint); }
+/* 限时提问的迟到回答(dsh 0.2 question-reply):标题行不可点,问答对直接铺开 */
+.question-reply .turn-trigger-header { cursor: default; }
+.question-reply .turn-trigger-header:hover { background: none; color: inherit; }
+.question-reply-pairs { margin: 0; padding: 0 0.5rem 0.375rem 1.75rem; display: grid; gap: 0.25rem; }
+.question-reply-pair { display: grid; gap: 0.125rem; }
+.question-reply-question { margin: 0; color: var(--text); }
+.question-reply-answer { margin: 0; color: var(--text-dim); user-select: text; }
 /* 通知正文里的图片:一张按单图尺寸铺开,多张退成方块缩略图 */
 .context-imgs { display: flex; flex-wrap: wrap; gap: 5px; padding-block-end: 0.375rem; }
 .context-imgs img {

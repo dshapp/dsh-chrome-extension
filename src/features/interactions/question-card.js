@@ -12,6 +12,7 @@ import {
   flowChooseSettling, flowSetCustom, flowSkip, flowContinue, flowPrevious,
   flowAnswers, recommendedLabel, optionShortcutDigit, cancelledResult
 } from "./interaction-flow.js";
+import { waitStatus } from "./timed-questions.js";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -20,11 +21,44 @@ function el(tag, className, text) {
   return node;
 }
 
-export function createQuestionCard(question, { onRespond }) {
+/// onHold(question):限时提问被用户「接手」(开始作答或点了慢慢回答),停表持有等待。
+/// question.continued 时关闭按钮只收起面板(由 onRespond 收到的取消结果决定怎么处理)。
+export function createQuestionCard(question, { onRespond, onHold }) {
   const questions = question.questions ?? [];
   const card = el("article", "question-card");
   let flow = createQuestionFlow(questions);
   let busy = false;
+  // 等待状态(倒计时/慢慢回答/已继续)读最新的 question:倒计时起点由认领流的第一帧
+  // 晚到,卡片不重建,只通过 card.update() 换掉引用。
+  let current = question;
+  const waitLine = el("span", "question-wait");
+  waitLine.setAttribute("aria-live", "polite");
+  let waitTicker = null;
+
+  function engage() {
+    if (current.timed && !current.held && !current.continued) onHold?.(current);
+  }
+
+  function renderWait() {
+    const status = waitStatus(current);
+    waitLine.replaceChildren();
+    waitLine.hidden = !status;
+    if (status?.kind === "countdown") {
+      waitLine.append(el("span", "question-wait-text", t("question.waitCountdown", { seconds: String(status.seconds) })));
+      const takeTime = el("button", "question-wait-take", t("question.waitTakeTime"));
+      takeTime.type = "button";
+      takeTime.addEventListener("click", () => onHold?.(current));
+      waitLine.append(takeTime);
+    } else if (status?.kind === "held") {
+      waitLine.append(el("span", "question-wait-text", t("question.waitHeld")));
+    } else if (status?.kind === "continued") {
+      waitLine.append(el("span", "question-wait-text", t("question.waitContinued")));
+    }
+    // 只在倒数期间每秒刷新这一行,不重画整题(会丢输入焦点)。
+    const counting = status?.kind === "countdown";
+    if (counting && !waitTicker) waitTicker = setInterval(renderWait, 1000);
+    if (!counting && waitTicker) { clearInterval(waitTicker); waitTicker = null; }
+  }
 
   // ---- 头部 ----
   const header = el("header", "question-card-header");
@@ -35,7 +69,9 @@ export function createQuestionCard(question, { onRespond }) {
   const close = el("button", "question-close");
   close.append(lucideIcon("x", { size: 14 }));
   close.type = "button";
-  close.setAttribute("aria-label", t("question.close"));
+  const closeLabel = question.continued ? t("question.hide") : t("question.close");
+  close.setAttribute("aria-label", closeLabel);
+  close.title = closeLabel;
   close.addEventListener("click", cancel);
   header.append(icon, heading, progress, close);
 
@@ -88,6 +124,7 @@ export function createQuestionCard(question, { onRespond }) {
   }
 
   function choose(label) {
+    engage();
     settle(flowChooseSettling(flow, label));
   }
 
@@ -144,7 +181,7 @@ export function createQuestionCard(question, { onRespond }) {
     custom.value = draft.custom;
     custom.setAttribute("aria-label", t("question.otherLabel", { question: item.question }));
     // 每次按键都写回状态机:提交时读的是它,不能等到 blur。
-    custom.addEventListener("input", () => { flow = flowSetCustom(flow, custom.value); syncFooter(); });
+    custom.addEventListener("input", () => { engage(); flow = flowSetCustom(flow, custom.value); syncFooter(); });
     custom.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" || event.isComposing) return; // 组字确认候选不推进
       event.preventDefault();
@@ -169,20 +206,21 @@ export function createQuestionCard(question, { onRespond }) {
     if (!flowIsFirst(flow)) {
       const back = el("button", "btn ghost", t("question.back"));
       back.type = "button";
-      back.addEventListener("click", () => { flow = flowPrevious(flow); render(); });
+      back.addEventListener("click", () => { engage(); flow = flowPrevious(flow); render(); });
       footer.append(back);
     }
+    footer.append(waitLine);
     footer.append(el("span", "interaction-spacer"));
     const skip = el("button", "btn ghost", t("question.skip"));
     skip.type = "button";
-    skip.addEventListener("click", () => settle(flowSkip(flow)));
+    skip.addEventListener("click", () => { engage(); settle(flowSkip(flow)); });
     footer.append(skip);
     // 多选或多题需要一个显式的推进按钮;单题单选靠点选项即结算。
     const needsAdvance = item.multiSelect === true || !flowIsLast(flow) || (item.options ?? []).length === 0;
     if (needsAdvance) {
       const next = el("button", "btn primary", flowIsLast(flow) ? t("question.submit") : t("question.next"));
       next.type = "button";
-      next.addEventListener("click", () => settle(flowContinue(flow)));
+      next.addEventListener("click", () => { engage(); settle(flowContinue(flow)); });
       footer.append(next);
     }
     bodyEl.append(footer);
@@ -221,9 +259,20 @@ export function createQuestionCard(question, { onRespond }) {
     handleShortcut(event);
   }
   document.addEventListener("keydown", onDocumentKeyDown, true);
-  card.dispose = () => document.removeEventListener("keydown", onDocumentKeyDown, true);
+  card.dispose = () => {
+    document.removeEventListener("keydown", onDocumentKeyDown, true);
+    if (waitTicker) clearInterval(waitTicker);
+    waitTicker = null;
+  };
+  /// 同一张卡的新版本(倒计时起点到达、被持有):只刷新等待状态行。
+  card.update = (next) => {
+    if (!next) return;
+    current = next;
+    renderWait();
+  };
 
   render();
+  renderWait();
   queueMicrotask(() => card.querySelector(".question-option-btn, .question-custom")?.focus());
   return card;
 }

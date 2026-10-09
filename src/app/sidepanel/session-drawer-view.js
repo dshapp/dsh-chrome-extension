@@ -20,6 +20,7 @@ import {
 } from "../../features/sessions/session-row-status.js";
 import { HISTORY_ACTION_ICONS } from "./history-icons.js";
 import { SidebarGroupBy, FLAT_GROUP_ID } from "../../features/sessions/sidebar-sections.js";
+import { sessionTitle } from "../../features/sessions/session-search.js";
 
 // 行首状态灯的无障碍/tooltip 文案。warning 一档不会真的渲染
 //(shouldShowSessionRowStatus 会挡掉它,因为 trailing 已经把话说了),
@@ -36,9 +37,9 @@ const STATUS_HELP_KEY = Object.freeze({
 export const SECTION_HEAD_ID = "history-section-head";
 
 export function itemTitle(item) {
-  // session.list 的标题在 projections.values.title;无标题回退到去掉 "session-" 前缀的短 id。
-  return item.projections?.values?.title
-    || `session ${String(item.sessionId).replace(/^session-/, "").slice(0, 8)}`;
+  // session.list 的标题在 projections.values.title;无标题显示本地化「未命名」
+  //(web 0.2 Rows.tsx `result.title || t('session.untitled')`),不再拿短 id 充标题。
+  return sessionTitle(item) || t("sessions.untitled");
 }
 
 /// 行尾内容。徽章用文字而不是警示三角:三角只会说「看这里」,用户仍得点开才

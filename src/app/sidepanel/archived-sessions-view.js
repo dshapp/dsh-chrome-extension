@@ -18,6 +18,7 @@ import { escapeHtml } from "../../shared/md-to-html.js";
 import { lucideIconSvg } from "../../features/chat/file-icons.js";
 import { formatRelativeTime } from "../../features/sessions/session-row-trailing.js";
 import { itemTitle } from "./session-drawer-view.js";
+import { sessionTitle } from "../../features/sessions/session-search.js";
 
 /**
  * @param {object} options
@@ -76,7 +77,7 @@ export function mountArchivedSessions({ drawer, sessions, workspaces = () => [],
     const rows = sessions?.archivedItems?.() ?? [];
     const query = search.value.trim().toLowerCase();
     const visible = query
-      ? rows.filter((item) => itemTitle(item).toLowerCase().includes(query)
+      ? rows.filter((item) => sessionTitle(item).toLowerCase().includes(query)
         || workspaceName(item).toLowerCase().includes(query))
       : rows;
     if (!visible.length) {

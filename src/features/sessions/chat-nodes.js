@@ -139,6 +139,8 @@ export function turnTriggerDetails(source) {
     case "schedule": return { title: "message.trigger.schedule", icon: "clock" };
     case "tool-jobs": return { title: "message.trigger.job", icon: "list" };
     case "cordis-host-runner": return { title: "message.trigger.plugin", icon: "puzzle" };
+    // dsh 0.2 限时提问的迟到回答(行视图另有专门的问答对渲染,见 createTurnTriggerNode)。
+    case "user-question-reply": return { title: "question.replyLabel", icon: "corner-down-left" };
     default: return { title: "message.trigger.request", icon: "layers" };
   }
 }

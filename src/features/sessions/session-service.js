@@ -8,6 +8,7 @@ import { RPC, STREAM, HOST } from "../../platform/dsh/rpc-methods.js";
 import { t } from "../../shared/i18n.js";
 import { expandHistoryEntry } from "./chunk-rows.js";
 import { pendingInteractionStatus } from "../interactions/interaction-flow.js";
+import { questionWait, questionWaitStreamId, eventIdOfQuestionWait, timedOutOutcome } from "../interactions/timed-questions.js";
 
 /// 历史窗口按轮次对齐(对齐 web session-controller HISTORY_PAGE_OPTIONS):
 /// 一页至少 50 条消息且含两个轮次起点,绝不从轮中间切开,上限 500 条。
@@ -55,6 +56,11 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   let remoteEventClientId = null;
   const pendingEventSessions = new Map();
   const pendingInteractions = new Map();
+  // 限时提问(0.2)的认领与倒计时,按 waterfall eventId。倒计时放在 service 而不是卡片里
+  // (同 Mac StreamCoordinator / web PendingQuestion):卡片不在屏幕上(切到别的会话)也必须
+  // 按时超时,否则认领会把 agent 一直卡在等待里。
+  const questionTimers = new Map();
+  const questionWaitStreams = new Set();
   const historyCursors = new Map();
   // 每会话已加载窗口的左边界与是否还有更早历史(session/page 的 beforeSeq/hasMore)。
   const historyBounds = new Map();
@@ -308,6 +314,54 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     }
     store.setApproval(approval);
     store.setQuestion(question);
+  }
+
+  // ---- 限时提问(0.2 timed ask_user_question) ----
+
+  /// 改写一条挂起提问并同步到 store(仅当前会话的问题在 store 里)。
+  function patchPendingQuestion(eventId, patch) {
+    const pending = pendingInteractions.get(eventId);
+    if (pending?.kind !== "question") return null;
+    const value = { ...pending.value, ...patch };
+    pendingInteractions.set(eventId, { ...pending, value });
+    if (isCurrent(pending.sessionId)) {
+      store.setQuestion(value);
+      notifyRuntime();
+    }
+    return value;
+  }
+
+  /// attachWait 的第一帧:宿主算出的剩余时长。从这一刻起由本端时钟倒数。
+  function startQuestionCountdown(eventId, remainingMs) {
+    const pending = pendingInteractions.get(eventId);
+    if (pending?.kind !== "question" || pending.value.held) return;
+    const delay = Math.max(0, remainingMs);
+    clearTimeout(questionTimers.get(eventId));
+    patchPendingQuestion(eventId, { deadline: Date.now() + delay });
+    questionTimers.set(eventId, setTimeout(() => { void expireQuestion(eventId); }, delay));
+  }
+
+  /// 倒数到 0 且没人动过卡片:以 ASK_TIMED_OUT 结算 waterfall。宿主把它映射成 pending
+  /// 结果让 agent 继续,问题随后以 continued 身份出现在 userQuestions 投影里。
+  async function expireQuestion(eventId) {
+    questionTimers.delete(eventId);
+    const pending = pendingInteractions.get(eventId);
+    if (pending?.kind !== "question" || pending.value.held || !remoteEventClientId) return;
+    try {
+      await connection.settleRemoteEvent(remoteEventClientId, eventId, timedOutOutcome());
+    } catch (error) {
+      console.warn("[dsh] timed question settle failed", error);
+    }
+    // 结算方自己收不到这一单的 cancel 帧:本地退场,否则卡片停在 0 秒。
+    service.retireInteraction(eventId);
+  }
+
+  /// 释放一条提问的认领与倒计时。
+  function endQuestionWait(eventId) {
+    clearTimeout(questionTimers.get(eventId));
+    questionTimers.delete(eventId);
+    const streamId = questionWaitStreamId(eventId);
+    if (questionWaitStreams.delete(streamId)) connection.unsubscribe?.(streamId);
   }
 
   function syncAwaitingUser(sessionId) {
@@ -834,6 +888,14 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
 
     // ---- DSH 0.1.2 mux ----
     handleMuxFrame(frame) {
+      const waitEventId = eventIdOfQuestionWait(frame.streamId);
+      if (waitEventId) {
+        // 认领流:只认 {remainingMs};流结束/出错说明前台等待已经结束,交给 waterfall 的
+        // cancel/结算去收尾,这里不动卡片。
+        const remainingMs = frame.value?.remainingMs;
+        if (frame.type === "item" && typeof remainingMs === "number") startQuestionCountdown(waitEventId, remainingMs);
+        return;
+      }
       if (frame.type === "error") {
         console.warn("[dsh] logical stream error", frame.streamId, frame.error);
         // follow 流的错误是终态,必须落进 store。宿主 resume 失败(典型:会话记
@@ -903,9 +965,19 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
               notifyRuntime();
             }
           } else if (payload.event === "user-questions/request") {
+            // 0.2:wait.callId 是这次 ask_user_question 调用;wait.timed 表示前台等待有时限。
+            const wait = questionWait(payload.request);
             const question = { sessionId, eventId: payload.eventId, rpcId: payload.eventId,
-              questions: payload.request?.questions ?? [] };
+              questions: payload.request?.questions ?? [], callId: wait.callId, timed: wait.timed,
+              deadline: null, held: false };
             pendingInteractions.set(payload.eventId, { kind: "question", sessionId, value: question });
+            // 先认领再倒数(web answerQuestion):认领流的第一帧才是剩余时长,持有认领
+            // 期间宿主不自己计时 —— 什么时候算超时由本端决定。
+            if (wait.timed) {
+              const streamId = questionWaitStreamId(payload.eventId);
+              questionWaitStreams.add(streamId);
+              connection.subscribe?.(streamId, STREAM.userQuestionsAttachWait, { agentId: sessionId, callId: wait.callId });
+            }
             syncAwaitingUser(sessionId);
             if (isCurrent(sessionId)) {
               store.setQuestion(question);
@@ -1041,6 +1113,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     },
 
     retireInteraction(eventId) {
+      endQuestionWait(eventId);
       const sessionId = pendingEventSessions.get(eventId);
       if (!sessionId) return;
       pendingEventSessions.delete(eventId);
@@ -1053,6 +1126,46 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
         applyCachedInteractions(sessionId);
         notifyRuntime();
       }
+    },
+
+    /// 用户开始作答或点了「慢慢回答」:停表并一直持有认领,直到提交或取消(web engage/takeTime)。
+    holdQuestion(eventId) {
+      const pending = pendingInteractions.get(eventId);
+      if (pending?.kind !== "question" || !pending.value.timed || pending.value.held) return;
+      clearTimeout(questionTimers.get(eventId));
+      questionTimers.delete(eventId);
+      patchPendingQuestion(eventId, { held: true, deadline: null });
+    },
+
+    /// continued 提问的应答:没有 waterfall 了。取消 = 只收起面板(什么都不发);
+    /// 提交 = userQuestions/answer,宿主把它排进 inbox 成为一条 user-question-reply 消息。
+    async respondContinuedQuestion(question, result) {
+      const { sessionId, callId } = question ?? {};
+      if (!sessionId || !callId) return { accepted: false };
+      if (result?.ok === false) {
+        store.hideQuestion(sessionId, callId);
+        notifyRuntime();
+        return { accepted: true };
+      }
+      const answers = result?.value?.answer?.answers ?? [];
+      try {
+        const accepted = await connection.call(RPC.userQuestionsAnswer, { agentId: sessionId, callId, answer: { answers } });
+        // false = 这个问题已经不是 continued(被别的客户端答掉、或已结算)。
+        if (accepted !== true) return { accepted: false };
+      } catch (error) {
+        // REPLY_QUEUED:已有一条回复在排队(多半是另一个客户端刚答的),当作已送达。
+        const code = error?.details?.code ?? error?.code;
+        if (code !== "REPLY_QUEUED") throw error;
+      }
+      store.markQuestionReplied(sessionId, callId);
+      notifyRuntime();
+      return { accepted: true };
+    },
+
+    /// 重新打开被收起的 continued 提问面板。
+    reopenQuestion(sessionId, callId) {
+      store.reopenQuestion(sessionId, callId);
+      notifyRuntime();
     },
 
     async respondInteraction(eventId, result) {
@@ -1072,6 +1185,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       loadToken += 1;
       invalidateGapRepair();
       remoteEventClientId = null;
+      for (const eventId of pendingInteractions.keys()) endQuestionWait(eventId);
       pendingEventSessions.clear();
       pendingInteractions.clear();
       for (const item of listStore.get()) listStore.setAwaitingUser(item.sessionId, null);

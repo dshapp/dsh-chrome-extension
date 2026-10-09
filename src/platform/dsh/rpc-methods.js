@@ -97,7 +97,9 @@ export const RPC = Object.freeze({
   // 0.1.7 安装下载源:宿主配置的首选源/回退/pnpm 自身指向的 URL({registry, fallbackRegistries, resolved}),
   // 以及并行 ping npmjs/npmmirror 取最快者(string | null)。对齐 Mac pluginManagerRegistries / pluginRegistryProbeFastest。
   pluginManagerRegistries: "pluginManager/registries",
-  pluginRegistryProbeFastest: "pluginRegistryProbe/fastest"
+  pluginRegistryProbeFastest: "pluginRegistryProbe/fastest",
+  // 0.2:continued(已超时、agent 已继续)的限时提问迟到回答 {agentId, callId, answer} → boolean。
+  userQuestionsAnswer: "userQuestions/answer"
 });
 
 export const STREAM = Object.freeze({
@@ -109,7 +111,9 @@ export const STREAM = Object.freeze({
   // 0.1.7:单个任务的输出观测流 {request:{sessionId?, jobId, from?}}。帧 opened{job,from}
   // → output{chunks:[{text,gapBefore?}], next, lossy?}* → 终态 status{job} 后正常关闭。
   jobFollow: "job/follow",
-  follow: "session/follow"
+  follow: "session/follow",
+  // 0.2:认领一次限时提问的前台等待 {agentId, callId}。帧 {remainingMs};关流即释放认领。
+  userQuestionsAttachWait: "userQuestions/attachWait"
 });
 
 /// session/follow 与 session/control 的逻辑流帧类型。
