@@ -15,6 +15,33 @@ function escapeAttribute(text) {
   return escapeHtml(text).replace(/'/g, "&#39;");
 }
 
+// 行内图片 ![alt](dest "title")。在**转义态**上匹配,所以尖括号是 &lt; &gt;、
+// 双引号是 &quot;。dest 两种写法(CommonMark §6.4):
+// - &lt;…&gt;:可含空格,不可含尖括号与换行;
+// - 裸地址:不含空白与右括号。
+// 可选的 "title"/'title' 只为不让整段退化成文字,不输出。
+const IMAGE_SYNTAX = new RegExp(
+  "!\\[([^\\]]*)\\]\\(" +
+  "(?:&lt;((?:(?!&lt;|&gt;)[^\\n])*)&gt;|([^)\\s]+))" +
+  "(?:[ \\t]+(?:&quot;(?:(?!&quot;)[^\\n])*&quot;|'[^'\\n]*'))?" +
+  "[ \\t]*\\)",
+  "g"
+);
+
+const HTML_UNESCAPES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+
+/// 转义态的 dest → 宿主 /api/file 要的文件路径;不是本地绝对路径返回 null。
+/// 逐字对齐 web localPathMediaUrl(去掉 ?/# 之后 decodeURIComponent,畸形转义
+/// 不认)与 Mac DSWImageProvider.displayURL(url.path(percentEncoded: false)):
+/// "/work/test%20ws/图.png" 读的是 "/work/test ws/图.png"。
+function localImagePath(escapedSrc) {
+  const raw = String(escapedSrc ?? "").replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => HTML_UNESCAPES[e]);
+  if (!isLocalImagePath(raw)) return null;
+  let path;
+  try { path = decodeURIComponent(raw.split(/[?#]/)[0]); } catch { return null; }
+  return isLocalImagePath(path) ? path : null;
+}
+
 // 行内规则(数学之外的部分)。抽出来是因为数学段要跳过这一整套:
 // KaTeX 产出的 HTML 里带 _ ^ * 之类字符,再过一遍 markdown 行内规则会被
 // 当成斜体/粗体切碎。
@@ -32,7 +59,10 @@ function renderInlineMarkup(escaped, options) {
   out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");
   // 图片必须排在链接之前:两者只差一个前导 "!",链接规则先跑会把
   // ![alt](src) 的 [alt](src) 部分吃掉,只剩一个孤零零的 "!"。
-  out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, src) => {
+  out = out.replace(IMAGE_SYNTAX, (match, alt, angled, bare) => {
+    // 目标地址两种写法(CommonMark):裸地址 (src),或尖括号 (<src>) —— 后者允许
+    // 空格,模型给带空格/中文的本地路径时常这么写。转义态里尖括号是 &lt; &gt;。
+    const src = angled ?? bare;
     // src 已是转义态(escapeHtml 先行),直接进属性,不可二次转义。
     // alt 已是转义态(escapeHtml 先行),这里只补单引号 —— 再跑一次
     // escapeAttribute 会把 &quot; 二次转义成 &amp;quot;,把正文写坏。
@@ -41,8 +71,9 @@ function renderInlineMarkup(escaped, options) {
       return `<img src="${src}" alt="${altAttr}" loading="lazy" referrerpolicy="no-referrer">`;
     }
     // 占位不带 src:加载前浏览器按 alt 显示文字;失败时调用方换成 alt 文字。
-    if (options?.localImages && isLocalImagePath(src)) {
-      return `<img class="md-local-img" data-local-path="${src}" alt="${altAttr}">`;
+    const localPath = options?.localImages ? localImagePath(src) : null;
+    if (localPath !== null) {
+      return `<img class="md-local-img" data-local-path="${escapeAttribute(localPath)}" alt="${altAttr}">`;
     }
     // 白名单外的地址按字面文本留在正文:用户能看见模型到底写了什么,
     // 而一个空 src 的 <img> 只会留下碎图标,把问题藏起来。

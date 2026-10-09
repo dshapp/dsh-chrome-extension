@@ -72,6 +72,52 @@ test('localImages 模式产出无 src 的占位图,非绝对路径保持文字',
   assert.ok(mdToHtml('![r](https://a.com/x.png)', { localImages: true }).includes('src="https://a.com/x.png"'))
 })
 
+test('尖括号目标 ![alt](</abs/path>) 与 Mac/web(CommonMark)一样渲染成图片', () => {
+  // 回归:截图里 ![Jira 看板](</tmp/shots/04-after-kanban-board.jpg>) 原样显示成文字。
+  const root = host(mdToHtml('![Jira 看板](</tmp/shots/04-after-kanban-board.jpg>)', { localImages: true }))
+  const img = root.querySelector('img')
+  assert.ok(img, root.innerHTML)
+  assert.equal(img.getAttribute('data-local-path'), '/tmp/shots/04-after-kanban-board.jpg')
+  assert.equal(img.alt, 'Jira 看板')
+  assert.ok(!root.textContent.includes('</tmp'), root.textContent)
+
+  // 尖括号里允许空格;https 同样认;可选 title 不让整段退化成文字。
+  const spaced = host(mdToHtml('![a](</Users/me/My Shots/图 1.png>)', { localImages: true }))
+  assert.equal(spaced.querySelector('img').getAttribute('data-local-path'), '/Users/me/My Shots/图 1.png')
+  assert.ok(mdToHtml('![r](<https://a.com/x.png>)').includes('src="https://a.com/x.png"'))
+  const titled = host(mdToHtml('![t](/tmp/t.png "标题") ![u](</tmp/u.png> \'x\')', { localImages: true }))
+  assert.deepEqual([...titled.querySelectorAll('img')].map((i) => i.getAttribute('data-local-path')),
+    ['/tmp/t.png', '/tmp/u.png'])
+
+  // 尖括号里不能再有尖括号/换行;默认模式下仍是文字。
+  assert.equal(host(mdToHtml('![x](</tmp/<a>.png>)', { localImages: true })).querySelector('img'), null)
+  assert.ok(!mdToHtml('![x](</tmp/a.png>)').includes('<img'))
+})
+
+test('本地路径与 web localPathMediaUrl / Mac url.path 一样做百分号解码并去掉 ?#', () => {
+  const paths = (md) => [...host(mdToHtml(md, { localImages: true })).querySelectorAll('img')]
+    .map((i) => i.getAttribute('data-local-path'))
+  assert.deepEqual(paths('![a](/work/test%20workspace/%E5%9B%BE.png)'), ['/work/test workspace/图.png'])
+  assert.deepEqual(paths('![a](/work/literal%2520.png)'), ['/work/literal%20.png'])
+  assert.deepEqual(paths('![a](/tmp/x.png?v=1#frag)'), ['/tmp/x.png'])
+  // 解码出的引号不能逃出属性。
+  assert.deepEqual(paths('![a](/tmp/%22q%22.png)'), ['/tmp/"q".png'])
+  // 畸形转义、解码出控制字符:不认,保持文字。
+  assert.deepEqual(paths('![a](/tmp/%E0%A4%A.png)'), [])
+  assert.deepEqual(paths('![a](/tmp/%00.png)'), [])
+})
+
+test('增量渲染对尖括号本地图也会读回', async () => {
+  const calls = []
+  const box = document.createElement('div')
+  renderIncrementalMarkdown(box, '看板:\n\n![Jira 看板](</tmp/inc-angle.jpg>)', {
+    loadLocalImage: async (p) => { calls.push(p); return png() }
+  })
+  await flush()
+  assert.ok(box.querySelector('img').src.startsWith('blob:'))
+  assert.deepEqual(calls, ['/tmp/inc-angle.jpg'])
+})
+
 test('占位图被读成 blob: 并挂上;同路径命中缓存只读一次', async () => {
   const calls = []
   const load = async (path) => { calls.push(path); return png() }

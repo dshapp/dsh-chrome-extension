@@ -67,8 +67,8 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
     state.tail.innerHTML = mdToHtml(source.slice(cut ?? 0), md);
   }
   state.text = source;
-  // "](/" 是占位图产出的必要条件,没有就不扫 DOM(流式每帧都会走到这里)。
-  if (md && source.includes("](/")) hydrateLocalImages(host, loadLocalImage);
+  // "](/" 或 "](</" 是占位图产出的必要条件,没有就不扫 DOM(流式每帧都会走到这里)。
+  if (md && (source.includes("](/") || source.includes("](</"))) hydrateLocalImages(host, loadLocalImage);
 
   decorateCodeBlocks(host);
   void highlightCodeBlocks(host, { streaming });
