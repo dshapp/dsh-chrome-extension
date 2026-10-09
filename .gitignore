@@ -2,6 +2,7 @@ node_modules/
 .idea/
 .DS_Store
 *.log
+dist/
 
 # 端到端探针的报告与截图:一次性的验证证据,留在本地,不进仓库历史
 QUEUE-PROBE-*.md

@@ -1,11 +1,12 @@
 {
   "name": "dsh-chrome-extension",
-  "version": "0.3.6",
+  "version": "0.3.8",
   "private": true,
   "description": "DSH Chrome Bridge: the browser half of the dsh-chrome stack, plus a DSH side panel chat. Loaded unpacked by the user.",
   "type": "module",
   "scripts": {
-    "test": "node --test --test-force-exit --test-timeout=15000 tests/*.spec.mjs"
+    "test": "node --test --test-force-exit --test-timeout=15000 tests/*.spec.mjs",
+    "package:zip": "bash scripts/package-store-zip.sh"
   },
   "devDependencies": {
     "ws": "^8.18.0",
