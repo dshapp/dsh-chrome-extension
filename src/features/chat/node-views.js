@@ -288,7 +288,11 @@ function createJsonBlock(value, label) {
 
 /// steering:插队消息。与普通用户消息使用同一种样式,不再做视觉区分。
 export function createSteeringNode(node, context = {}) {
-  return createUserNode(node, context);
+  const element = createUserNode(node, context);
+  // 尚未被 agent 取走的插队消息(web data-pending-steering):同一种气泡,只做标记,
+  // durable 节点到达时由渲染层按同一 nodeId 整行替换。
+  if (node.pending) element.dataset.pendingSteering = "true";
+  return element;
 }
 
 /// 通知正文的纯文本部分。

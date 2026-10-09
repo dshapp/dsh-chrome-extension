@@ -1805,6 +1805,47 @@ export function createSessionStore() {
     };
   }
 
+  /// 已提交、但还没被 agent 在 step 边界消费的插队消息(inbox next-step 里的用户消息)。
+  ///
+  /// 插队消息要等 agent 在**下一个 step 边界**取走 next-step inbox 时才写出
+  /// durable 的 user/message —— 当前 step 若是一段长输出或一个长工具调用,
+  /// 这条消息会在记录里"消失"很久。web 的 ChatView 用 inbox 投影里的
+  /// next-step 用户消息画一个 PendingSteeringBubble 贴在记录尾部,durable
+  /// 事件到达时被同 id 的正式节点替换;这里对齐那段语义。
+  ///
+  /// 不进 state.nodes:它不参与 turn process 折叠、turn rail、lastNode 推导。
+  /// 按 queue 引用 + 消息 id 缓存节点对象,流式期间每帧的快照不会让渲染层重建这行。
+  let pendingSteeringCache = { queue: null, contexts: null, size: 0, nodes: [] };
+  const pendingSteeringNodeById = new Map();
+  function pendingSteeringNodes() {
+    const queue = state.queue;
+    if (pendingSteeringCache.queue === queue && pendingSteeringCache.contexts === state.contexts
+      && pendingSteeringCache.size === state.contexts.size) {
+      return pendingSteeringCache.nodes;
+    }
+    const nodes = [];
+    const live = new Set();
+    for (const item of queue ?? []) {
+      if (item?.placement !== "steering") continue;
+      const id = str(item.message?.id) ?? str(item.id);
+      if (!id) continue;
+      // durable 节点已经落地(投影比 user/message 晚一拍时会短暂重叠):以它为准。
+      if (state.contexts.has(`${NodeKind.steering}:${id}`) || state.contexts.has(`${NodeKind.user}:${id}`)) continue;
+      const content = Array.isArray(item.message?.content) ? item.message.content : [];
+      const previous = pendingSteeringNodeById.get(id);
+      const node = previous && previous.content === content
+        ? previous
+        // 投影里的消息不带时间:取本端首次看到它的时刻,内容变了也沿用。
+        : { ...steeringNode({ seq: Number.POSITIVE_INFINITY, time: previous?.time ?? Date.now(), messageId: id, content }), pending: true };
+      pendingSteeringNodeById.set(id, node);
+      live.add(id);
+      nodes.push(node);
+    }
+    for (const id of pendingSteeringNodeById.keys()) if (!live.has(id)) pendingSteeringNodeById.delete(id);
+    pendingSteeringCache = { queue, contexts: state.contexts, size: state.contexts.size, nodes };
+    return nodes;
+  }
+
   function snapshot() {
     if (state.nodesDirty) rebuildNodes();
     return {
@@ -1818,6 +1859,7 @@ export function createSessionStore() {
       lastSeq: state.lastSeq,
       hasMore: state.hasMore,
       nodes: state.nodes,
+      pendingSteering: pendingSteeringNodes(),
       lastNode: state.lastNode ?? null,
       runningTool: state.runningTool ?? null,
       turnRail: state.turnRail,

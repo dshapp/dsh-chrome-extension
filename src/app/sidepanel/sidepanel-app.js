@@ -300,7 +300,10 @@ export function createSidepanelApp(root, deps, options = {}) {
 
     // 查找标记包住的是真实文本节点,重建前先还原,避免与增量 markdown 打架。
     if (findBar.isOpen()) findBar.detach();
-    chatRenderer.render(snapshot.nodes);
+    // 待插入的插队消息(已提交、agent 还没在 step 边界取走)贴在记录尾部,
+    // 不必等到 durable 的 user/message 才出现(对齐 web PendingSteeringBubble)。
+    const pendingSteering = snapshot.pendingSteering ?? [];
+    chatRenderer.render(pendingSteering.length ? [...snapshot.nodes, ...pendingSteering] : snapshot.nodes);
     historyLoadOlder.update(snapshot.hasMore === true && (snapshot.nodes?.length ?? 0) > 0);
     if (findBar.isOpen()) findBar.refresh();
     // turn 轨道:随快照更新条目;active 在首个快照落到最后一轮,当前 active 消失时回退。
@@ -315,7 +318,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 空会话 + 加载失败:空态提示比一片空白更能说明"这不是在加载"。
     chatRenderer.setTyping(statusLabel != null, statusLabel);
     chatRenderer.setThinking(isThinking(snapshot));
-    elements.emptyHint.hidden = snapshot.nodes.length > 0;
+    elements.emptyHint.hidden = snapshot.nodes.length > 0 || pendingSteering.length > 0;
 
     renderTakeover(snapshot);
     renderQueuePanel(snapshot.queue, snapshot);
