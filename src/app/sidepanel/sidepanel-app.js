@@ -205,6 +205,8 @@ export function createSidepanelApp(root, deps, options = {}) {
   }
 
   const turnRail = mountTurnRail(elements.turnRail, {
+    // 轨道外框锁在消息区的竖向范围内;轮次多到放不下时在内部滚动。
+    band: elements.messages,
     onNavigate: (item) => {
       if (item.anchorRow) scrollToTurn(item.anchorRow, item.turn);
       else if (item.seq != null) void jumpToUnloaded(item);

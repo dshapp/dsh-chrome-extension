@@ -864,58 +864,131 @@ dialog.card-detail[open] { display: flex; flex-direction: column; }
 .card-detail-body .plan-inline,
 .card-detail-body .compaction-body { max-height: none; overflow: visible; }
 
-/* ── 会话 turn 轨道:浮在消息区右缘的轮次刻度(对齐 web TurnNavigator) ── */
+/* ── 会话 turn 轨道:浮在消息区右缘的轮次刻度(对齐 web TurnNavigator) ──
+   外框竖向居中于消息区(top 由 JS 按 #messages 写入),刻度在内部 scroller 里
+   固定 12px 间距排开;放不下时 scroller 内部滚动,两端出渐隐 + "还有 N 轮"翻页钮。 */
 #turn-rail {
   position: fixed;
-  right: 6px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
+  width: 26px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  align-items: stretch;
   z-index: 6;
   pointer-events: auto;
 }
 #turn-rail[hidden] { display: none; }
+.turn-rail-scroller {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.turn-rail-scroller::-webkit-scrollbar { display: none; }
+.turn-rail-scroller.fade-top { mask-image: linear-gradient(transparent 0, #000 18px 100%); }
+.turn-rail-scroller.fade-bottom { mask-image: linear-gradient(#000 0 calc(100% - 18px), transparent 100%); }
+.turn-rail-scroller.fade-top.fade-bottom {
+  mask-image: linear-gradient(transparent 0, #000 18px calc(100% - 18px), transparent 100%);
+}
+/* 命中区 12px 上下相接,刻度之间没有点不中的缝 */
 .turn-tick {
-  width: 20px;
+  flex: 0 0 12px;
+  width: 100%;
   height: 12px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
+  padding: 0 3px 0 0;
   background: none;
   border: none;
-  padding: 0;
+  border-radius: 4px;
   margin: 0;
   cursor: pointer;
 }
 .turn-tick::before {
   content: "";
   display: block;
-  width: 12px;
+  width: 18px;
   height: 2px;
   border-radius: 999px;
   background: var(--border-strong, #9a9aa5);
-  transition: width 0.15s ease, background 0.15s ease;
+  transform-origin: right center;
+  transform: scaleX(0.6);
+  transition: transform 0.14s ease, background-color 0.14s ease;
 }
-.turn-tick.unloaded::before { width: 7px; }
-.turn-tick.active::before { width: 18px; background: var(--text); }
-.turn-tick.busy::before { background: var(--text-faint); }
-.turn-tick:hover::before { background: var(--text-dim); }
+.turn-tick.unloaded::before { opacity: 0.6; transform: scaleX(0.4); }
+.turn-tick.previewing::before,
+.turn-tick:hover::before { background: var(--text-dim); transform: scaleX(0.9); }
+.turn-tick.active::before { background: var(--text); transform: scaleX(1); }
+.turn-tick.busy::before { animation: turn-tick-busy 1s ease-in-out infinite; }
+.turn-tick:focus-visible { outline: none; }
+.turn-tick:focus-visible::before { background: var(--link); transform: scaleX(1); }
+@keyframes turn-tick-busy { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-/* 预览卡:浮在刻度左侧,prompt 一行 + response 至多三行 */
+/* 溢出时的翻页钮:chevron + 被藏起的轮数。两枚同时占位,滚到头的一枚只是变淡禁用,
+   这样刻度区不会因为按钮出没而上下跳。 */
+.turn-rail-edge {
+  flex: 0 0 18px;
+  height: 18px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color 0.14s ease, background-color 0.14s ease, opacity 0.14s ease;
+}
+.turn-rail-edge[hidden] { display: none; }
+.turn-rail-edge-up { flex-direction: column; }
+.turn-rail-edge-down { flex-direction: column-reverse; }
+.turn-rail-edge:hover:not(:disabled) { color: var(--text); background: var(--user-bubble); }
+.turn-rail-edge:disabled { opacity: 0; cursor: default; }
+.turn-rail-edge-chevron {
+  width: 5px;
+  height: 5px;
+  border-left: 1.5px solid currentColor;
+  border-top: 1.5px solid currentColor;
+  transform: translateY(1px) rotate(45deg);
+}
+.turn-rail-edge-down .turn-rail-edge-chevron { transform: translateY(-2px) rotate(225deg); }
+.turn-rail-edge-count:empty { display: none; }
+
+/* 预览卡:挂在外框上(不随 scroller 裁剪),浮在刻度左侧;top 由 JS 对齐刻度中心 */
 .turn-rail-preview {
   position: absolute;
-  right: calc(100% + 8px);
-  width: 200px;
-  max-height: 96px;
+  right: calc(100% + 6px);
+  top: 0;
+  width: 220px;
+  max-height: 112px;
   overflow: hidden;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
   z-index: 10;
+  animation: turn-rail-preview-enter 0.12s ease-out;
+}
+@keyframes turn-rail-preview-enter { from { opacity: 0; translate: 4px 0; } to { opacity: 1; translate: 0 0; } }
+.turn-rail-preview-meta {
+  font-size: 0.625rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 2px;
 }
 .turn-rail-preview-prompt {
   font-size: 0.75rem;
@@ -932,6 +1005,10 @@ dialog.card-detail[open] { display: flex; flex-direction: column; }
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  margin-top: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-tick::before, .turn-rail-edge, .turn-rail-preview { transition: none; animation: none; }
 }
 
 
