@@ -598,7 +598,7 @@ export function assembleTrajectory(entries) {
         // v4(0.1.7):role:"tool" 消息自带 toolCallId / isError,内容块不再包一层。
         const callId = str(data.callId) ?? str(block.toolCallId) ?? str(message.toolCallId)
           ?? str(isObject(message.source) ? message.source.callId : null) ?? "";
-        const resultBlocks = toolResultBlocksFrom(message.content);
+        const resultBlocks = toolResultBlocksFrom(data.content ?? message.content);
         const error = isObject(data.error) ? data.error : null;
         const isError = error != null || toolResultError(message.content) || data.isError === true
           || message.isError === true;
@@ -617,6 +617,8 @@ export function assembleTrajectory(entries) {
             text: name,
             callId: id,
             toolName: name,
+            meta: data.meta ?? null,
+            error,
             outputDetail: textDetailOf(resultBlocks),
             outputBlocks: resultBlocks,
             result: str(error?.code) ?? previewOf(resultBlocks) ?? "",
@@ -627,6 +629,8 @@ export function assembleTrajectory(entries) {
           break;
         }
         const record = records[index];
+        record.meta = data.meta ?? null;
+        record.error = error;
         record.outputDetail = textDetailOf(resultBlocks);
         record.outputBlocks = resultBlocks;
         record.result = str(error?.code) ?? previewOf(resultBlocks) ?? "";
@@ -649,7 +653,9 @@ export function assembleTrajectory(entries) {
             const outputBlocks = blocksFrom(data.content);
             record.outputDetail = textDetailOf(outputBlocks);
             record.outputBlocks = outputBlocks;
-            record.result = previewOf(outputBlocks);
+            record.meta = data.meta ?? null;
+            record.error = isObject(data.error) ? data.error : null;
+            record.result = str(record.error?.reason) ?? str(record.error?.code) ?? previewOf(outputBlocks);
             record.isError = data.isError === true;
             record.durationSeconds = durationSeconds(record.startedAt, event.time);
           }
@@ -666,6 +672,14 @@ export function assembleTrajectory(entries) {
             callId: childId,
             parentCallId: parentId,
             toolName: str(data.name),
+            meta: ended ? data.meta ?? null : null,
+            error: ended && isObject(data.error) ? data.error : null,
+            ...(ended ? {
+              outputDetail: textDetailOf(blocksFrom(data.content)),
+              outputBlocks: blocksFrom(data.content),
+              result: str(data.error?.reason) ?? str(data.error?.code) ?? previewOf(blocksFrom(data.content)),
+              durationSeconds: 0
+            } : {}),
             isError: data.isError === true,
             startedAt: event.time
           });

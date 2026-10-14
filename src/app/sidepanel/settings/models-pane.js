@@ -29,6 +29,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
   let addSearch = "";
   let savedProviderName = null;
   let loadGeneration = 0;
+  let providerEditor = null;
 
   function rowFor(provider) {
     return state?.rows.find((entry) => entry.entry.provider === provider) ?? null;
@@ -199,7 +200,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
   }
 
   function editProvider(entry) {
-    openProviderEditor({
+    providerEditor = openProviderEditor({
       entry, state, sheet, deps, settingsService, rowFor, translateSaveError,
       onSaved: async (name) => {
         savedProviderName = name;
@@ -210,8 +211,8 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
   }
 
   function addCustomProvider() {
-    openCustomProvider({
-      state, sheet, deps, settingsService, translateSaveError,
+    providerEditor = openCustomProvider({
+      state, getState: () => state, sheet, deps, settingsService, translateSaveError,
       onDone: async () => {
         await refresh();
         onModelsChanged?.();
@@ -260,9 +261,13 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     });
   }
 
-  async function refresh() {
+  async function refresh({ background = false } = {}) {
     const generation = ++loadGeneration;
-    loading = true; loadError = null; render();
+    const focused = host.ownerDocument.activeElement;
+    const restoreSearch = focused?.id === "prov-add-search";
+    const selection = restoreSearch ? [focused.selectionStart, focused.selectionEnd] : null;
+    loading = !background || !state; loadError = null;
+    if (loading) render();
     try {
       const [providerState, catalog] = await Promise.all([
         settingsService.loadProviderRows(),
@@ -270,6 +275,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
       ]);
       if (generation !== loadGeneration) return;
       state = { ...providerState, failures: providerState.failures ?? [] };
+      if (providerEditor?.active) providerEditor.refreshFacts?.();
       void catalog;
       loadError = null;
     } catch (error) {
@@ -278,7 +284,13 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     } finally {
       if (generation !== loadGeneration) return;
       loading = false;
+      const mayRestoreSearch = restoreSearch && (host.ownerDocument.activeElement === focused || host.ownerDocument.activeElement === host.ownerDocument.body);
       render();
+      if (mayRestoreSearch) {
+        const input = host.querySelector("#prov-add-search");
+        input?.focus();
+        input?.setSelectionRange?.(...selection);
+      }
     }
   }
 

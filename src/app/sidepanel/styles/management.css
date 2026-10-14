@@ -1,0 +1,24 @@
+/* Main-area management pages do not disturb sidebar width or transcript state. */
+body.management-open > #main,
+body.management-open > #composer,
+body.management-open > #turn-rail,
+body.management-open #git-entry-btn,
+body.management-open #hdr-open-folder,
+body.management-open #subagent-catalog-btn,
+body.management-open #jobs-btn { display: none !important; }
+#management-surface { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+#management-header { flex: none; display: flex; align-items: center; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+#management-title { font-size: 17px; font-weight: 600; }
+#management-back { padding: 5px; }
+#management-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.management-page { min-width: 0; min-height: 100%; padding: 16px; }
+.management-page pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#history-navigation { flex: none; display: grid; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+.history-navigation-btn { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px; border: 0; border-radius: 7px; color: var(--text-dim); background: transparent; font: inherit; font-size: 13px; text-align: left; }
+.history-navigation-btn svg { flex: none; }
+.history-navigation-btn:hover, .history-navigation-btn.active { color: var(--text); background: var(--border-soft); }
+#history-settings-btn { flex: none; margin: 0; padding: 10px 14px; border-top: 1px solid var(--border-soft); border-radius: 0; }
+#session-drawer.archived-mode > #history-navigation,
+#session-drawer.archived-mode > #history-settings-btn { display: none; }
+.management-page .set-section { max-width: 100%; }
+@media (max-width: 420px) { .management-page { padding: 10px; } }

@@ -1,0 +1,486 @@
+{
+  "uid": 363,
+  "refs": {
+    "2": {
+      "type": "number",
+      "meta": {
+        "max": 2147483647,
+        "default": 500
+      }
+    },
+    "5": {
+      "type": "number",
+      "meta": {
+        "max": 2147483647,
+        "default": 10000
+      }
+    },
+    "9": {
+      "type": "number",
+      "meta": {
+        "min": 0,
+        "max": 1,
+        "default": 0.1
+      }
+    },
+    "10": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "initialDelayMs": 2,
+        "maxDelayMs": 5,
+        "jitterRatio": 9
+      }
+    },
+    "12": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "normal"
+    },
+    "17": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 0,
+        "max": 9007199254740991,
+        "default": 5
+      }
+    },
+    "18": {
+      "type": "string",
+      "meta": {}
+    },
+    "20": {
+      "type": "array",
+      "meta": {
+        "default": [
+          "EMPTY_RESPONSE",
+          "RATE_LIMIT",
+          "SERVER",
+          "TIMEOUT",
+          "TRANSPORT"
+        ]
+      },
+      "inner": 18
+    },
+    "21": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "mode": 12,
+        "maxRetries": 17,
+        "retryableCodes": 20,
+        "backoff": 10
+      }
+    },
+    "23": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "always"
+    },
+    "24": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "mode": 23,
+        "backoff": 10
+      }
+    },
+    "240": {
+      "type": "string",
+      "meta": {
+        "required": true
+      }
+    },
+    "241": {
+      "type": "string",
+      "meta": {}
+    },
+    "242": {
+      "type": "string",
+      "meta": {}
+    },
+    "245": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1
+      }
+    },
+    "248": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1
+      }
+    },
+    "249": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        251,
+        253
+      ]
+    },
+    "251": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "text"
+    },
+    "253": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "image"
+    },
+    "256": {
+      "type": "array",
+      "meta": {
+        "default": [
+          "text"
+        ],
+        "min": 1
+      },
+      "inner": 249
+    },
+    "259": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1
+      }
+    },
+    "260": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        259,
+        262
+      ]
+    },
+    "262": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "low"
+    },
+    "265": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1
+      }
+    },
+    "266": {
+      "type": "const",
+      "meta": {},
+      "value": "in-history"
+    },
+    "267": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        269,
+        271
+      ]
+    },
+    "269": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "in-history"
+    },
+    "271": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "addition-only"
+    },
+    "272": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "id": 240,
+        "name": 241,
+        "description": 242,
+        "contextWindow": 245,
+        "maxTokens": 248,
+        "inputModalities": 256,
+        "imagePixelBudget": 260,
+        "imageMaxBytes": 265,
+        "systemPromptUpdate": 266,
+        "toolUpdate": 267
+      }
+    },
+    "274": {
+      "type": "string",
+      "meta": {
+        "volatile": true
+      }
+    },
+    "277": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "enabled"
+    },
+    "279": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "disabled"
+    },
+    "280": {
+      "type": "union",
+      "meta": {
+        "volatile": true
+      },
+      "list": [
+        277,
+        279
+      ]
+    },
+    "283": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "off"
+    },
+    "285": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "low"
+    },
+    "287": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "high"
+    },
+    "289": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "max"
+    },
+    "290": {
+      "type": "union",
+      "meta": {
+        "volatile": true
+      },
+      "list": [
+        283,
+        285,
+        287,
+        289
+      ]
+    },
+    "296": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "max": 9007199254740991,
+        "default": 256000,
+        "volatile": true
+      }
+    },
+    "301": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 1000000,
+        "volatile": true
+      }
+    },
+    "304": {
+      "type": "array",
+      "meta": {
+        "default": [
+          {
+            "id": "deepseek-flash",
+            "name": "DeepSeek-V4.1-Flash",
+            "contextWindow": 1000000,
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "systemPromptUpdate": "in-history",
+            "toolUpdate": "addition-only"
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek-V4-Pro",
+            "description": "Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost.",
+            "contextWindow": 1000000
+          }
+        ],
+        "volatile": true
+      },
+      "inner": 272
+    },
+    "309": {
+      "type": "number",
+      "meta": {
+        "min": 5e-324,
+        "max": 2147483647,
+        "default": 300000,
+        "volatile": true
+      }
+    },
+    "314": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 134217728,
+        "volatile": true
+      }
+    },
+    "319": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 20971520,
+        "volatile": true
+      }
+    },
+    "324": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 600,
+        "volatile": true
+      }
+    },
+    "329": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 67108864,
+        "volatile": true
+      }
+    },
+    "334": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 10485760,
+        "volatile": true
+      }
+    },
+    "339": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 20,
+        "volatile": true
+      }
+    },
+    "344": {
+      "type": "number",
+      "meta": {
+        "min": 5e-324,
+        "max": 2147483647,
+        "default": 60000,
+        "volatile": true
+      }
+    },
+    "350": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 3600,
+        "max": 2592000,
+        "default": 604800,
+        "volatile": true
+      }
+    },
+    "355": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 0,
+        "default": 3600,
+        "volatile": true
+      }
+    },
+    "361": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "max": 1000,
+        "default": 100,
+        "volatile": true
+      }
+    },
+    "362": {
+      "type": "union",
+      "meta": {
+        "volatile": true
+      },
+      "list": [
+        21,
+        24
+      ]
+    },
+    "363": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "baseURL": 274,
+        "thinking": 280,
+        "reasoningEffort": 290,
+        "maxTokens": 296,
+        "defaultContextWindow": 301,
+        "models": 304,
+        "streamIdleTimeoutMs": 309,
+        "maxRequestFilesBytes": 314,
+        "maxInlineRequestImageBytes": 319,
+        "maxImagesPerRequest": 324,
+        "imageOffloadByteQuantum": 329,
+        "inlineImageOffloadByteQuantum": 334,
+        "imageOffloadCountQuantum": 339,
+        "filesApiTimeoutMs": 344,
+        "fileExpiresAfterSeconds": 350,
+        "fileRefreshMarginSeconds": 355,
+        "fileQuotaCleanupBatch": 361,
+        "retryPolicy": 362
+      }
+    }
+  }
+}

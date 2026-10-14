@@ -167,7 +167,10 @@ export function mountSubagentCatalog(trigger, menu, { deps, getSessionId, onOpen
 
     const open = el("button", "subagent-row-open");
     open.type = "button";
+    open.disabled = entry.mode === "external";
+    if (open.disabled) open.title = t("subagentExternalNoSession");
     open.addEventListener("click", () => {
+      if (entry.mode === "external") return;
       onOpenSubagent({ parentSessionId: parentId, childSessionId: entry.id, mode: entry.mode });
       menu.hidePopover?.();
     });

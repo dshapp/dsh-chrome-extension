@@ -45,12 +45,14 @@ export const RPC = Object.freeze({
   commandsExecute: "commands/execute",
   skillList: "skills/list",
   // ---- agent preset ----
-  // 0.1.7 预设改为在配置文件里声明:read/copy/deletePreset 与打开预设目录的端点
-  // 全部删除,只剩列表与选择;默认预设写 agent-preset-registry.selectedDefault。
+  // 预设在配置文件声明；0.2.1 恢复只读 read，copy/deletePreset 不恢复。
+  // 默认预设写 agent-preset-registry.selectedDefault。
   agentPresetList: "agentPresets/list",
+  agentPresetRead: "agentPresets/read",
   agentPresetSelect: "agentPresets/select",
   // ---- goal ----
   goalCreate: "goals/create",
+  goalGet: "goals/get",
   goalClear: "goals/clear",
   goalEdit: "goals/edit",
   goalPause: "goals/pause",
@@ -74,6 +76,12 @@ export const RPC = Object.freeze({
   credentialsUnset: "credentials/unset",
   // ---- 后台任务(0.1.7 job/*) ----
   jobKill: "job/kill",
+  // ---- 自动化任务（与 job 后台作业不同） ----
+  scheduleCatalog: "schedule/catalog",
+  scheduleList: "schedule/list",
+  scheduleUpdate: "schedule/update",
+  scheduleDelete: "schedule/delete",
+  scheduleHistory: "schedule/history",
   // ---- 模型发现 ----
   llmDiscoverModels: "llm/discoverModels",
   // ---- 权限预设目录(0.1.6) ----
@@ -94,6 +102,9 @@ export const RPC = Object.freeze({
   pluginManagerInspect: "pluginManager/inspect",
   pluginManagerInstallBundle: "pluginManager/installBundle",
   pluginManagerCancelInstall: "pluginManager/cancelInstall",
+  pluginManagerWaitForInstall: "pluginManager/waitForInstall",
+  pluginManagerListVersionExemptions: "pluginManager/listVersionExemptions",
+  pluginManagerSetVersionExemption: "pluginManager/setVersionExemption",
   // 0.1.7 安装下载源:宿主配置的首选源/回退/pnpm 自身指向的 URL({registry, fallbackRegistries, resolved}),
   // 以及并行 ping npmjs/npmmirror 取最快者(string | null)。对齐 Mac pluginManagerRegistries / pluginRegistryProbeFastest。
   pluginManagerRegistries: "pluginManager/registries",
@@ -186,7 +197,8 @@ export const EVT = Object.freeze({
   deliverablesPresented: "deliverables/presented",
   // workspace-changes 插件的"本轮改动文件"公告:只带 turn,摘要与逐文件对比
   // 要按这条事件自己的 seq 去宿主 /api/changes.* 读(见 features/changes)。
-  workspaceChanges: "workspace/changes"
+  workspaceChanges: "workspace/changes",
+  workingDirectoryChange: "working-directory/change"
 });
 
 /// 审批结论。宿主只接受这四个字面量。

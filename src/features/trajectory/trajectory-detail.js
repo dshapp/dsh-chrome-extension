@@ -177,7 +177,7 @@ function detailBuild({ record, request, requestNumber, stats }) {
         ? t("trajectory.detailsCompacted")
         : (request?.resultSeq == null ? null : t("trajectory.detailsAssistantMessage"))],
       [t("trajectory.detailDuration"), formatDuration(record.durationSeconds) || null],
-      [t("trajectory.detailError"), request?.error ?? null]
+      [t("trajectory.detailError"), record.error?.reason ?? record.error?.code ?? request?.error ?? null]
     ];
     wrap.append(definitionList(summaryRows));
 
@@ -190,6 +190,9 @@ function detailBuild({ record, request, requestNumber, stats }) {
     else if (record.result) wrap.append(section("trajectory.detailResult", pre(record.result)));
     if (record.thinkingDetail) wrap.append(section("trajectory.detailThinking", pre(record.thinkingDetail)));
     if (record.sourceBlocks?.length) wrap.append(section("trajectory.detailSource", pre(blocksText(record.sourceBlocks))));
+    if (record.meta != null) {
+      wrap.append(section("trajectory.detailMetadata", pre(JSON.stringify(record.meta, null, 2))));
+    }
     if (record.toolSchema) {
       wrap.append(section("trajectory.detailSchema", pre(JSON.stringify(record.toolSchema.raw, null, 2))));
     }

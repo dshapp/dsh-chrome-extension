@@ -685,6 +685,7 @@ export function createToolNode(node, context) {
 }
 
 export function updateToolNode(row, node, context = {}) {
+  context = { ...context, cwd: node.cwd ?? context.cwd };
   const model = toolRowModel(node, context);
 
   row.dataset.state = model.state;
@@ -694,11 +695,13 @@ export function updateToolNode(row, node, context = {}) {
   // 用 div+role 而不是 <button>:摘要路径内部要放一个可点的文件链接,
   // 交互元素不能嵌套在 button 里(Mac 的 ToolRow 也是 glyph+summary 才可点)。
   const header = el("div", "tool-header");
-  header.setAttribute("role", "button");
-  header.tabIndex = 0;
+  if (!node.preparing) {
+    header.setAttribute("role", "button");
+    header.tabIndex = 0;
+  }
 
   const icon = el("span", "tool-icon");
-  if (model.state === ToolRowState.running) icon.classList.add("running");
+  if (model.state === ToolRowState.running || model.state === "preparing") icon.classList.add("running");
   if (model.state === ToolRowState.error) icon.classList.add("error");
   if (model.state === ToolRowState.stopped) icon.classList.add("stopped");
   icon.innerHTML = getToolIconSvg(getToolPresentation(node.name).iconKey);
@@ -726,14 +729,15 @@ export function updateToolNode(row, node, context = {}) {
 
   header.append(icon, summary);
   if (model.summarySuffix) header.append(el("span", "tool-suffix", model.summarySuffix));
+  if (node.preparing) header.append(el("span", "tool-suffix tool-preparing", t("tool.preparing")));
 
   // ---- 详情入口 ----
   // 正文不再挂进记录流,只在点击时惰性构建;运行中的调用每次打开都取当前
   // 节点快照,所以结果到达后再打开能看到最新输出。
-  const hasDetail = hasToolDetail(node, model) || subCallCount(node) > 0;
+  const hasDetail = !node.preparing && (hasToolDetail(node, model) || subCallCount(node) > 0);
   row.classList.toggle("no-detail", !hasDetail);
   header.setAttribute("aria-disabled", String(!hasDetail));
-  header.setAttribute("aria-haspopup", "dialog");
+  if (!node.preparing) header.setAttribute("aria-haspopup", "dialog");
   header.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
@@ -858,6 +862,11 @@ function buildToolBody(node, model, context = {}) {
         wrap.append(img);
       }
     }
+  }
+
+  const errorReason = node.result?.error?.reason;
+  if (errorReason && errorReason !== resultText(node.result)) {
+    wrap.append(el("div", "tool-detail-label", "ERROR"), el("pre", "tool-output tool-error", errorReason));
   }
 
   // 子调用树:嵌套行只在弹窗里建,和记录流里的折叠行同一套渲染。
@@ -1698,25 +1707,31 @@ function safeJson(value) {
 }
 
 /// Turn process 折叠头:整行可点(button 自带 Enter/Space),chevron + 计数。
-/// 没有可折叠成员时返回 null,不占行。
+/// 无最终回答或停止/失败时只显示状态,不折叠过程证据。
 export function createTurnProcessNode(node, context = {}) {
-  if (!(node.memberCount > 0)) return null;
-  const button = el("button", "turn-process");
-  button.type = "button";
+  const foldable = node.answerAnchorSeq != null && (node.memberCount > 0 || node.inlineReasoning);
+  const button = el(foldable ? "button" : "div", "turn-process");
+  if (foldable) button.type = "button";
   button.dataset.turnProcess = String(node.turn);
-  const labels = [];
-  if (node.toolCallCount > 0) labels.push(t("process.toolCalls", { n: String(node.toolCallCount) }));
-  if (node.messageCount > 0) labels.push(t("process.messages", { n: String(node.messageCount) }));
-  if (node.subagentCount > 0) labels.push(t("process.subagents", { n: String(node.subagentCount) }));
-  const label = labels.length ? labels.join(t("process.separator")) : t("process.thought");
+  const labels = [t(`process.${node.outcome ?? "completed"}`)];
+  if (node.durationMs != null) {
+    const seconds = Math.floor(Math.max(0, node.durationMs) / 1000);
+    const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    labels.push(t("process.duration", { duration }));
+  }
+  const label = labels.join(t("process.separator"));
+  button.dataset.outcome = node.outcome ?? "completed";
   const open = Boolean(context.processOpen);
   button.dataset.open = open ? "true" : "false";
-  button.setAttribute("aria-expanded", String(open));
-  button.title = open ? t("process.collapse") : t("process.expand");
-  const chevron = el("span", "turn-process-chevron");
+  if (foldable) {
+    button.setAttribute("aria-expanded", String(open));
+    button.title = open ? t("process.collapse") : t("process.expand");
+    const chevron = el("span", "turn-process-chevron");
     chevron.append(lucideIcon("chevron-right", { size: 14 }));
-    button.append(chevron, el("span", "turn-process-label", label));
-  button.addEventListener("click", () => context.onToggleProcess?.(node.turn));
+    button.append(chevron);
+    button.addEventListener("click", () => context.onToggleProcess?.(node.turn));
+  }
+  button.append(el("span", "turn-process-label", label));
   return button;
 }
 

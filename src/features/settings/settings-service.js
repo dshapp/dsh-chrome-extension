@@ -23,6 +23,34 @@ export function jsonPathExists(root, path) {
   return jsonValueAt(path, root) !== undefined;
 }
 
+/// 沿实际 schemastery ref 图定位节点,对象/字典/数组各消费一个路径段。
+export function settingsSchemaNodeAt(schema, path = []) {
+  const refs = schema?.refs ?? {};
+  const resolve = (node) => typeof node === "number" ? refs[String(node)] : node;
+  let node = resolve(schema?.uid ?? schema);
+  for (const segment of path) {
+    if (node?.type === "object") node = resolve(node.dict?.[segment]);
+    else if (node?.type === "dict" || node?.type === "array") node = resolve(node.inner);
+    else return undefined;
+  }
+  return node;
+}
+
+/// reset 后的模型来自 base/schema,绝不能读仍含用户覆盖的 value。
+export function inheritedProviderModels(namespace, settingsPath = []) {
+  const path = [...settingsPath, "models"];
+  return jsonValueAt(path, namespace?.base)
+    ?? settingsSchemaNodeAt(namespace?.schema, path)?.meta?.default;
+}
+
+/// 凭证事实区分命名引用与推导引用:后者不表示 provider 已采用该凭证。
+export function providerCredentialRef(row) {
+  return row?.apiKeyEnv ?? deriveKeyRef(row?.entry?.provider);
+}
+export function providerKeyCredential(row) {
+  return row?.apiKeyEnv == null ? row?.derivedCredential : row?.credential;
+}
+
 /// 两个草稿对象之间的最小 set/unset 路径操作(对齐 web ProviderEditor.pathOps):
 /// 只命名 after 里出现过的键,值相同的键不发 op,消失的键发 unset。
 /// basePath 是这段子树在命名空间里的设置路径。
@@ -116,6 +144,17 @@ export function catalogRowFromModel(model, inputField = "input") {
   };
 }
 
+/// 发现结果不是存储profile:只导入官方允许的目录字段,按适配器转换输入类型。
+/// 已存对象仍走 catalogRowFromModel,未知字段必须保真。
+export function catalogRowFromDiscoveredModel(candidate, inputField = "input") {
+  const model = { id: candidate.id };
+  for (const field of ["name", "contextWindow", "maxTokens"]) {
+    if (candidate[field] !== undefined) model[field] = candidate[field];
+  }
+  if (Array.isArray(candidate.inputModalities)) model[inputField] = [...candidate.inputModalities];
+  return catalogRowFromModel(model, inputField);
+}
+
 /// 一组已存模型 → 编辑器行。
 export function catalogRowsFromModels(models, inputField = "input") {
   return (Array.isArray(models) ? models : []).map((model) => catalogRowFromModel(model, inputField));
@@ -144,7 +183,11 @@ export function catalogRowToModel(row, inputField = "input") {
   apply("contextWindow", context != null ? context : undefined);
   const maxTokens = parseCapacitySpelling(row.maxTokens);
   apply("maxTokens", maxTokens != null ? maxTokens : undefined);
-  if (row.inputTypes !== undefined) apply(inputField, [...row.inputTypes]);
+  // 未触碰的类型保留原字段,不能把另一适配器字段复制成新增覆盖。
+  if (row.inputTypes !== undefined
+    && JSON.stringify(row.inputTypes) !== JSON.stringify(storedInputTypes(row.raw, inputField))) {
+    apply(inputField, [...row.inputTypes]);
+  }
   return entry;
 }
 
@@ -238,7 +281,8 @@ export function providerKeyState(row) {
   if (!row) return null;
   if (row.entry?.provider === "deepseek-account") return null;
   if (row.credential?.configured === true) return "configured";
-  return row.apiKeyEnv == null ? "notRequired" : "missing";
+  if (row.apiKeyEnv == null) return "notRequired";
+  return row.credential?.configured === false ? "missing" : null;
 }
 
 /// 添加提供方候选:未配置且适配器仍知道它的设置地址。对齐 Mac addableProviders。
@@ -253,8 +297,13 @@ export function createSettingsService(connection) {
   // 同一 settings service 被多个 pane 共享；并发 describe/mutate 的回包可能乱序。
   // 按宿主 revision 留住每个 namespace 的最新视图，旧回包只能返回较新缓存。
   const newestNamespaces = new Map();
-  function rememberNamespace(view) {
-    if (!view?.ns) return view;
+  let cacheGeneration = 0;
+  function resetRevisionCache() {
+    cacheGeneration += 1;
+    newestNamespaces.clear();
+  }
+  function rememberNamespace(view, generation = cacheGeneration) {
+    if (generation !== cacheGeneration || !view?.ns) return view;
     const current = newestNamespaces.get(view.ns);
     if (!current || (view.revision ?? -1) >= (current.revision ?? -1)) {
       newestNamespaces.set(view.ns, view);
@@ -288,23 +337,28 @@ export function createSettingsService(connection) {
   }
   return {
     /// {namespaces:[{ns, revision, schema, value, base, user}], writable, hasDocument}
+    resetRevisionCache,
+    invalidate: resetRevisionCache,
     async describe() {
+      const generation = cacheGeneration;
       const value = await connection.call(RPC.settingsDescribe, {});
-      return { ...value, namespaces: (value?.namespaces ?? []).map(rememberNamespace) };
+      return { ...value, namespaces: (value?.namespaces ?? []).map((view) => rememberNamespace(view, generation)) };
     },
     /// 整段 patch 写入(键是相对 ns 的路径,用 "/" 分隔)。
     async update(ns, patch, expectedRevision) {
+      const generation = cacheGeneration;
       const value = await connection.call(RPC.settingsUpdate, {
         ns, patch, ...(expectedRevision == null ? {} : { expectedRevision })
       });
-      return rememberNamespace(value);
+      return rememberNamespace(value, generation);
     },
     /// 有序路径 op 写入。
     async mutate(ns, ops, expectedRevision) {
+      const generation = cacheGeneration;
       const value = await connection.call(RPC.settingsMutate, {
         ns, ops, ...(expectedRevision == null ? {} : { expectedRevision })
       });
-      return rememberNamespace(value);
+      return rememberNamespace(value, generation);
     },
     async openDocument() {
       return connection.call(RPC.settingsOpenDocument, {});
@@ -359,12 +413,16 @@ export function createSettingsService(connection) {
     /// provider × settings 命名空间的联结,等价于 Mac ModelProviderSettingsController.load。
     /// 凭证是"增强信息":读失败不该让整页变成错误页,只记 credentialError。
     async loadProviderRows() {
+      const generation = cacheGeneration;
       const [providerResult, settingsResult] = await Promise.all([
         providers(),
         connection.call(RPC.settingsDescribe, {})
       ]);
       const namespaces = new Map(
-        (settingsResult?.namespaces ?? []).map((namespace) => [namespace.ns, namespace])
+        (settingsResult?.namespaces ?? []).map((namespace) => {
+          const remembered = rememberNamespace(namespace, generation);
+          return [remembered.ns, remembered];
+        })
       );
       let rows = (providerResult?.providers ?? []).map((entry) => {
         const namespace = namespaces.get(entry.settingsNs);
@@ -379,8 +437,10 @@ export function createSettingsService(connection) {
             && !jsonPathExists(namespace?.base, path),
           // web 从不为账号路由推导密钥引用:它以登录态认证。
           apiKeyEnv: entry.provider === "deepseek-account" ? null
-            : typeof profile?.apiKeyEnv === "string" ? profile.apiKeyEnv : null,
-          credential: null
+            : typeof profile?.apiKeyEnv === "string" && profile.apiKeyEnv.trim() ? profile.apiKeyEnv : null,
+          credential: null,
+          derivedCredential: null,
+          settingsWritable: settingsResult?.writable === true
         };
       });
       // web accountAvailable:账号路由只在模型目录真的带有非空 deepseek-account
@@ -397,14 +457,16 @@ export function createSettingsService(connection) {
       let credentialError = null;
       const refs = [...new Set(rows
         .filter((row) => row.entry.provider !== "deepseek-account")
-        .map((row) => row.apiKeyEnv)
+        .map(providerCredentialRef)
         .filter(Boolean))].sort();
       if (refs.length) {
         try {
           const value = await connection.call(RPC.credentialsDescribe, { refs });
           const credentials = value ?? {};
           for (const row of rows) {
+            if (row.entry.provider === "deepseek-account") continue;
             if (row.apiKeyEnv) row.credential = credentials[row.apiKeyEnv] ?? null;
+            else row.derivedCredential = credentials[providerCredentialRef(row)] ?? null;
           }
         } catch (error) {
           credentialError = error?.message ?? String(error);
@@ -421,7 +483,7 @@ export function createSettingsService(connection) {
 
     /// 删除用户自有 profile:凭证先走,两步都幂等。
     async removeProvider(row) {
-      if (!row.removable) return;
+      if (!row.removable || row.settingsWritable === false) return;
       const derived = deriveKeyRef(row.entry.provider);
       const managed = row.apiKeyEnv === derived
         && row.credential?.configured === true

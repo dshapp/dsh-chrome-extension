@@ -15,7 +15,7 @@ import {
 } from "./settings-ui.js";
 import {
   jsonValueAt, jsonPathExists, profilePathOps, deriveKeyRef, apiKeyFailure,
-  formatCapacitySpelling, catalogRowsFromModels
+  formatCapacitySpelling, catalogRowsFromModels, inheritedProviderModels, providerKeyCredential
 } from "../../../features/settings/settings-service.js";
 import { createModelCatalogEditor } from "./model-list-editor.js";
 import { protocolChoices } from "./custom-provider-sheet.js";
@@ -53,7 +53,7 @@ export function openProviderEditor({
   const ns = entry.settingsNs;
   const path = entry.settingsPath ?? [];
   const namespace = state?.namespaces.get(ns);
-  const layout = LAYOUT_BY_NS[ns] ?? "unknown";
+  const layout = entry.provider === "deepseek-account" ? "deepseek-account" : LAYOUT_BY_NS[ns] ?? "unknown";
   const inputField = INPUT_FIELD_BY_LAYOUT[layout] ?? "input";
   const declared = entry.declared === true;
   const effective = jsonValueAt(path, namespace?.value);
@@ -82,7 +82,9 @@ export function openProviderEditor({
     context: () => {
       const keyFailureKind = apiKeyFailure(keyDraft);
       return {
-        disabled: saving,
+        disabled: saving || (current()?.settingsWritable ?? state?.writable) === false,
+        inheritedModels: inheritedProviderModels(namespace, path),
+        defaultInput: effective?.defaultInput,
         probeEnabled: Boolean(entry.provider) || Boolean(stringAt(userDraft, "baseURL") ?? stringAt(effective, "baseURL")),
         probeBlocked: keyFailureKind ? KEY_FAILURE_TEXT[keyFailureKind] : undefined,
         probe: {
@@ -97,15 +99,15 @@ export function openProviderEditor({
         capacityPlaceholders: {
           contextWindow: typeof effective?.defaultContextWindow === "number"
             ? formatCapacitySpelling(effective.defaultContextWindow) : undefined,
-          maxTokens: typeof effective?.maxTokens === "number"
-            ? formatCapacitySpelling(effective.maxTokens) : undefined
+          maxTokens: typeof (effective?.defaultMaxTokens ?? effective?.maxTokens) === "number"
+            ? formatCapacitySpelling(effective.defaultMaxTokens ?? effective.maxTokens) : undefined
         }
       };
     }
   });
   editor.setRows(
     catalogRowsFromModels(
-      jsonPathExists(userDraft, ["models"]) ? userDraft.models : effective?.models,
+      jsonPathExists(userDraft, ["models"]) ? userDraft.models : inheritedProviderModels(namespace, path),
       inputField
     ),
     userOwnsModels
@@ -144,7 +146,9 @@ export function openProviderEditor({
   }
 
   function canSave() {
-    return !saving && layout !== "unknown" && dirty()
+    return !saving && (current()?.settingsWritable ?? state?.writable) !== false
+      && !(keyDraft && providerKeyCredential(current())?.writable === false)
+      && layout !== "unknown" && dirty()
       && !catalogFailureText() && !keyFailureText();
   }
 
@@ -155,7 +159,8 @@ export function openProviderEditor({
 
   function body() {
     const row = current();
-    const locked = row?.credential?.configured === true && row?.credential?.writable === false;
+    const keyCredential = providerKeyCredential(row);
+    const locked = keyCredential?.writable === false || (row?.settingsWritable ?? state?.writable) === false;
     if (layout === "deepseek-account") {
       // web 账号卡片:只有模型目录。路由用登录态认证,没有密钥与地址可改。
       return editor.html()
@@ -166,10 +171,10 @@ export function openProviderEditor({
       label: escapeHtml(t("prov.apiKey")),
       control: textInput({
         id: "prov-key", value: keyDraft, type: "password",
-        placeholder: row?.credential?.configured ? "••••••••" : "", disabled: locked
+        placeholder: keyCredential?.configured ? "••••••••" : "", disabled: locked
       }),
       hint: escapeHtml(locked ? t("prov.keyLockedFooter")
-        : row?.credential?.configured ? t("prov.keyStoredFooter")
+        : keyCredential?.configured ? t("prov.keyStoredFooter")
         : row?.apiKeyEnv == null ? t("prov.keyRefCreatedFooter")
         : t("prov.keyStoreFooter"))
     });
@@ -229,6 +234,9 @@ export function openProviderEditor({
       sheetToken
     );
     bindEditor();
+    if (saving || (current()?.settingsWritable ?? state?.writable) === false) {
+      for (const input of sheet.root.querySelectorAll("input, select")) input.disabled = true;
+    }
   }
 
   /// 只更新按钮可用态,不重画输入框 —— 重画会让正在输入的字段失焦。
@@ -236,6 +244,10 @@ export function openProviderEditor({
     if (!sheet.owns(sheetToken)) return;
     const save = sheet.root.querySelector("#prov-save");
     if (save) save.disabled = !canSave();
+    const readOnly = (current()?.settingsWritable ?? state?.writable) === false;
+    const key = sheet.root.querySelector("#prov-key");
+    if (key) key.disabled = readOnly || saving || providerKeyCredential(current())?.writable === false;
+    for (const field of sheet.root.querySelectorAll("#prov-baseurl, #prov-displayname, #prov-api")) field.disabled = saving || readOnly;
     editor.syncChrome(sheet.root);
   }
 
@@ -246,11 +258,13 @@ export function openProviderEditor({
       repaintSoft();
     });
     root.querySelector("#prov-baseurl")?.addEventListener("input", (event) => {
-      userDraft.baseURL = event.target.value;
+      if (event.target.value.trim()) userDraft.baseURL = event.target.value;
+      else delete userDraft.baseURL;
       repaintSoft();
     });
     root.querySelector("#prov-displayname")?.addEventListener("input", (event) => {
-      userDraft.displayName = event.target.value;
+      if (event.target.value.trim()) userDraft.displayName = event.target.value;
+      else delete userDraft.displayName;
       repaintSoft();
     });
     root.querySelector("#prov-api")?.addEventListener("change", (event) => {
@@ -286,7 +300,10 @@ export function openProviderEditor({
         expectedRevision = view?.revision ?? expectedRevision;
         userDraft = clone(jsonValueAt(path, view?.user)) ?? {};
       }
-      if (keyValue) await settingsService.setCredential(keyRef(), keyValue);
+      if (keyValue) {
+        if (providerKeyCredential(current())?.writable === false) throw new Error("keyLocked");
+        await settingsService.setCredential(keyRef(), keyValue);
+      }
       sheet.close(sheetToken);
       await onSaved?.(providerDisplayName(entry));
     } catch (error) {
@@ -303,4 +320,10 @@ export function openProviderEditor({
     actions: "",
     bind: (_root, generation) => { sheetToken = generation; repaint(); }
   });
+  // 广播只更新事实/可用态,不重建输入或推进脏草稿的 revision。
+  return {
+    refreshFacts: repaintSoft,
+    get active() { return sheet.owns(sheetToken); },
+    get dirty() { return dirty(); }
+  };
 }

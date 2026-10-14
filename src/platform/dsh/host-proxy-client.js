@@ -10,6 +10,7 @@
 //
 // 失败分层是本模块存在的主要理由:调用方需要区分「这台机器没这功能」与
 // 「这次操作失败了」,前者要静默隐藏 UI,后者要把宿主的原始报错显示出来。
+import { validateUpdateTarget } from "../../features/host-proxy/version.js";
 import { t } from "../../shared/i18n.js";
 
 /// daemon 的固定端口。与 background.js 的 DEFAULT_BRIDGE_WS_URL 同一个 daemon。
@@ -130,16 +131,18 @@ export function createHostProxyClient(options = {}) {
       return request("/host/plugin", { body, timeoutMs: timeoutMs ?? (readOnly ? DEFAULT_TIMEOUT_MS : LONG_TIMEOUT_MS) });
     },
 
-    serverVersion() {
-      return request("/host/server/version", { timeoutMs: 45000 });
+    serverVersion(target) {
+      const body = target === undefined ? {} : { target: validateUpdateTarget(target) };
+      return request("/host/server/version", { body, timeoutMs: 65000 });
     },
 
     serverRestart() {
       return request("/host/server/restart", { timeoutMs: LONG_TIMEOUT_MS });
     },
 
-    serverUpdate() {
-      return request("/host/server/update", { timeoutMs: LONG_TIMEOUT_MS });
+    serverUpdate(target) {
+      const body = target === undefined ? {} : { target: validateUpdateTarget(target) };
+      return request("/host/server/update", { body, timeoutMs: LONG_TIMEOUT_MS });
     },
 
     /// 关掉宿主代理,直到 daemon 重启。用户的止损开关。

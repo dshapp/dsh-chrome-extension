@@ -95,16 +95,19 @@ test('完整窗口:命令、孤儿结果、压缩都落进本轮过程区间,随
   assert.equal(nodes[nodes.indexOf(control) + 1], command)
 })
 
-test('窗口之前还有历史(hasMore):不折叠,对齐 Mac 的 guard !hasMore', () => {
+test('0.2.1 已关闭的局部窗口即使 hasMore 也从已加载起点折叠', () => {
   const store = createSessionStore()
   store.reset('s')
   replayPartialWindow(store)
   store.setHasMore(true)
   const snapshot = store.getSnapshot()
   assert.equal(snapshot.hasMore, true)
-  assert.equal(snapshot.turnProcessByTurn.size, 0)
-  assert.equal(byKind(snapshot.nodes, NodeKind.turnProcess).length, 0)
-  // 加载完更早历史后恢复折叠。
+  assert.equal(snapshot.turnProcessByTurn.size, 1)
+  assert.equal(byKind(snapshot.nodes, NodeKind.turnProcess).length, 1)
+  const spec = snapshot.turnProcessByTurn.get(2)
+  assert.equal(spec.processStartSeq, 39, "仅收起实际已加载的过程")
+  assert.equal(spec.answerStep, 2)
+  // 加载完更早历史仍保留折叠。
   store.setHasMore(false)
   assert.equal(store.getSnapshot().turnProcessByTurn.size, 1)
 })

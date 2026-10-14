@@ -29,7 +29,8 @@ export function activeGoal(goal) {
   return goal;
 }
 
-export function goalPhaseLabel(phase) {
+export function goalPhaseLabel(phase, activation) {
+  if (phase === "active" && activation === "disarmed") return t("goal.phaseDisarmed");
   switch (phase) {
     case "paused": return t("goal.phasePaused");
     case "blocked": return t("goal.phaseBlocked");
@@ -55,7 +56,7 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
     const goalIcon = el("span", "goal-glyph");
     goalIcon.append(lucideIcon("target", { size: 14 }));
     bar.append(goalIcon);
-    bar.append(el("span", "goal-label", goalPhaseLabel(goal.phase)));
+    bar.append(el("span", "goal-label", goalPhaseLabel(goal.phase, goal.activation)));
 
     if (editing) {
       const input = document.createElement("input");
@@ -98,7 +99,7 @@ export function mountGoalBar(container, { onPause, onResume, onEdit, onClear }) 
       const spacer = el("span", "goal-spacer");
       bar.append(spacer);
 
-      if (goal.phase === "paused") {
+      if (goal.phase === "paused" || (goal.phase === "active" && goal.activation === "disarmed")) {
         const resume = iconBtn("goal-btn", t("goal.resume"), "play");
         resume.disabled = pending;
         resume.addEventListener("click", () => run(onResume));

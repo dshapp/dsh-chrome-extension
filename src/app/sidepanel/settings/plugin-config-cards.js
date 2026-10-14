@@ -89,10 +89,9 @@ export function availableCards(cards, namespaces) {
     let modelSelection = card.modelSelection;
     if (modelSelection) {
       const resolved = resolve(modelSelection);
-      if (!resolved) return [];
-      modelSelection = { ...modelSelection, namespace: resolved };
+      modelSelection = resolved ? { ...modelSelection, namespace: resolved } : null;
     }
-    return [{ ...card, namespace, ...(modelSelection ? { modelSelection } : {}) }];
+    return [{ ...card, namespace, modelSelection }];
   });
 }
 

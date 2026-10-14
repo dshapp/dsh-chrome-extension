@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/tools.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/composer.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/trajectory.css">
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/management.css">
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/automations.css">
   <!-- KaTeX 样式(MIT,vendor 自 katex@0.16)。样式表静态引入而脚本按需异步加载:
        CSS 只有 24KB 且必须与公式同帧就位,否则会闪一下无样式的公式;
        268KB 的脚本则由 katex-loader 在首次遇到公式时才拉。 -->
@@ -283,6 +285,14 @@
 
   </div>
 
+  <section id="management-surface" hidden aria-labelledby="management-title">
+    <div id="management-header">
+      <button id="management-back" class="hdr-btn" type="button" aria-label="返回会话"></button>
+      <h1 id="management-title"></h1>
+    </div>
+    <div id="management-content"></div>
+  </section>
+
   <!-- 会话 turn 轨道:浮在消息区右缘的轮次刻度,由 turn-rail-view 渲染 -->
   <div id="turn-rail" hidden aria-label="轮次导航"></div>
 
@@ -308,7 +318,13 @@
     <!-- 置顶区 / 分区标题(含视图选项与添加目录)/ 分组 / 会话行,全部由
          session-drawer-view.js 画进这一个 <ul> —— 它们共享同一条滚动与
          同一套键盘导航,拆成几个容器反而会把滚动切成几段。 -->
+    <nav id="history-navigation" aria-label="管理页面">
+      <button id="history-new-btn" class="history-navigation-btn" type="button"><span data-navigation-label>新会话</span></button>
+      <button class="history-navigation-btn" type="button" data-main-surface="plugins"><span data-navigation-label>插件</span></button>
+      <button class="history-navigation-btn" type="button" data-main-surface="automations"><span data-navigation-label>自动化任务</span></button>
+    </nav>
     <ul id="history-list-inner" role="list"></ul>
+    <button id="history-settings-btn" class="history-navigation-btn" type="button"><span data-navigation-label>设置</span></button>
   </aside>
 
   <div id="toast" hidden></div>
