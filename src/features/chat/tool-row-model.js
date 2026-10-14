@@ -18,6 +18,7 @@ const TOOL_VARIANTS = Object.freeze({
   // PowerShell 孪生体也是 shell 工具:走 bash 行家族(图标、配色)。
   pwsh: ToolVariant.bash,
   read: ToolVariant.read,
+  read_image: ToolVariant.read,
   web_fetch: ToolVariant.read,
   web_search: ToolVariant.search,
   grep: ToolVariant.search,
@@ -65,6 +66,51 @@ function firstLine(text) {
 }
 
 /// 解析参数 JSON;非 JSON(流式截断)返回 null。
+const CONTENT_FIELDS = ["content", "old_string", "new_string"];
+
+// Scan only the argument head: a multi-MB write must not reparse every token.
+export function preparingArguments(name, raw = "") {
+  const head = raw.slice(0, 8192);
+  const partialString = (key) => {
+    const match = new RegExp(`"${key}"\\s*:\\s*"`).exec(head);
+    if (!match) return null;
+    const start = match.index + match[0].length;
+    let i = start;
+    for (; i < head.length; i++) {
+      if (head[i] === "\\") { i++; continue; }
+      if (head[i] === '"') break;
+    }
+    const complete = i < head.length;
+    let encoded = head.slice(start, i);
+    if (!complete) {
+      encoded = encoded.replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, "");
+    }
+    try { return { value: JSON.parse(`"${encoded}"`), complete }; } catch { return null; }
+  };
+  const variant = classifyTool(name);
+  const path = FILE_PATH_VARIANTS.has(variant) ? partialString("file_path") ?? partialString("path") : null;
+  const summary = path?.complete ? firstLine(path.value)
+    : FILE_PATH_VARIANTS.has(variant) ? "" : firstLine(partialString("description")?.value ?? "");
+  const kilobytes = (variant === ToolVariant.write || variant === ToolVariant.edit)
+    && CONTENT_FIELDS.some((key) => new RegExp(`"${key}"\\s*:`).test(head))
+    ? Math.ceil(raw.length / 1024) : null;
+  return { summary, filePath: path?.complete ? firstLine(path.value) : null, kilobytes };
+}
+
+function contentKilobytes(args) {
+  const values = CONTENT_FIELDS.map((key) => args?.[key]).filter((value) => typeof value === "string");
+  return values.length ? Math.ceil(values.reduce((size, value) => size + value.length, 0) / 1024) : null;
+}
+
+function recordedFilePath(path, node) {
+  if (!path) return null;
+  const recorded = node.result?.meta?.path;
+  if (typeof recorded === "string" && /^(\/|[a-zA-Z]:[\\/])/.test(recorded)) return recorded;
+  if (/^(\/|~|[a-zA-Z]:[\\/])/.test(path)) return path;
+  // No guessed local links for running/failed/nested relative calls without metadata.
+  return node.result && !node.result.isError && !node.parentCallId ? path : null;
+}
+
 export function parseArgs(raw) {
   if (typeof raw !== "string" || raw === "") return null;
   try {
@@ -127,7 +173,7 @@ export function resultText(result) {
       try { parts.push(JSON.stringify(block)); } catch { /* 跳过不可序列化块 */ }
     }
   }
-  if (!parts.length && result.error) parts.push(`${result.error.name}: ${result.error.code}`);
+  if (!parts.length && result.error) parts.push(result.error.reason || `${result.error.name}: ${result.error.code}`);
   return parts.join("\n");
 }
 
@@ -159,7 +205,7 @@ function resultFirstLine(result) {
       if (s) return firstLine(s);
     } catch { /* 跳过 */ }
   }
-  if (result.error) return `${result.error.name}: ${result.error.code}`;
+  if (result.error) return firstLine(result.error.reason || `${result.error.name}: ${result.error.code}`);
   return "";
 }
 
@@ -242,6 +288,15 @@ function abbreviateHomePath(text, home) {
 export function toolRowModel(node, { cwd = null, home = null } = {}) {
   const variant = classifyTool(node.name);
   const done = node.result != null;
+  if (node.preparing) {
+    const partial = preparingArguments(node.name, node.argsRaw);
+    const base = abbreviateHomePath(relativizeToCwd(partial.summary, cwd), home);
+    const summary = variant === ToolVariant.others && !KEYED_ROW_TOOLS.has(node.name)
+      ? [node.name, base].filter(Boolean).join(" · ") : base;
+    return { variant, summary,
+      filePath: null, state: "preparing", errorSummary: null, output: null,
+      summarySuffix: base && partial.kilobytes != null ? t("tool.contentSize", { n: String(partial.kilobytes) }) : null };
+  }
   const argsRaw = node.argsRaw ?? "";
   // 解析一次,向下游各处传递。此前每个派生函数各自 parseArgs,
   // 渲染一行要把同一份 JSON 解两三遍。
@@ -289,8 +344,10 @@ export function toolRowModel(node, { cwd = null, home = null } = {}) {
   return {
     variant,
     summary,
-    filePath: deriveFilePath(variant, args),
-    summarySuffix: errorSummary == null && node.name === "todo_write" ? todoSummary(argsRaw)?.suffix ?? null : null,
+    filePath: recordedFilePath(deriveFilePath(variant, args), node),
+    summarySuffix: errorSummary != null ? null : node.name === "todo_write" ? todoSummary(argsRaw)?.suffix ?? null
+      : (variant === ToolVariant.write || variant === ToolVariant.edit) && summary && contentKilobytes(args) != null
+        ? t("tool.contentSize", { n: String(contentKilobytes(args)) }) : null,
     // 保留既有模型 API，但把完整输出延迟到真正读取时。折叠行渲染不再复制日志。
     get output() {
       return done && node.result ? (resultText(node.result) || null) : null;

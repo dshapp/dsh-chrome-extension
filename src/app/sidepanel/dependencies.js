@@ -12,6 +12,7 @@ import { createWorkspaceService } from "../../features/workspaces/workspace-serv
 import { createChangesService } from "../../features/changes/changes-service.js";
 import { createReferenceService } from "../../features/references/reference-service.js";
 import { createGoalService } from "../../features/goals/goal-service.js";
+import { createAutomationService } from "../../features/automations/index.js";
 import { createAttachmentTray } from "../../features/attachments/attachments.js";
 import { setLang, getLang } from "../../shared/i18n.js";
 import { RPC } from "../../platform/dsh/rpc-methods.js";
@@ -26,6 +27,7 @@ export function createSidepanelDependencies(options = {}) {
     settings,
     onGenerationReady: () => {
       lifecycle.sessions?.generationOpened?.();
+      lifecycle.automations?.generationOpened?.();
       void lifecycle.sessions?.refreshList?.();
     }
   });
@@ -44,6 +46,7 @@ export function createSidepanelDependencies(options = {}) {
     onBackgroundTurnFailure: (sessionId, message, title) => notifier.reportFailure(sessionId, message, title)
   }));
   lifecycle.sessions ||= sessions;
+  lifecycle.automations = options.automations || createAutomationService(connection);
   sessions.setArchivedSessionIds?.(workspaces.archivedSessionIds ?? []);
 
   return Object.freeze({
@@ -59,6 +62,7 @@ export function createSidepanelDependencies(options = {}) {
     // 本轮改动文件的摘要与逐文件对比(宿主 workspace-changes 插件的鉴权 GET 路由)。
     changes: options.changes || createChangesService(connection),
     goals: options.goals || createGoalService(connection),
+    automations: lifecycle.automations,
     // '@' 浮层的额外候选来源(可插拔契约,见 trigger-menu.js 的 extraSources)。
     mentionSources: options.mentionSources || [],
     attachments: options.attachments || createAttachmentTray({

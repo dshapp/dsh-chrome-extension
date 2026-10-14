@@ -11,7 +11,7 @@
 import { t } from "../../../shared/i18n.js";
 import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import {
-  catalogRowFromModel, catalogRowToModel, validateCatalogRows,
+  catalogRowFromModel, catalogRowFromDiscoveredModel, catalogRowToModel, validateCatalogRows,
   parseCapacitySpelling, formatCapacitySpelling
 } from "../../../features/settings/settings-service.js";
 import { escapeHtml, button, notice } from "./settings-ui.js";
@@ -81,9 +81,12 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
   }
 
   function reset() {
-    state.rows = [];
+    if (context().disabled) return;
+    state.rows = (context().inheritedModels ?? []).map((model) => catalogRowFromModel(model, inputField));
     state.owned = false;
     state.touched = true;
+    state.candidates = null;
+    state.picked.clear();
     state.buffers.clear();
     state.expanded.clear();
     state.failure = undefined;
@@ -138,7 +141,7 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
   /// 输入类型声明(对齐 web ModelInputTypes):未触碰时展示回退值(文本),
   /// 勾选状态写进行里的 inputTypes;文本在只剩它一项时锁住,目录永远有效。
   function inputTypesHtml(row, index) {
-    const selected = row.inputTypes ?? ["text"];
+    const selected = row.inputTypes ?? context().defaultInput ?? ["text"];
     const disabled = context().disabled;
     const box = (id, checked, locked, label) =>
       '<label class="mle-mod"><input type="checkbox" id="' + id + '"'
@@ -186,7 +189,7 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
   function headHtml() {
     const meta = state.owned ? t("cat.overridden") : t("cat.inherited");
     const ctx = context();
-    const canReset = allowFetch && state.owned;
+    const canReset = state.owned;
     const fetchDisabled = ctx.disabled || state.fetching || !allowFetch || !ctx.probeEnabled || ctx.probeBlocked !== undefined;
     const fetchTitle = !allowFetch ? ""
       : ctx.probeBlocked !== undefined ? t(ctx.probeBlocked)
@@ -222,7 +225,8 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
   }
 
   async function fetchModels() {
-    if (state.fetching) return;
+    const ctx = context();
+    if (state.fetching || ctx.disabled || !allowFetch || !ctx.probeEnabled || ctx.probeBlocked !== undefined) return;
     state.fetching = true;
     state.failure = undefined;
     requestRender("hard");
@@ -253,11 +257,12 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
   }
 
   function adoptPicked() {
+    if (context().disabled) return;
     const candidates = state.candidates ?? [];
     const byId = new Map(state.rows.map((row) => [String(row.modelId ?? "").trim(), row]));
     for (const candidate of candidates) {
       if (!state.picked.has(candidate.id)) continue;
-      if (!byId.has(candidate.id)) byId.set(candidate.id, catalogRowFromModel(candidate, inputField));
+      if (!byId.has(candidate.id)) byId.set(candidate.id, catalogRowFromDiscoveredModel(candidate, inputField));
     }
     state.rows = [...byId.values()];
     state.owned = true; state.touched = true;
@@ -266,6 +271,11 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
 
   function bind(root) {
     const ctx = context();
+    for (const control of root.querySelectorAll("#mle-root input, #mle-root button")) {
+      if (!control.id.startsWith("mle-exp-") && !control.id.startsWith("mle-picker-cancel")) {
+        control.disabled = Boolean(ctx.disabled) || control.disabled;
+      }
+    }
     state.rows.forEach((row, index) => {
       const wireRow = (id, key, settle) => {
         const input = root.querySelector("#" + id);
@@ -296,9 +306,9 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
       maxInput?.addEventListener("blur", () => { settleCapacity(index, "maxTokens"); });
       for (const modality of ["text", "image"]) {
         root.querySelector("#mle-mod-" + modality + "-" + index)?.addEventListener("change", (event) => {
-          const selected = row.inputTypes ?? ["text"];
-          const next = ["text", "image"].filter((value) =>
-            value === modality ? event.target.checked : selected.includes(value));
+          const selected = row.inputTypes ?? context().defaultInput ?? ["text"];
+          const next = [...new Set(event.target.checked
+            ? [...selected, modality] : selected.filter((value) => value !== modality))];
           row.inputTypes = next;
           // DeepSeek 拒绝对纯文本模型保留图像请求限额,取消图像时一并丢掉,
           // 免得保存出一条 schema 会拒的条目(对齐 web)。
@@ -375,6 +385,16 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
   /// 只同步按钮可用态,不重画输入框 —— 供调用方在软刷新时使用。
   function syncChrome(root) {
     const ctx = context();
+    for (const control of root.querySelectorAll("#mle-root input, #mle-root button")) {
+      if (!control.id.startsWith("mle-exp-") && control.id !== "mle-picker-cancel") control.disabled = Boolean(ctx.disabled);
+    }
+    state.rows.forEach((row, index) => {
+      const selected = row.inputTypes ?? ctx.defaultInput ?? ["text"];
+      const text = root.querySelector("#mle-mod-text-" + index);
+      if (text) text.disabled = Boolean(ctx.disabled) || (selected.length === 1 && selected.includes("text"));
+    });
+    const selectAll = root.querySelector("#mle-selectall");
+    if (selectAll) selectAll.disabled = Boolean(ctx.disabled) || !visibleCandidates().length;
     const fetch = root.querySelector("#mle-fetch");
     if (fetch) {
       fetch.disabled = ctx.disabled || state.fetching || !allowFetch || !ctx.probeEnabled || ctx.probeBlocked !== undefined;

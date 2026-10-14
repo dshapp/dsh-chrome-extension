@@ -176,6 +176,11 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
     for (const entry of rendered.values()) {
       const spec = processSpecFor(entry.node, processSpecs);
       entry.element.hidden = spec ? !openProcessTurns.has(spec.turn) : false;
+      if (entry.node.kind === NodeKind.assistant) {
+        const own = processSpecs.get(entry.node.turn);
+        const hideReasoning = own?.inlineReasoning && own.answerStep === entry.node.step && !openProcessTurns.has(own.turn);
+        for (const part of entry.element.querySelectorAll(".thinking-bubble")) part.hidden = Boolean(hideReasoning);
+      }
     }
   }
 
@@ -280,7 +285,7 @@ export function agentStatusLabel(snapshot, { awaitingTurnStart = false } = {}) {
   // 复制整个 nodes 数组反向扫描。
   const runningTool = snapshot.runningTool
     ?? [...nodes].reverse().find((n) => n.kind === NodeKind.toolCall && n.result == null);
-  if (runningTool) return toolRowModel(runningTool).summary || t("working");
+  if (runningTool) return runningTool.preparing ? t("tool.preparing") : toolRowModel(runningTool).summary || t("working");
 
   if (last.kind === NodeKind.assistant) {
     if (isThinking(snapshot)) return null;    // 交给 setThinking

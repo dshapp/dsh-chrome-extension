@@ -2,7 +2,7 @@
 // 「官方」与「已安装」两个分组 + 行内启停 + 添加插件 + 卸载确认。
 //
 // 分组口径按 Mac:
-//   official  = 安装随附的 bundle(optional=true)以及**可在本页配置**的官方卡片;
+//   official = 宿主明确标记 official 的 bundle 与可配置官方卡片(非 optional 分组)。
 //   installed = 其余已经装上的 bundle。
 // bundle 行显示 name + vX.Y.Z + 描述;有 readOnlyReason 时开关禁用并显示原因
 // (management-required 这类 bundle 由安装本身管,启停它只会失败)。
@@ -13,6 +13,7 @@ import {
 } from "./settings-ui.js";
 import { openPluginInstallSheet } from "./plugin-install-sheet.js";
 import { bundleText } from "../../../features/settings/plugin-meta.js";
+import { createPluginDetailView, updateAvailable } from "./plugin-detail-view.js";
 
 /// 宿主给的是机器码,展示要落到本地文案。认不出的码原样显示 —— 编一个更好听的
 /// 说法会掩盖"宿主加了一条新的只读原因"。
@@ -32,7 +33,7 @@ const APPLICATION_TEXT = {
 
 export function createMarketplaceView({
   host: initialHost, sheet, deps, settingsService, showToast, settingsDialog, cards,
-  onOpenCard, onInstalled, onChange
+  onOpenCard, onInstalled, onChange, schemaConfig, renderSlot
 }) {
   let host = initialHost;
   // cards 传函数而不是数组:哪几张卡可用取决于当次 settings/describe 的命名空间快照,
@@ -49,6 +50,23 @@ export function createMarketplaceView({
   // 最近一次变更的结果,按 bundle 名就地显示(整页 toast 会立刻消失,用户
   // 从弹窗回到列表时看不到它)。
   const notices = new Map();
+  let opened = null;
+  let disposed = false;
+  const details = createPluginDetailView({ settingsService, sheet, deps, schemaConfig, renderSlot,
+    onBack() { opened = opened?.rowId ? { name: opened.name } : null; renderHost(); },
+    onOpenRow(name, rowId) { opened = { name, rowId }; renderHost(); },
+    onChange(options) { if (options?.refresh) return refresh({ keepNotices: true }); renderHost(); },
+    onEnable: setEnabled, onInstall: installTarget, onRemove: confirmRemove
+  });
+  function openBundle(name, rowId) { opened = { name, rowId }; details.refreshExemptions(); renderHost(); }
+  function installTarget(bundle) {
+    if (!bundle.installTarget || !sheet) return;
+    openPluginInstallSheet({ sheet, settingsDialog, deps, settingsService, showToast,
+      initialSpec: bundle.installTarget.spec, enabled: bundle.availability === "missing" ? true : bundle.enabled, saveExact: true,
+      catalog: { name: bundle.name, version: bundle.installTarget.version, description: bundle.description, bundle: true },
+      onInstalled: async result => { await refresh(); onInstalled?.(result); }
+    });
+  }
 
   function bundleRow(bundle) {
     const isBusy = busy.has(bundle.name);
@@ -64,10 +82,12 @@ export function createMarketplaceView({
           ? `<div class="set-row-hint">${escapeHtml(readOnlyKey(readOnlyReason))}</div>`
           : "")
         + (result ? `<div class="set-row-hint">${escapeHtml(result)}</div>` : ""),
-      control: toggle({
+      control: iconButton({ id: `plug-bundle-open-${bundle.name}`, icon: "chevron-right", title: t("plug.details") })
+        + (updateAvailable(bundle) ? button({ id: `plug-bundle-update-${bundle.name}`, label: t("plug.update"), disabled: isBusy }) : "")
+        + toggle({
         id: `plug-bundle-${bundle.name}`,
         checked: bundle.enabled,
-        disabled: Boolean(readOnlyReason) || isBusy,
+        disabled: Boolean(readOnlyReason) || isBusy || (bundle.availability === "missing" && !bundle.installTarget),
         ariaLabel: t("plug.enableNamed", { name: text.title })
       }) + (bundle.removable && bundle.installed
         ? iconButton({
@@ -100,11 +120,11 @@ export function createMarketplaceView({
   }
 
   function officialBundles() {
-    return bundles.filter((bundle) => bundle.optional === true);
+    return bundles.filter((bundle) => bundle.official === true || (bundle.official === undefined && bundle.optional === true));
   }
 
   function installedBundles() {
-    return bundles.filter((bundle) => bundle.optional !== true && bundle.installed);
+    return bundles.filter((bundle) => !officialBundles().includes(bundle) && bundle.installed);
   }
 
   function render() {
@@ -116,6 +136,11 @@ export function createMarketplaceView({
           + button({ id: "plug-market-retry", label: t("set.retry"), kind: "primary" })
           + `</div>`
       });
+    }
+    if (opened) {
+      const bundle = bundles.find(item => item.name === opened.name);
+      if (bundle) return details.render(bundle, entries, opened.rowId, notices.get(bundle.name));
+      opened = null;
     }
     const official = officialBundles();
     const installed = installedBundles();
@@ -148,6 +173,7 @@ export function createMarketplaceView({
   }
 
   function bind() {
+    if (opened) { details.bind(host); return; }
     host.querySelector("#plug-market-retry")?.addEventListener("click", () => refresh());
     host.querySelector("#plug-refresh")?.addEventListener("click", () => refresh());
     host.querySelector("#plug-add")?.addEventListener("click", () => {
@@ -167,6 +193,8 @@ export function createMarketplaceView({
       });
     }
     for (const bundle of bundles) {
+      host.querySelector(`#plug-bundle-open-${selectorEscape(bundle.name)}`)?.addEventListener("click", () => openBundle(bundle.name));
+      host.querySelector(`#plug-bundle-update-${selectorEscape(bundle.name)}`)?.addEventListener("click", () => installTarget(bundle));
       host.querySelector(`#plug-bundle-${selectorEscape(bundle.name)}`)?.addEventListener("change", (event) => {
         setEnabled(bundle, event.target.checked);
       });
@@ -176,13 +204,16 @@ export function createMarketplaceView({
     }
   }
 
-  async function setEnabled(bundle, enabled) {
-    if (busy.has(bundle.name)) return;
+  async function setEnabled(bundle, enabled, selected) {
+    if (disposed || busy.has(bundle.name) || bundle.readOnlyReason || selected?.readOnlyReason) return;
+    if (!selected && enabled && bundle.availability === "missing") { installTarget(bundle); renderHost(); return; }
     busy.add(bundle.name);
     notices.delete(bundle.name);
     renderHost();
     try {
-      const result = await settingsService.setBundleEnabled(bundle.name, enabled);
+      const result = selected
+        ? await settingsService.setPluginEnabled(selected.entry.entryId, enabled)
+        : await settingsService.setBundleEnabled(bundle.name, enabled);
       notices.set(bundle.name, applicationText(result));
       await refresh({ keepNotices: true });
     } catch (error) {
@@ -199,6 +230,7 @@ export function createMarketplaceView({
   function applicationText(result) {
     if (!result) return "";
     if (result.error?.diagnostic) return result.error.diagnostic;
+    if (result.error?.code) return result.error.code;
     const key = APPLICATION_TEXT[result.application];
     return key ? t(key) : "";
   }
@@ -248,6 +280,7 @@ export function createMarketplaceView({
   }
 
   function renderHost() {
+    if (disposed) return;
     if (onChange) onChange();
     else paint();
   }
@@ -280,6 +313,9 @@ export function createMarketplaceView({
   // 它会在事件到达时调这里的 refresh。这里只暴露只读清单给调试/测试。
   return {
     refresh,
+    openBundle,
+    openRow: (name, rowId) => openBundle(name, rowId),
+    dispose() { disposed = true; loadGeneration++; details.dispose(); },
     /// 市场列表的 HTML(plugins-pane 把它拼进页签内容里)。
     render,
     /// 只画这一块(不含页签)并绑定。

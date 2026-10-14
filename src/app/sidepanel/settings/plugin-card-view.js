@@ -378,6 +378,7 @@ export function createPluginCardViews({
     bind,
     isDirty,
     controlsEnabled: () => saving.size === 0,
-    dropCleanDrafts
+    dropCleanDrafts,
+    dispose() { forms.clear(); modelDrafts.clear(); saving.clear(); failed.clear(); }
   };
 }

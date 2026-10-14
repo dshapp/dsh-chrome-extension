@@ -143,7 +143,9 @@ export function createSessionStore() {
     return {
       sessionId: null,
       title: "",
-      cwd: null,
+      cwd: null, // immutable project directory, used for grouping
+      workingDirectory: null,
+      goalActivation: null,
       blank: true,
       running: false,
       // follow 流的终态错误(如宿主 resume 失败)。非空即表示这一代会话的历史
@@ -156,8 +158,8 @@ export function createSessionStore() {
       window: [],
       // 窗口曾因超限被截断(replayWindow 完整性受损),需从历史重载恢复。
       windowTruncated: false,
-      // 已加载窗口之前是否还有更早历史(session/page 的 hasMore)。为真时不做 turn process
-      // 折叠:早期过程行可能还没加载,折叠范围的起点未知(对齐 Mac rebuildTurnProcessSpecs)。
+      // 已加载窗口之前是否还有更早历史(session/page 的 hasMore)。
+      // 0.2.1 允许关闭轮从已加载最早行折叠,不再以 hasMore 禁用折叠。
       hasMore: false,
       // keyed contexts:key → context 记录
       contexts: new Map(),
@@ -165,6 +167,8 @@ export function createSessionStore() {
       stepStartTimes: new Map(),
       // turn → turn/start seq(turn rail 的分页目标;turnTail 的 seq 会被 turn/end 覆盖,不能复用)。
       turnStartSeqs: new Map(),
+      turnStartTimes: new Map(),
+      turnEnds: new Map(),
       // 已排序的 turn/end 边界,供二分查找"某 seq 之后的第一个 turn 关闭点"
       turnEndBoundaries: [],
       // inbox 拼接状态:target → messageId[]
@@ -303,7 +307,7 @@ export function createSessionStore() {
   /// 从零重折整个窗口。乱序到达、或到达了会改写历史投影的事件时走这条路。
   function replayWindow() {
     const saved = {
-      sessionId: state.sessionId, cwd: state.cwd, queue: state.queue, jobs: state.jobs,
+      sessionId: state.sessionId, cwd: state.cwd, goalActivation: state.goalActivation, queue: state.queue, jobs: state.jobs,
       pendingApproval: state.pendingApproval, pendingQuestion: state.pendingQuestion,
       projections: state.projections, projectionHistory: state.projectionHistory,
       window: state.window, hasMore: state.hasMore
@@ -312,12 +316,17 @@ export function createSessionStore() {
     state = blank();
     Object.assign(state, saved);
     state.title = keptTitle;
-    // 投影派生值要按保留下来的 projections 重新解码。
-    for (const [key, entry] of state.projections) decodeProjection(key, entry.value);
+    // Replay directory transitions from the original header, not the latest projection:
+    // old relative tool paths must retain the directory they ran in.
+    for (const [key, entry] of state.projections) {
+      if (key !== "workingDirectory") decodeProjection(key, entry.value);
+    }
     for (const { event, view } of state.window) {
       state.lastSeq = Math.max(state.lastSeq, Number.isInteger(event.seq) ? event.seq : state.lastSeq);
       route(event, view);
     }
+    const directory = state.projections.get("workingDirectory");
+    if (directory) decodeProjection("workingDirectory", directory.value);
     state.nodesDirty = true;
     state.trajectoryDirty = true;
   }
@@ -396,6 +405,12 @@ export function createSessionStore() {
       case EVT.workflowAgentEnd:
       case EVT.workflowRunEnd: return applyWorkflow(event);
       case EVT.sessionTitle: return applyTitle(event);
+      case "working-directory/change":
+        if (str(event.data?.cwd)) {
+          state.workingDirectory = event.data.cwd;
+          applyProjection("workingDirectory", event.data.cwd, event.seq);
+        }
+        return;
       // present 工具的交付清单(web ui-deliverables):它不带 surfaceOp,不产生自己的一行,
       // 只为回合尾行的交付卡与 mention 词表供数据。
       case EVT.deliverablesPresented: return applyPresented(event);
@@ -638,6 +653,7 @@ export function createSessionStore() {
           if (slot?.type === "tool-call") {
             slot.argsRaw += chunk.argumentsDelta ?? "";
             if (chunk.name) slot.name = chunk.name;
+            if (chunk.id) slot.callId = chunk.id;
           } else {
             node.blocks[idx] = {
               type: "tool-call", callId: chunk.id ?? "", name: chunk.name ?? "",
@@ -821,7 +837,7 @@ export function createSessionStore() {
     const callView = view?.for === "call" ? view.view : null;
     state.contexts.set(toolKey(callId), {
       type: "toolCall",
-      node: toolCallNode({
+      node: { ...toolCallNode({
         callId,
         name: str(d.name) ?? "",
         argsRaw: str(d.arguments) ?? "",
@@ -830,7 +846,7 @@ export function createSessionStore() {
         startSeq: event.seq,
         time: event.time,
         callView
-      })
+      }), cwd: state.workingDirectory ?? state.cwd }
     });
   }
 
@@ -861,7 +877,7 @@ export function createSessionStore() {
       content: content ?? [],
       isError,
       error: isObject(d.error) ? d.error : null,
-      meta: isObject(d.meta) ? d.meta : null,
+      meta: d.meta ?? null,
       resultView: view?.for === "result" ? view.view : null
     });
 
@@ -909,7 +925,9 @@ export function createSessionStore() {
       name: str(data.name) ?? "",
       args: data.arguments,
       content: Array.isArray(data.content) ? data.content : [],
-      isError: Boolean(data.isError)
+      isError: Boolean(data.isError),
+      meta: data.meta ?? null,
+      error: isObject(data.error) ? data.error : null
     };
   }
 
@@ -930,13 +948,13 @@ export function createSessionStore() {
     const root = toolNodeById(d.rootCallId);
     state.contexts.set(toolKey(d.subCallId), {
       type: "toolCall",
-      node: toolCallNode({
+      node: { ...toolCallNode({
         callId: d.subCallId, name: d.name, argsRaw: jsonString(d.args),
         turn: root?.turn ?? state.currentTurn,
         step: root?.step ?? Math.max(0, ...state.activeSteps),
         startSeq: event.seq, time: event.time,
         rootCallId: d.rootCallId, parentCallId: d.parentCallId
-      })
+      }), cwd: state.workingDirectory ?? state.cwd }
     });
   }
 
@@ -955,8 +973,10 @@ export function createSessionStore() {
         rootCallId: d.rootCallId, parentCallId: d.parentCallId
       });
     }
+    node.cwd ??= state.workingDirectory ?? state.cwd;
     node.result = toolResult({
-      seq: event.seq, time: event.time, content: d.content, isError: d.isError
+      seq: event.seq, time: event.time, content: d.content, isError: d.isError,
+      meta: d.meta, error: d.error
     });
     state.contexts.set(key, { type: "toolCall", node });
   }
@@ -971,6 +991,7 @@ export function createSessionStore() {
     state.currentTurn = turn;
     state.currentStep = 0;
     state.turnStartSeqs.set(turn, event.seq);
+    state.turnStartTimes.set(turn, event.time);
     state.running = true;
     const errKey = `turn-error:${turn}`;
     if (!state.contexts.has(errKey)) {
@@ -1015,6 +1036,7 @@ export function createSessionStore() {
 
     const reason = isObject(d.reason) ? d.reason : null;
     const kind = reason ? str(reason.kind) : null;
+    state.turnEnds.set(turn, { seq: event.seq, time: event.time, reason: kind });
     const errKey = `turn-error:${turn}`;
 
     if (kind === "error") {
@@ -1423,6 +1445,9 @@ export function createSessionStore() {
 
   function decodeProjection(key, value) {
     switch (key) {
+      case "workingDirectory":
+        state.workingDirectory = str(value);
+        break;
       case "title":
         if (typeof value === "string" && value) state.title = value;
         break;
@@ -1449,6 +1474,8 @@ export function createSessionStore() {
             revision: num(g.revision) ?? 0,
             objective: str(g.objective) ?? "",
             phase: str(g.phase) ?? "active",
+            activation: str(g.activation) ?? str(value.activation),
+            roundsStarted: num(value.roundsStarted) ?? num(g.roundsStarted),
             maxGoalRounds: num(g.maxGoalRounds),
             blockedMessage: isObject(g.blockedReason) ? str(g.blockedReason.message) : null
           } : null;
@@ -1521,6 +1548,7 @@ export function createSessionStore() {
   function rebuildNodes() {
     const built = [];
     const tools = new Map();
+    const preparing = [];
 
     for (const ctx of state.contexts.values()) {
       switch (ctx.type) {
@@ -1530,6 +1558,16 @@ export function createSessionStore() {
           break;
         case "assistant":
           if (assistantVisible(ctx.node)) built.push(ctx.node);
+          if (ctx.node.status === AssistantStatus.running) {
+            for (const [index, block] of (ctx.node.blocks ?? []).entries()) {
+              if (block?.type !== "tool-call" || !block.callId || !block.name) continue;
+              preparing.push({ ...toolCallNode({
+                callId: block.callId, name: block.name, argsRaw: block.argsRaw,
+                turn: ctx.node.turn, step: ctx.node.step,
+                startSeq: anchorSeq(ctx.node) + (index + 1) * 1e-6, time: ctx.node.time
+              }), preparing: true, cwd: state.workingDirectory ?? state.cwd });
+            }
+          }
           break;
         case "toolCall": {
           const node = ctx.node;
@@ -1576,6 +1614,9 @@ export function createSessionStore() {
           break;
       }
     }
+
+    // A streamed slot and its durable call share identity; never render both.
+    for (const tool of preparing) if (!tools.has(tool.callId)) tools.set(tool.callId, tool);
 
     // 一趟按 parent 建索引,而不是为每个节点重扫全部工具调用(那是 O(n²))。
     const childrenByParent = new Map();
@@ -1651,7 +1692,9 @@ export function createSessionStore() {
     // 折叠头自身 anchor = processStartSeq - 0.001,排在它折叠的首行之前。
     const processSpecs = buildTurnProcessSpecs(state.nodes, {
       hasMore: state.hasMore,
-      turnClosedAfter: (seq) => turnEndBoundaryAfter(seq) != null
+      turnClosedAfter: (seq) => turnEndBoundaryAfter(seq) != null,
+      turnEnd: (turn) => state.turnEnds.get(turn),
+      turnStartTime: (turn) => state.turnStartTimes.get(turn)
     });
     state.turnProcessByTurn = new Map();
     if (processSpecs.size) {
@@ -1852,6 +1895,9 @@ export function createSessionStore() {
       sessionId: state.sessionId,
       title: state.title,
       cwd: state.cwd,
+      workingDirectory: state.workingDirectory,
+      currentDirectory: state.workingDirectory ?? state.cwd,
+      goalActivation: state.goalActivation,
       blank: state.blank,
       running: state.running,
       historyError: state.historyError,
@@ -1864,7 +1910,8 @@ export function createSessionStore() {
       runningTool: state.runningTool ?? null,
       turnRail: state.turnRail,
       todos: state.todos,
-      goal: state.goal,
+      goal: state.goal && state.goalActivation?.id === state.goal.id && state.goalActivation?.revision === state.goal.revision
+        ? { ...state.goal, activation: str(state.goalActivation.activation) } : state.goal,
       tokenUsage: state.tokenUsage,
       // 两版合并后的权限选择:0.1.5 取投影自带的 options,0.1.6 取目录 RPC。
       // 同一对输入复用同一个对象:快照每帧都会产出,而菜单渲染读的是 identity,
@@ -1930,6 +1977,13 @@ export function createSessionStore() {
       if (state.historyError) state.running = false;
     },
     setCwd(cwd) { state.cwd = cwd ?? null; },
+    setGoalActivation(goal) {
+      state.goalActivation = isObject(goal) ? goal : null;
+      if (!goal && state.goal) state.goal = { ...state.goal, activation: null };
+      if (state.goal && goal?.id === state.goal.id && goal?.revision === state.goal.revision) {
+        state.goal = { ...state.goal, activation: str(goal.activation) };
+      }
+    },
     /// 进程级权限目录(0.1.6 permissionPresets/catalog)。目录与投影是两条
     /// 独立的来源,各存一份、快照时才合并。
     setPermissionCatalog(catalog) {

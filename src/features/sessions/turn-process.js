@@ -4,14 +4,14 @@
 // (Mac 本身移植 web conversation-nodes/turn-process.ts):
 // - 一轮只有在**最后一个** assistant step 已结算、带真实回复文本且不含工具调用,
 //   并且该轮已关闭(之后有 turn/end)时才折叠;
-// - 已加载窗口还能向前增长(hasMore)时不折叠 —— 早期过程行可能还没加载,
-//   此时折叠会藏起一段起点未知的范围;
+// - 已关闭的局部窗口也可折叠,从最早的已加载过程行起算(0.2.1);
 // - 成员按 **anchor 区间** [processStartSeq, answerAnchorSeq) 判定,而不是按行的 turn 号:
 //   command / retry / compaction 这类行根本没有 turn 号,孤儿结果的 turn 号也可能
 //   指向窗口外的更早一轮,但它们都落在区间内,正是读者要求收起的过程证据;
 // - 计数只数模型自己做的事:回复消息数 / 工具调用数 / 子代理数。
 //
-// 输出形态对齐 Mac TurnProcessRow:chevron + "N tool calls · N messages · N subagents"。
+// 输出形态对齐 0.2.1 Mac TurnProcessRow:完成/停止/失败状态 + 成功轮用时。
+// 只有成功的最终回答外存在过程或自身 reasoning 时才提供 chevron;正文始终外置。
 import { NodeKind, AssistantStatus, anchorSeq, nodeTurn } from "./chat-nodes.js";
 
 /// 不参与折叠、始终独立成行的种类(Mac isFoldedProcessRow 的独立名单 /
@@ -67,9 +67,8 @@ function hasReasoning(node) {
 /// @param {Array} rows 已按 anchor 排好序的节点(不含折叠头自身)。
 /// @param {{ hasMore?: boolean, turnClosedAfter?: (seq: number) => boolean }} options
 ///   hasMore:已加载窗口是否还能向前增长;turnClosedAfter:该 seq 之后是否有 turn/end。
-export function buildTurnProcessSpecs(rows, { hasMore = false, turnClosedAfter = () => false } = {}) {
+export function buildTurnProcessSpecs(rows, { turnClosedAfter = () => false, turnEnd = () => null, turnStartTime = () => null } = {}) {
   const specs = new Map();
-  if (hasMore) return specs;
 
   const byTurn = new Map();
   const order = [];
@@ -95,10 +94,11 @@ export function buildTurnProcessSpecs(rows, { hasMore = false, turnClosedAfter =
     }
     let acc = byTurn.get(openTurn);
     if (!acc) {
-      acc = { processAnchors: [], lastStep: null, messagesByStep: new Map(), toolCalls: 0, subagents: 0 };
+      acc = { processAnchors: [], lastStep: null, lastAnchor: anchor, messagesByStep: new Map(), toolCalls: 0, subagents: 0 };
       byTurn.set(openTurn, acc);
       order.push(openTurn);
     }
+    acc.lastAnchor = anchor;
     if (pendingAnchors.length) {
       acc.processAnchors.push(...pendingAnchors);
       pendingAnchors = [];
@@ -112,7 +112,7 @@ export function buildTurnProcessSpecs(rows, { hasMore = false, turnClosedAfter =
       const isAnswer = node.status === AssistantStatus.settled && hasReply
         && !blocks.some((block) => block?.type === "tool-call");
       acc.lastStep = { anchor, step: node.step, isAnswer, reasoning: hasReasoning(node) };
-    } else if (node.kind === NodeKind.toolCall) {
+    } else if (node.kind === NodeKind.toolCall && !node.preparing) {
       if (isSubagentDelegationTool(node.name)) acc.subagents += 1;
       else acc.toolCalls += 1;
       acc.processAnchors.push(anchor);
@@ -126,22 +126,26 @@ export function buildTurnProcessSpecs(rows, { hasMore = false, turnClosedAfter =
   for (const turn of order) {
     const acc = byTurn.get(turn);
     const last = acc?.lastStep;
-    // 没有最终回答时,过程本身就是唯一的证据;该轮也必须真的关闭了。
-    if (!last || !last.isAnswer || !turnClosedAfter(Math.floor(last.anchor))) continue;
-    const earlier = acc.processAnchors.filter((seq) => seq < last.anchor);
+    const end = turnEnd(turn);
+    if (!end && (!last || !turnClosedAfter(Math.floor(last.anchor)))) continue;
+    const outcome = end?.reason === "aborted" ? "stopped" : end?.reason === "error" ? "failed" : "completed";
+    const answerAnchor = last?.anchor ?? acc.lastAnchor;
+    const earlier = acc.processAnchors.filter((seq) => seq < answerAnchor);
     const external = earlier.length ? Math.min(...earlier) : null;
-    // Mac 在只有回答自带 reasoning 时也出折叠头(用来收起回答的思考块);
-    // 本扩展不隐藏回答的思考块,没有外部过程行时折叠头什么也收不起,不出。
-    if (external == null) continue;
+    const foldable = outcome === "completed" && last?.isAnswer && (external != null || last.reasoning);
+    const startedAt = turnStartTime(turn);
     let messageCount = 0;
-    for (const [step, count] of acc.messagesByStep) if (step < last.step) messageCount += count;
+    for (const [step, count] of acc.messagesByStep) if (!foldable || step < last.step) messageCount += count;
     const spec = {
       turn,
-      seq: external,
-      processStartSeq: external,
-      answerAnchorSeq: last.anchor,
-      answerStep: last.step,
-      inlineReasoning: last.reasoning,
+      seq: external ?? answerAnchor,
+      processStartSeq: external ?? answerAnchor,
+      answerAnchorSeq: foldable ? answerAnchor : null,
+      answerStep: last?.step ?? null,
+      inlineReasoning: Boolean(foldable && last.reasoning),
+      outcome,
+      durationMs: outcome === "completed" && startedAt != null && end?.time != null
+        ? Math.max(0, end.time - startedAt) : null,
       messageCount,
       toolCallCount: acc.toolCalls,
       subagentCount: acc.subagents

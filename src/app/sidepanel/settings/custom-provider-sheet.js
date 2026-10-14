@@ -12,7 +12,7 @@ import {
   section, stackedRow, select, textInput, button, notice, escapeHtml
 } from "./settings-ui.js";
 import {
-  deriveKeyRef, apiKeyFailure, jsonValueAt
+  deriveKeyRef, apiKeyFailure, jsonValueAt, providerKeyCredential
 } from "../../../features/settings/settings-service.js";
 import { createModelCatalogEditor } from "./model-list-editor.js";
 
@@ -66,7 +66,7 @@ export function declaredRoutes(state) {
   return [...taken];
 }
 
-export function openCustomProvider({ state, sheet, deps, settingsService, translateSaveError, onDone }) {
+export function openCustomProvider({ state, getState = () => state, sheet, deps, settingsService, translateSaveError, onDone }) {
   const namespace = state?.namespaces.get(NS);
   const protocols = protocolChoices(namespace?.schema);
   const taken = declaredRoutes(state);
@@ -74,6 +74,8 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
 
 
   const draft = { routeId: "", displayName: "", baseURL: "", api: protocols[0] ?? "", apiKey: "" };
+  const initialDraft = JSON.stringify(draft);
+  const keyLocked = () => providerKeyCredential(getState()?.rows?.find((row) => row.entry.provider === draft.routeId))?.writable === false;
   let saving = false;
   let profileCommitted = false;
   let message = null;
@@ -88,7 +90,7 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
       const failure = apiKeyFailure(draft.apiKey);
       const normalized = draft.baseURL.trim();
       return {
-        disabled: saving || profileCommitted,
+        disabled: saving || profileCommitted || getState()?.writable === false,
         probeEnabled: Boolean(normalized) || Boolean(draft.routeId),
         probeBlocked: normalized && !isHttpUrl(normalized) ? "custom.baseUrlInvalid"
           : failure ? KEY_FAILURE_TEXT[failure] : undefined,
@@ -106,7 +108,7 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
   editor.setRows([], false);
 
   const routeInvalid = () => draft.routeId.length > 0 && !ROUTE_ID_PATTERN.test(draft.routeId);
-  const routeTaken = () => taken.includes(draft.routeId);
+  const routeTaken = () => !profileCommitted && (taken.includes(draft.routeId) || declaredRoutes(getState()).includes(draft.routeId));
   const baseUrlInvalid = () => draft.baseURL.length > 0 && !isHttpUrl(draft.baseURL.trim());
   const keyFailure = () => apiKeyFailure(draft.apiKey);
 
@@ -117,7 +119,7 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
   }
 
   function canSave() {
-    if (saving) return false;
+    if (saving || getState()?.writable === false || (draft.apiKey && keyLocked())) return false;
     if (profileCommitted) return Boolean(draft.apiKey.trim());
     return ready();
   }
@@ -157,7 +159,7 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
   }
 
   function body() {
-    const disabled = saving || profileCommitted;
+    const disabled = saving || profileCommitted || getState()?.writable === false;
     return '<p class="set-sheet-text">' + escapeHtml(t("custom.intro")) + "</p>"
       + section({
         header: t("custom.identitySection"),
@@ -198,7 +200,7 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
           label: escapeHtml(t("prov.apiKey")),
           control: textInput({
             id: "cst-key", value: draft.apiKey, type: "password",
-            placeholder: t("custom.keyOptional"), disabled: saving
+            placeholder: t("custom.keyOptional"), disabled: saving || getState()?.writable === false || keyLocked()
           })
         })
         + '<div id="cst-key-error">' + keyErrorHtml() + "</div>"
@@ -230,6 +232,9 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
     const root = sheet.root;
     const save = root.querySelector("#cst-save");
     if (save) save.disabled = !canSave();
+    for (const field of root.querySelectorAll("#cst-route, #cst-name, #cst-baseurl, #cst-api")) field.disabled = saving || profileCommitted || getState()?.writable === false;
+    const key = root.querySelector("#cst-key");
+    if (key) key.disabled = saving || getState()?.writable === false || keyLocked();
     const routeErr = root.querySelector("#cst-route-error");
     if (routeErr) routeErr.innerHTML = routeErrorHtml();
     const baseErr = root.querySelector("#cst-baseurl-error");
@@ -283,7 +288,10 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
         );
         profileCommitted = true;
       }
-      if (storesKey) await settingsService.setCredential(keyRef, draft.apiKey.trim());
+      if (storesKey) {
+        if (keyLocked()) throw new Error("keyLocked");
+        await settingsService.setCredential(keyRef, draft.apiKey.trim());
+      }
       sheet.close(sheetToken);
       await onDone?.();
     } catch (error) {
@@ -298,4 +306,9 @@ export function openCustomProvider({ state, sheet, deps, settingsService, transl
     title: t("custom.title"), body: body(), actions: "",
     bind: (_root, generation) => { sheetToken = generation; repaint(); }
   });
+  return {
+    refreshFacts: repaintSoft,
+    get active() { return sheet.owns(sheetToken); },
+    get dirty() { return JSON.stringify(draft) !== initialDraft || editor.touched; }
+  };
 }

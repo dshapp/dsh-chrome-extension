@@ -1,13 +1,5 @@
-// Agent 预设 pane。对齐 macos/.../Settings/SettingsRoot.swift PresetsSection 的
-// 四段结构:模式选择开关 → 操作错误 → 内置 → 自定义(含创造模式按钮)。
-//
-// 0.1.7 起预设改在配置文件里声明:宿主删掉了 read/copy/deletePreset 与打开预设
-// 目录的端点,所以行尾的查看/复制/打开目录/删除动作随之移除(与 Mac 同步)。
-// 行本体仍是"设为默认",默认值写 agent-preset-registry.selectedDefault(老宿主
-// agent-presets.default);模式选择关闭时不再可点(宿主会忽略这个默认值)。
-// 内置/自定义按 isBuiltInPreset 分:出厂 id 且没有自带 name 才算内置。
-// 0.1.7 起内置行多"模式说明 / 如何使用"两个入口(web AgentPresetSection 的
-// cardHelp;Mac 是一个 info 按钮),打开只读的 PresetGuide 弹窗。
+// Agent 预设 pane:默认选择、内置指南与只读声明 YAML。
+// alpha.2 不再读取/写入已退休的模式选择策略;不恢复旧 copy/delete。
 import { t } from "../../../shared/i18n.js";
 import { section, row, notice, spinner, escapeHtml, tag, button, selectorEscape } from "./settings-ui.js";
 import { presetDisplayName, presetDescription, isBuiltInPreset } from "../composer-dock.js";
@@ -21,13 +13,9 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
   let presets = [];
   let defaultId = null;
   let writable = false;
-  // 模式选择策略开关(modeSelectionEnabled)。关掉时默认值会被宿主忽略,
-  // 所以"设为默认"与创造模式按钮都要跟着收起来。roster 缺席时按开启处理。
-  let pickerEnabled = true;
   let loading = true;
   let loadError = null;
   let operationError = null;
-  let savingPicker = false;
   let busyPresetId = null;
   let loadGeneration = 0;
 
@@ -58,22 +46,10 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
       label,
       hint: hint + `<div class="set-mono">${escapeHtml(preset.id)}</div>`,
       extra: help,
-      control: busy ? `<span class="set-icon-spin"></span>` : "",
+      control: (sheet ? `<button class="set-link" type="button" data-preset-yaml>${escapeHtml(t("pset.viewYaml"))}</button>` : "")
+        + (busy ? `<span class="set-icon-spin"></span>` : ""),
       id: `pset-row-${preset.id}`
     });
-  }
-
-  /// 模式选择开关(Mac 的 Toggle 那一节,含 Beta 胶囊与说明)。
-  function renderPickerSection() {
-    const body = row({
-      label: escapeHtml(t("pset.pickerTitle")) + tag(t("pset.pickerBeta"), "accent"),
-      hint: escapeHtml(t("pset.pickerHint")),
-      control: `<label class="set-switch"><input id="pset-picker" type="checkbox"`
-        + `${pickerEnabled ? " checked" : ""}${savingPicker || !writable ? " disabled" : ""}`
-        + ` aria-label="${escapeHtml(t("pset.pickerTitle"))}" />`
-        + `<span class="set-switch-track" aria-hidden="true"></span></label>`
-    });
-    return section({ body });
   }
 
   function renderErrorSection() {
@@ -90,13 +66,12 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
   /// 结束在对话里,不在这一页)。
   function renderCreatorButton() {
     const hasCreator = presets.some((preset) => preset.id === CREATOR_PRESET_ID);
-    const disabled = !pickerEnabled || !hasCreator;
+    const disabled = !hasCreator;
     return button({
       id: "pset-create-draft",
       label: `+ ${t("pset.draftWithCreator")}`,
       kind: "plain",
-      disabled,
-      title: !pickerEnabled ? t("pset.pickerEnableToSetDefault") : ""
+      disabled
     });
   }
 
@@ -111,8 +86,7 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
     }
     const builtIn = presets.filter((preset) => isBuiltInPreset(preset));
     const custom = presets.filter((preset) => !isBuiltInPreset(preset));
-    host.innerHTML = renderPickerSection()
-      + renderErrorSection()
+    host.innerHTML = renderErrorSection()
       + section({
         header: t("pset.builtIn"),
         body: builtIn.map(renderPresetRow).join("")
@@ -131,12 +105,13 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
 
   function bind() {
     host.querySelector("#pset-retry")?.addEventListener("click", () => refresh());
-    host.querySelector("#pset-picker")?.addEventListener("change", (event) => {
-      setPickerEnabled(event.target.checked);
-    });
     host.querySelector("#pset-create-draft")?.addEventListener("click", () => startCreatorDraft());
     for (const preset of presets) {
       const rowElement = host.querySelector(`#pset-row-${selectorEscape(preset.id)}`);
+      rowElement?.querySelector("[data-preset-yaml]")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void viewYaml(preset);
+      });
       // 说明入口:只读,不能冒泡成行点击(那会顺手把它设为默认)。
       for (const link of rowElement?.querySelectorAll("[data-guide-open]") ?? []) {
         link.addEventListener("click", (event) => {
@@ -146,8 +121,7 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
         });
       }
       // 行本体点击 = 设为默认(Mac 的 onTapGesture)。坏掉的预设无从选择,
-      // 模式选择关闭时也不该可点(写了会被宿主丢掉)。
-      if (rowElement && !preset.broken && preset.id !== defaultId && pickerEnabled && writable) {
+      if (rowElement && !preset.broken && preset.id !== defaultId && writable) {
         rowElement.classList.add("clickable");
         rowElement.setAttribute("role", "button");
         rowElement.setAttribute("aria-label", t("pset.setAsDefaultNamed", {
@@ -155,6 +129,25 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
         }));
         rowElement.addEventListener("click", () => makeDefault(preset));
       }
+    }
+  }
+
+  async function viewYaml(preset) {
+    const token = sheet.open({
+      title: presetLabel(preset) + " — " + t("pset.yamlTitle"),
+      body: spinner(),
+      actions: button({ id: "pset-yaml-close", label: t("set.cancel") }),
+      bind: (root, generation) => {
+        root.querySelector("#pset-yaml-close")?.addEventListener("click", () => sheet.close(generation));
+      }
+    });
+    try {
+      const document = await settingsService.presetRead(preset.id);
+      if (!sheet.owns(token)) return;
+      sheet.setBody('<pre class="set-mono" style="white-space:pre-wrap;overflow-wrap:anywhere"><code>'
+        + escapeHtml(document?.content ?? "") + "</code></pre>", token);
+    } catch (error) {
+      if (sheet.owns(token)) sheet.setBody(notice(t("pset.yamlLoadFailed") + ": " + deps.formatErrorDetails(error)), token);
     }
   }
 
@@ -171,25 +164,8 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
     );
   }
 
-  async function setPickerEnabled(enabled) {
-    if (savingPicker) return;
-    savingPicker = true;
-    operationError = null;
-    render();
-    try {
-      await writeRegistry("modeSelectionEnabled", enabled);
-      await refresh();
-    } catch (error) {
-      operationError = deps.formatErrorDetails(error);
-      showToast?.(operationError);
-    } finally {
-      savingPicker = false;
-      render();
-    }
-  }
-
   async function makeDefault(preset) {
-    if (busyPresetId) return;
+    if (busyPresetId || !writable || preset.broken) return;
     busyPresetId = preset.id;
     render();
     try {
@@ -207,7 +183,6 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
   /// 创造模式草稿:把 cordis 预设装进下一次新建会话,然后请 shell 开一个新会话
   /// 并离开设置页。按钮已按条件禁用,这里再兜一次(状态可能在点击之间变化)。
   async function startCreatorDraft() {
-    if (!pickerEnabled) return;
     if (!presets.some((preset) => preset.id === CREATOR_PRESET_ID)) return;
     if (!onStartCreatorDraft) {
       operationError = deps.formatErrorDetails(new Error("creator draft unsupported"));
@@ -234,7 +209,6 @@ export function createPresetsPane({ host, sheet, deps, settingsService, showToas
       if (generation !== loadGeneration) return;
       presets = [...(list?.presets ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
       writable = describe?.writable === true;
-      pickerEnabled = list?.modeSelectionEnabled !== false;
       // roster 的 isDefault 就是宿主解析后的默认(已考虑 selectedDefault 与回退);
       // 设置值只在 roster 没标出默认时兜底。
       const names = new Set((describe?.namespaces ?? []).map((entry) => entry.ns));

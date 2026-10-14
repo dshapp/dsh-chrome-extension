@@ -54,7 +54,6 @@ export function presetRegistryNamespace(namespaces) {
 export function createGeneralPane({ host, deps, settingsService, showToast }) {
   let snapshot = { namespaces: new Map(), writable: false, hasDocument: false };
   let presets = [];
-  let pickerEnabled = true;
   let busy = false;
   let documentError = null;
   let loadGeneration = 0;
@@ -62,7 +61,7 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
   /// 写一个 ui-* 命名空间的单个字段,并就地刷新。宿主是权威:写完重新 describe,
   /// 而不是乐观改本地 —— 只读部署会静默拒绝,乐观 UI 会显示一个假的成功。
   async function writeField(ns, field, value) {
-    if (busy) return;
+    if (busy || !snapshot.writable) return;
     busy = true;
     try {
       const namespace = snapshot.namespaces.get(ns);
@@ -91,12 +90,10 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
       selected: preset.id === current
     }));
     if (!options.length) options.push({ value: "", label: t("set.selectPreset"), selected: true });
-    // Mac 的 presetsEnableToSetDefault:模式选择关掉之后宿主要忽略这个默认值,
-    // 与其写进去被静默丢弃,不如当场禁用并说明为什么。
-    const disabled = !presets.length || !snapshot.writable || !pickerEnabled;
+    const disabled = !presets.length || !snapshot.writable;
     return row({
       label: escapeHtml(t("set.agentPreset")),
-      hint: escapeHtml(pickerEnabled ? t("set.agentPresetHint") : t("pset.pickerEnableToSetDefault")),
+      hint: escapeHtml(t("set.agentPresetHint")),
       control: select({ id: "set-agent-preset", options, disabled })
     });
   }
@@ -289,7 +286,6 @@ export function createGeneralPane({ host, deps, settingsService, showToast }) {
         hasDocument: describe?.hasDocument === true
       };
       presets = presetList?.presets ?? [];
-      pickerEnabled = presetList?.modeSelectionEnabled !== false;
       // 宿主是主题的权威:每次刷新都把它的偏好灌回本地镜像与界面,
       // 别的客户端(Mac 端、编辑器)改过之后这里也能收敛。
       const hostTheme = namespaceField(snapshot.namespaces, "ui-theme", "preference");

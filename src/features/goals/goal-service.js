@@ -9,6 +9,9 @@ function refOf(goal) {
 
 export function createGoalService(connection) {
   return {
+    async get(sessionId) {
+      return connection.call(RPC.goalGet, { agentId: sessionId });
+    },
     async create(sessionId, objective, maxGoalRounds) {
       const request = { objective, ...(maxGoalRounds ? { maxGoalRounds } : {}) };
       return connection.call(RPC.goalCreate, { agentId: sessionId, request });

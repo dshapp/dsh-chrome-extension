@@ -9,6 +9,8 @@ import {
 import { createQueuePanel } from "../../features/prompt-queue/index.js";
 import { mountHistoryDrawer } from "./sidepanel-overlays.js";
 import { mountSettings } from "./settings/settings-root.js";
+import { mountMainSurfaces } from "./main-surfaces.js";
+import { mountAutomationsPage } from "../../features/automations/index.js";
 import { mountWorkspaceMenu } from "./workspace-menu.js";
 import { createComposerMenus } from "./composer-menus.js";
 import { createComposerDock, isFullAccessOption } from "./composer-dock.js";
@@ -46,6 +48,7 @@ export function createSidepanelApp(root, deps, options = {}) {
   let historyDrawer = null;
   let workspaceMenu = null;
   let settingsView = null;
+  let mainSurfaces = null;
   // 每会话草稿:切走时保存未发送文本,切回时恢复。
   const drafts = new Map();
   /// 草稿的唯一写入口 —— 顺带把「有没有未发送文字」同步给列表 store,
@@ -72,7 +75,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     getContext: () => {
       const snap = deps.sessions.getRuntimeSnapshot();
       return {
-        cwd: state.cwd,
+        cwd: executionDirectory(),
         home: state.hostHome,
         // 本轮产出词表(只喂正文的行内 mention;上游 f937f4e23b 已删掉它的页脚 chip 行)
         // 与 present 交付清单(web ui-deliverables / mac TurnDeliverables)。
@@ -118,6 +121,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     currentReasoningEffort: null,
     models: [],
     cwd: null,
+    currentDirectory: null,
     hostHome: null,
     // 宿主自身的工作目录（来自 `$events` ready.host.home）。未选工作目录创建的会话都落在
     // 这里,所以它同时是历史过滤「临时目录」这一项的路径。
@@ -255,6 +259,13 @@ export function createSidepanelApp(root, deps, options = {}) {
   deps.onFrame((frame, stream) => {
     if (stream === "mux") deps.sessions.handleMuxFrame(frame);
     else deps.sessions.handleHostFrame(frame);
+    const value = frame.type === "item" ? frame.value : null;
+    if (frame.streamId === "events" && value?.type === "ready") {
+      settingsView?.generationOpened?.();
+      void deps.sessions.refreshGoalActivation?.();
+    } else if (value?.type === "emit" && value.event === "api-session/status" && value.args?.[0] === state.sessionId) {
+      void deps.sessions.refreshGoalActivation?.();
+    }
   });
 
   // ---- 渲染 ----
@@ -293,11 +304,12 @@ export function createSidepanelApp(root, deps, options = {}) {
       }
     }
     state.hostHome = deps.sessions.hostHome ?? state.hostHome;
-    const previousCwd = state.cwd;
+    const previousCwd = state.currentDirectory;
     state.cwd = snapshot.cwd ?? state.cwd;
+    state.currentDirectory = snapshot.currentDirectory ?? snapshot.workingDirectory ?? snapshot.cwd ?? state.cwd;
     // 冷启动也走这里(首个快照带来 cwd),所以入口的首次出现靠这一行 ——
     // 只在真的变化时刷,避免每个快照都发一串 git。
-    if (state.cwd && state.cwd !== previousCwd) refreshGitEntry();
+    if (state.currentDirectory && state.currentDirectory !== previousCwd) refreshGitEntry();
     state.subagent = snapshot.subagent ?? null;
 
     // 查找标记包住的是真实文本节点,重建前先还原,避免与增量 markdown 打架。
@@ -764,13 +776,20 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 新建会话页上跟着工作目录 chip 走(见 pendingWorkspacePath):那时页面上还
     // 没有任何内容,"这个会话在哪个仓库"由 chip 说了算,而不是由这个一次性空
     // 会话建成时落在的目录。会话一旦开聊,cwd 就固定了,入口回到跟随会话。
-    getCwd: () => pendingWorkspacePath() ?? state.cwd,
+    getCwd: () => pendingWorkspacePath() ?? executionDirectory(),
     showToast,
     onWorkingTreeChanged: () => refreshGitEntry(),
     promptBranchName: () => promptBranchName()
   });
 
   /// 重读 Git 入口。cwd 落定的每一处都调它。
+  function executionDirectory() {
+    const snapshot = deps.sessions.getRuntimeSnapshot();
+    return snapshot?.sessionId === state.sessionId
+      ? snapshot.currentDirectory ?? snapshot.workingDirectory ?? snapshot.cwd ?? state.cwd
+      : state.cwd;
+  }
+
   function refreshGitEntry() {
     return gitEntry.refresh().catch(() => {});
   }
@@ -1109,6 +1128,9 @@ export function createSidepanelApp(root, deps, options = {}) {
   /// 注意 options 必须防御非对象:这个函数直接当过 click 监听器,
   /// 那时传进来的是 MouseEvent。
   async function newSession(options) {
+    mainSurfaces?.close();
+    settingsView?.close();
+    historyDrawer?.hide?.();
     const { _retried = false, agentPreset = null } = (options && typeof options === "object" && !("target" in options))
       ? options : {};
     const workspace = workspaceMenu?.selected() ?? await prepareDefaultWorkspace();
@@ -1166,6 +1188,9 @@ export function createSidepanelApp(root, deps, options = {}) {
   let openSessionToken = 0;
 
   async function openSession(sessionId, { fresh = false, _retried = false } = {}) {
+    mainSurfaces?.close();
+    settingsView?.close();
+    historyDrawer?.hide?.();
     const token = ++openSessionToken;
     // 离开当前会话前存草稿。
     setDraft(state.sessionId, elements.input.value);
@@ -1240,6 +1265,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     if (deps.sessions.getRuntimeSnapshot()?.running) tailFollow.didSubmit();
     scrollToBottom();
 
+    void deps.sessions.refreshGoalActivation?.(sessionId);
     const summary = deps.sessions.listStore.get().find((item) => item.sessionId === sessionId);
     if (summary?.cwd) {
       state.cwd = summary.cwd;
@@ -1270,7 +1296,9 @@ export function createSidepanelApp(root, deps, options = {}) {
   /// 而非 session.history;composer 只读由返回的 subagent 投影驱动(applySnapshot)。
   async function openSubagent(address) {
     const childId = address?.childSessionId;
-    if (!childId) return;
+    if (!childId || address?.mode === "external") return;
+    mainSurfaces?.close();
+    settingsView?.close();
     const token = ++openSessionToken;
     setDraft(state.sessionId, elements.input.value);
 
@@ -1527,7 +1555,8 @@ export function createSidepanelApp(root, deps, options = {}) {
   function goalTogglePauseShortcut() {
     const goal = activeGoal(currentGoal());
     if (!goal || !state.sessionId) return false;
-    const action = goal.phase === "paused" ? deps.goals.resume : deps.goals.pause;
+    const action = goal.phase === "paused" || (goal.phase === "active" && goal.activation === "disarmed")
+      ? deps.goals.resume : deps.goals.pause;
     void Promise.resolve(action(state.sessionId, goal)).catch((error) => showToast(format(error)));
     return true;
   }
@@ -1664,6 +1693,11 @@ export function createSidepanelApp(root, deps, options = {}) {
     renderPickerButton();
     renderPickedChip();
     settingsView?.relabel();
+    mainSurfaces?.relabel();
+    const newLabel = document.querySelector("#history-new-btn [data-navigation-label]");
+    if (newLabel) newLabel.textContent = t("new_session");
+    const settingsLabel = document.querySelector("#history-settings-btn [data-navigation-label]");
+    if (settingsLabel) settingsLabel.textContent = t("settings");
     trajectory.relabel();
     const snapshot = deps.sessions.getRuntimeSnapshot();
     if (snapshot) {
@@ -1730,6 +1764,11 @@ export function createSidepanelApp(root, deps, options = {}) {
         // 设置页改完提供方/模型目录后,当场重画底栏模型菜单 ——
         // 用户关掉设置页就能在对话框里看到新模型,不必切会话。
         onModelsChanged: () => { dock.refreshModelMenu(); },
+        onOpenPlugins: () => mainSurfaces?.open("plugins"),
+        onVisibilityChanged: (visible) => {
+          mainSurfaces?.setSuspended(visible);
+          if (visible) historyDrawer?.hide?.();
+        },
         // 预设页的"用创造模式创作":新建一个跑创造模式预设的会话,然后关掉设置页
         // —— 这个手势结束在对话里,不在设置页(web D43)。新建失败时把错误抛回
         // 预设页,由它就地显示,不要静默留用户站在一个什么都没发生的按钮前面。
@@ -1740,6 +1779,32 @@ export function createSidepanelApp(root, deps, options = {}) {
         }
       }
     );
+    mainSurfaces = mountMainSurfaces(document, {
+      beforeOpen: () => { historyDrawer?.hide?.(); settingsView?.close(); trajectory.close(); findBar.close(); },
+      onClose: ({ restoreFocus }) => { if (restoreFocus) elements.input.focus(); },
+      onError: (error) => showToast(format(error)),
+      pages: {
+        plugins: { titleKey: "management.plugins", mount: (host) => settingsView.createPluginManager(host) },
+        automations: { titleKey: "management.automations", mount: (host) => mountAutomationsPage(host, {
+          service: deps.automations, sessions: deps.sessions, workspaces: deps.workspaces, showToast,
+          onNewSession: () => newSession({ agentPreset: "cordis" }), onOpenSession: openSession
+        }) }
+      }
+    });
+    // The archive view appends its footer during mount; Settings remains last.
+    document.querySelector("#session-drawer").append(document.querySelector("#history-settings-btn"));
+    const navigationIcons = { plugins: "puzzle", automations: "clock" };
+    for (const button of document.querySelectorAll("[data-main-surface]")) {
+      button.insertAdjacentHTML("afterbegin", lucideIconSvg(navigationIcons[button.dataset.mainSurface], { size: 15 }));
+    }
+    document.querySelector("#history-new-btn").insertAdjacentHTML("afterbegin", lucideIconSvg("plus", { size: 15 }));
+    document.querySelector("#history-settings-btn").insertAdjacentHTML("afterbegin", lucideIconSvg("settings", { size: 15 }));
+    document.querySelector("#history-new-btn").addEventListener("click", () => { void newSession(); });
+    document.querySelector("#history-settings-btn").addEventListener("click", () => settingsView.show());
+    relabel();
+    document.defaultView?.addEventListener("unload", () => {
+      mainSurfaces?.dispose(); settingsView?.dispose(); deps.automations?.dispose();
+    }, { once: true });
     startConnection();
     // 通知点击(侧栏已开着):worker 写入 pending sessionId,这里即时切会话。
     // 启动那次的领取在 startConnection 里,要等会话列表就绪。
@@ -1756,7 +1821,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     elements.hdrNew.addEventListener("click", newSession);
     // 工作目录入口:用系统打开 header 前缀当前代表的那个目录。
     elements.hdrOpenFolder.addEventListener("click", async () => {
-      const path = workspaceMenu?.displayedPath();
+      const path = pendingWorkspacePath() ?? executionDirectory() ?? workspaceMenu?.displayedPath();
       if (!path) return;   // 连接前的极短窗口:尚无任何目录
       try {
         await deps.workspaces.openPath(path);

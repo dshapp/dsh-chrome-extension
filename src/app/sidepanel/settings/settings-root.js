@@ -4,6 +4,7 @@
 import { t } from "../../../shared/i18n.js";
 import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import { createSettingsService } from "../../../features/settings/settings-service.js";
+import { createSettingsNotifications } from "../../../features/settings/settings-notifications.js";
 import { createGeneralPane } from "./general-pane.js";
 import { createModelsPane } from "./models-pane.js";
 import { createPresetsPane } from "./presets-pane.js";
@@ -25,7 +26,7 @@ import { escapeHtml } from "./settings-ui.js";
 //   - Mac 通知行在权限被拒时给"前往系统设置"深链(macOS 专属),这里只显示一行说明。
 //   - Mac 服务端页的 pid/Node/pnpm/全局前缀几行依赖原生 supervisor,这里不提供;
 //     相应地也没有"停止并退出" —— 侧边栏不该替用户杀掉 dsh web。
-const TABS = ["general", "models", "presets", "plugins", "server", "shortcuts"];
+const TABS = ["general", "models", "plugins", "presets", "server", "shortcuts"];
 
 /// 页签图标:与 Mac 的 SettingsSection 一一对应(通用/模型/预设/插件/服务端/快捷键)。
 /// 名字取自 file-icons.js 的 lucide 集;缺一个就整体退化成"只有文字",
@@ -42,7 +43,7 @@ const TAB_STORAGE_KEY = "dsh_settings_tab";
 
 /// 设置页里共用的模态。Mac 用 .sheet 挂在 Settings 窗口上,这里用一个 <dialog>
 /// 复用:同一时刻只会有一个 sheet(编辑提供方时不会再开自定义提供方)。
-function createSheet(dialog) {
+export function createSheet(dialog) {
   const bodyHost = dialog.querySelector("#settings-sheet-body");
   let currentActions = "";
   // 每次 open 递增。异步回调(保存失败重画、异步载入正文、成功后 close)可能在
@@ -102,11 +103,15 @@ function createSheet(dialog) {
 /// 回调 —— 留着会让调用方以为"改地址仍会重连"。
 /// onStartCreatorDraft:预设页"用创造模式创作"落到会话里的动作。它必须由 shell
 /// 提供 —— 新建会话、选中预设、离开设置页这三件事都只有 app 能做。
-export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {}) {
+export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onOpenPlugins, onVisibilityChanged } = {}) {
   const view = document.querySelector("#view-settings");
   const openButton = document.querySelector("#hdr-settings");
   const backButton = view.querySelector("#settings-back");
   const tabBar = view.querySelector("#settings-tabs");
+  for (const tab of TABS) {
+    const button = tabBar.querySelector(`[data-tab="${tab}"]`);
+    if (button) tabBar.append(button);
+  }
   const dialog = document.querySelector("#settings-sheet");
   const settingsService = createSettingsService(deps.connection);
   const sheet = createSheet(dialog);
@@ -141,7 +146,8 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {
     }),
     plugins: createPluginsPane({
       host: view.querySelector("#settings-pane-plugins"), sheet, settingsDialog: dialog,
-      deps, settingsService, showToast,
+      deps, settingsService, showToast, readOnlyInventory: true,
+      onOpenManager: () => { close(); onOpenPlugins?.(); },
       // 装 / 更 / 删要跑 dsh plugin(即 pnpm),扩展做不到,经 daemon 代理。
       // 成功后用 settingsService 重拉清单,以宿主 reconcile 后的状态为准。
       // 市场页走 pluginManager/*(dsh web),不需要这一路;它只服务内置页签。
@@ -167,6 +173,7 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {
     })
   };
 
+  panes.plugins.setVisible?.(false, { refresh: false });
   let activeTab = readStoredTab();
 
   function readStoredTab() {
@@ -215,6 +222,15 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {
     }
   }
 
+  const notifications = createSettingsNotifications(deps.connection, {
+    onReset: () => settingsService.resetRevisionCache?.(),
+    onChange: async () => {
+      loaded.clear();
+      await panes[activeTab]?.refresh?.({ background: true });
+      if (activeTab === "models") onModelsChanged?.();
+    }
+  });
+
   async function activate(tab, { force = false } = {}) {
     activeTab = TABS.includes(tab) ? tab : "general";
     storeTab(activeTab);
@@ -223,7 +239,8 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {
     // 桥的轮询现在归服务端 pane 管(它自己 render 那一行),所以这里只需要
     // 在离开时停掉整个 pane,不再单独持有一个 bridge 句柄。
     if (activeTab !== "server") panes.server.stop();
-    if (force || !loaded.has(activeTab)) {
+    panes.plugins.setVisible?.(activeTab === "plugins" && view.classList.contains("open"));
+    if (force || activeTab === "server" || !loaded.has(activeTab)) {
       loaded.add(activeTab);
       await panes[activeTab].refresh();
     }
@@ -249,13 +266,19 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {
   function open(tab) {
     if (TABS.includes(tab)) activeTab = tab;
     view.classList.add("open");
+    onVisibilityChanged?.(true);
+    notifications.setVisible(true);
     // 每次打开都重拉当前 pane:设置可能被其他客户端(Mac 端、编辑器)改过。
     loaded.clear();
     activate(activeTab, { force: true });
   }
 
   function close() {
+    const wasOpen = view.classList.contains("open");
     view.classList.remove("open");
+    notifications.setVisible(false);
+    panes.plugins.setVisible?.(false);
+    if (wasOpen) onVisibilityChanged?.(false);
     // 关页面要停掉所有按秒跑的表,否则设置页关了还在每秒唤醒 service worker。
     // panes.server.stop() 一并停掉桥那一行的轮询。
     panes.server.stop();
@@ -275,10 +298,21 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft } = {
   return {
     show: open,
     close,
+    generationOpened: () => notifications.generationOpened(),
+    dispose() {
+      close(); notifications.dispose();
+      for (const pane of Object.values(panes)) { pane.stop?.(); pane.dispose?.(); }
+    },
+    createPluginManager(host) {
+      return createPluginsPane({
+        host, sheet, settingsDialog: dialog, deps, settingsService, showToast,
+        pluginActions: createPluginActions({ client: hostProxy }), serverOps
+      });
+    },
     /// 语言切换后重画:tab 文案与当前 pane 都要跟着换。
     relabel() {
       paintTabs();
-      panes[activeTab]?.refresh();
+      if (view.classList.contains("open")) panes[activeTab]?.refresh();
     }
   };
 }

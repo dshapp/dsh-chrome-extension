@@ -20,6 +20,7 @@ import { createPluginCardViews } from "./plugin-card-view.js";
 import { createMarketplaceView } from "./plugin-marketplace.js";
 import { createPluginActionsUi } from "./plugin-actions-ui.js";
 import { entryText } from "../../../features/settings/plugin-meta.js";
+import { createPluginSchemaConfig } from "./plugin-schema-config.js";
 
 const PHASE_TEXT = {
   pending: "inv.pending",
@@ -29,8 +30,17 @@ const PHASE_TEXT = {
   unloading: "inv.unloading"
 };
 
-export function createPluginsPane({ host, sheet, deps, settingsService, showToast, pluginActions, settingsDialog }) {
-  let activeTab = "marketplace";
+export function createPluginsPane({ host, sheet, deps, settingsService, showToast, pluginActions, settingsDialog,
+  readOnlyInventory = false, onOpenManager, renderSlot, tabs = false }) {
+  let activeTab = readOnlyInventory ? "inventory" : "marketplace";
+  let visible = true, disposed = false, openedSchema = null, refreshWork = null;
+  const cleanups = [], slotContributions = [];
+  function cardSlot(name, card) {
+    const result = renderSlot?.(name, { view: "page", subject: { kind: "item", id: card.id }, form: schemaConfig.form(card.namespace) }, { only: card.id });
+    if (!result) return "";
+    if (typeof result === "string") return result;
+    slotContributions.push(result); return result.html ?? "";
+  }
   // 市场里点开的配置卡片;为空时市场列表就是根视图(Mac 的 route)。
   let openedCard = null;
   let describe = null;
@@ -66,7 +76,7 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
   const actionState = { actionsAvailable: false, installName: "", actionBusy: null };
   const actionsUi = createPluginActionsUi({
     host,
-    pluginActions,
+    pluginActions: readOnlyInventory ? null : pluginActions,
     showToast,
     state: actionState,
     render: () => render()
@@ -83,20 +93,27 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
     requestRender: () => { if (activeTab === "marketplace") render(); }
   });
 
+  const schemaConfig = createPluginSchemaConfig({ settingsService, describeNow, onChange: render });
+
   const marketplace = createMarketplaceView({
-    host, sheet, deps, settingsService, showToast, settingsDialog,
+    host, sheet, deps, settingsService, showToast, settingsDialog, schemaConfig, renderSlot,
     cards: () => selectableCards(),
     onOpenCard(card) { openedCard = card; render(); },
-    onInstalled() { loadInventory(); },
+    onInstalled() { refreshDescribe().then(render).catch(() => {}); if (inventoryLoaded) loadInventory(); },
     onChange() { if (activeTab === "marketplace") render(); }
   });
 
   // 0.1.6 的 plugin-manager/changed:宿主的插件启停/装载状态变了。市场与清单
   // 都是实时视图,变化到达时必须重读。没打开过清单就不主动拉。
-  deps.sessions?.onPluginManagerChanged?.(() => {
-    marketplace.refresh({ keepNotices: true });
+  const unsubscribeChanged = deps.sessions?.onPluginManagerChanged?.(() => {
+    if (!visible || disposed) return;
+    if (!readOnlyInventory) {
+      marketplace.refresh({ keepNotices: true });
+      refreshDescribe().then(render).catch(() => {});
+    }
     if (inventoryLoaded || inventoryLoading || activeTab === "inventory") loadInventory();
   });
+  if (unsubscribeChanged) cleanups.push(unsubscribeChanged);
 
   function namespacesSet() {
     return new Set((describe?.namespaces ?? []).map((entry) => entry.ns));
@@ -125,19 +142,22 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
         + `<button class="set-link" type="button" id="plug-back">`
         + `${lucideIconSvg("chevron-left", { size: 13 })} ${escapeHtml(t("plug.backToList"))}</button>`
     }) + section({
-      header: t(card.title),
+      headerHtml: escapeHtml(t(card.title)) + cardSlot("plugins.detail.badge", card),
       body: `<div class="set-card open"><div class="set-card-body">`
-        + cards.renderBody(card) + cards.renderFooter(card)
+        + cardSlot("plugins.detail.actions", card)
+        + (cardSlot("plugins.item", card) || (cards.renderBody(card) + cards.renderFooter(card)))
+        + button({ id: "plug-all-config", label: t("plug.allConfiguration") })
         + `</div></div>`,
       footer: escapeHtml(t(card.description))
-    });
+    }) + cardSlot("plugins.detail.section", card);
   }
 
   function renderConfigurable() {
-    if (loadingCards) return spinner();
-    if (cardsError) return section({ body: notice(cardsError) });
+    if (loadingCards && (openedCard || openedSchema)) return spinner();
+    if (cardsError && (openedCard || openedSchema)) return section({ body: notice(cardsError) });
+    if (openedSchema) return section({ body: button({ id: "plug-schema-back", label: t("plug.backToList") }) }) + schemaConfig.render(openedSchema);
     if (openedCard) return renderConfigRoute();
-    return marketplace.render();
+    return (cardsError ? section({ body: notice(cardsError) }) : "") + marketplace.render();
   }
 
   function filteredInventory() {
@@ -211,12 +231,17 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
   }
 
   function render() {
-    host.innerHTML = renderTabs()
+    if (disposed || !visible) return;
+    slotContributions.length = 0;
+    host.innerHTML = (readOnlyInventory ? section({ body: button({ id: "plug-open-manager", label: t("plug.openManager"), kind: "primary" }) }) : tabs ? renderTabs() : "")
       + (activeTab === "marketplace" ? renderConfigurable() : renderInventory());
     bind();
   }
 
   function bind() {
+    host.querySelector("#plug-open-manager")?.addEventListener("click", () => onOpenManager?.());
+    host.querySelector("#plug-schema-back")?.addEventListener("click", () => { openedSchema = null; render(); });
+    host.querySelector("#plug-all-config")?.addEventListener("click", () => { openedSchema = openedCard.namespace; render(); });
     for (const element of host.querySelectorAll("[data-subtab]")) {
       element.addEventListener("click", () => {
         activeTab = element.dataset.subtab;
@@ -230,11 +255,13 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
         render();
       });
       // 市场列表的绑定点在它自己的模块里;配置路由里只有卡片本体。
-      if (openedCard) cards.bind(openedCard);
+      if (openedSchema) schemaConfig.bind(host, openedSchema);
+      else if (openedCard) cards.bind(openedCard);
       else marketplace.bindInto(host);
     } else {
       bindInventory();
     }
+    slotContributions.forEach(contribution => contribution.bind?.(host));
   }
 
   function bindInventory() {
@@ -293,11 +320,20 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
     return describe;
   }
 
-  async function refresh() {
+  function refresh() {
+    if (disposed) return Promise.resolve();
+    if (refreshWork) return refreshWork;
+    refreshWork = refreshNow().finally(() => { refreshWork = null; });
+    return refreshWork;
+  }
+
+  async function refreshNow() {
+    if (disposed) return;
+    if (readOnlyInventory) { await loadInventory(); return; }
     cardsLoadGeneration += 1;
     loadingCards = true; cardsError = null; render();
     try {
-      await actionsUi.probe();
+      if (tabs) await actionsUi.probe();
       await refreshDescribe();
       // Subagent 的模型选择要目录数据:它是卡片的一部分,失败不阻塞保存,
       // 卡片自己会显示"加载失败 + 重试"。
@@ -311,5 +347,18 @@ export function createPluginsPane({ host, sheet, deps, settingsService, showToas
     await marketplace.refresh({ keepNotices: true });
   }
 
-  return { refresh };
+  return {
+    refresh, relabel: render,
+    setVisible(value, { refresh: shouldRefresh = true } = {}) {
+      visible = Boolean(value); if (visible && !disposed) { if (shouldRefresh) refresh(); else render(); }
+    },
+    openBundle(name) { openedCard = null; openedSchema = null; marketplace.openBundle(name); },
+    openRow(name, rowId) { openedCard = null; openedSchema = null; marketplace.openRow(name, rowId); },
+    openConfiguration(ns) { openedSchema = ns; render(); },
+    dispose() {
+      disposed = true; cardsLoadGeneration++; inventoryLoadGeneration++;
+      cleanups.splice(0).forEach(cleanup => cleanup()); marketplace.dispose(); schemaConfig.dispose(); cards.dispose();
+      credentialCache.state.clear(); credentialCache.drafts.clear();
+    }
+  };
 }

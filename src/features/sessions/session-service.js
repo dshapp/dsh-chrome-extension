@@ -71,6 +71,9 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   const controlQueues = new Map();
   const controlJobs = new Map();
   const controlProjections = new Map();
+  const goalActivations = new Map();
+  const goalActivationEpochs = new Map();
+  let goalActivationGeneration = 0;
   let archivedSessionIds = new Set();
   /// 已归档会话的摘要。活动列表(listStore)把它们滤掉了,但「已归档会话」页
   /// 要显示标题 / 工作区 / 时间 —— 所以滤掉之前先存一份在这里。来源两处:
@@ -167,6 +170,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       assistantRevision = 0;
       assistantResyncing = false;
       store.reset(sessionId);
+      store.setCwd(listStore.get().find((row) => row.sessionId === sessionId)?.cwd);
       applyCachedControl(sessionId);
       applyCachedInteractions(sessionId);
     }
@@ -199,6 +203,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
 
   function applyHistoryValue(sessionId, value, buffered = []) {
     store.reset(sessionId);
+    store.setCwd(value?.header?.cwd ?? listStore.get().find((row) => row.sessionId === sessionId)?.cwd);
     recordHistoryBounds(sessionId, value);
     // 历史(session/page 与 follow snapshot 两条路径)可能带 chunkrow 打包记录:
     // 一条记录代表连续多条 assistant/chunk,必须先展开再入 store,否则整段流式
@@ -230,7 +235,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     }
     const value = await connection.call(RPC.sessionPage, {
       request: {
-        address: { kind: "session", sessionId },
+        address: currentFollowAddress ?? { kind: "session", sessionId },
         throughSeq: cursor,
         beforeSeq: bounds.earliestSeq,
         ...pageOptions
@@ -289,6 +294,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   }
 
   function applyCachedControl(sessionId) {
+    if (goalActivations.has(sessionId)) store.setGoalActivation(goalActivations.get(sessionId));
     // 只在宿主真的给过队列快照(0.1.5 基线/queue 帧)时覆盖。0.1.6 上没有这一项,
     // 用 ?? [] 会把 follow 快照里 inbox 投影折出的队列又清空 —— 那正是排队面板
     // 在 0.1.6 上恒为空的根因。
@@ -649,7 +655,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       const throughSeq = historyCursors.get(sessionId);
       if (!Number.isInteger(throughSeq)) return null;
       const value = await connection.call(RPC.sessionPage, {
-        request: { address: { kind: "session", sessionId }, throughSeq, ...HISTORY_PAGE_OPTIONS }
+        request: { address: currentFollowAddress?.sessionId === sessionId || currentFollowAddress?.childSessionId === sessionId
+          ? currentFollowAddress : { kind: "session", sessionId }, throughSeq, ...HISTORY_PAGE_OPTIONS }
       });
       // 等待期间用户又切换了会话:迟到的历史不得覆盖新会话的 store。
       if (token !== loadToken) return value;
@@ -807,10 +814,10 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           return {
             kind: "child",
             id: entry.id,
-            mode: entry.mode === "one-shot" || entry.mode === "continuable" ? entry.mode : "unknown",
+            mode: ["one-shot", "continuable", "external"].includes(entry.mode) ? entry.mode : "unknown",
             label: typeof entry.label === "string" && entry.label ? entry.label : undefined,
             activity: summary?.running ? "running" : "not-running",
-            hasChildren: parents.has(entry.id) || (Array.isArray(nested) && nested.length > 0)
+            hasChildren: entry.mode !== "external" && (parents.has(entry.id) || (Array.isArray(nested) && nested.length > 0))
           };
         });
       return { entries };
@@ -821,7 +828,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     /// 在 Mac 端就是 SessionHistoryValue 的 typealias)。
     async loadSubagentHistory(address) {
       const childId = address?.childSessionId;
-      if (!childId) return null;
+      if (!childId || address?.mode === "external") return null;
       openToken += 1;
       loadToken += 1;
       invalidateGapRepair();
@@ -933,6 +940,12 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
           else if (event === "api-session/removed") service.handleHostFrame({ payload: { type: "host/session-removed", sessionId: args[0] } });
           else if (event === "api-session/status") service.handleHostFrame({ payload: { type: "host/session-status", sessionId: args[0], running: args[1] } });
           else if (event === "api-session/activity") listStore.recordActivity(args[0], args[1]);
+          else if (event === "goal/activation-changed") {
+            const changed = args[0];
+            if (changed?.sessionId) {
+              service.applyGoalActivation(changed.sessionId, changed);
+            }
+          }
           else if (event === "api-session/error") service.handleHostFrame({ payload: { type: "host/agent-error", sessionId: args[0], message: args[1] } });
           // 0.1.6 新增的两条转发事件。都不带状态:一条只是让客户端重读完整
           // 快照(catalog / 插件清单),所以这里只把它折算成本地通知往下传,
@@ -1181,7 +1194,32 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
       return { accepted };
     },
 
+    applyGoalActivation(sessionId, value) {
+      if (!sessionId) return;
+      const goal = value?.goal ?? null;
+      goalActivationEpochs.set(sessionId, (goalActivationEpochs.get(sessionId) ?? 0) + 1);
+      goalActivations.set(sessionId, goal);
+      if (isCurrent(sessionId)) { store.setGoalActivation(goal); notifyRuntime(); }
+    },
+
+    async refreshGoalActivation(sessionId = currentSessionId) {
+      if (!sessionId) return null;
+      const generation = goalActivationGeneration;
+      const epoch = (goalActivationEpochs.get(sessionId) ?? 0) + 1;
+      goalActivationEpochs.set(sessionId, epoch);
+      try {
+        const value = await connection.call(RPC.goalGet ?? "goals/get", { agentId: sessionId });
+        if (generation !== goalActivationGeneration || goalActivationEpochs.get(sessionId) !== epoch) return null;
+        service.applyGoalActivation(sessionId, value);
+        return value;
+      } catch { return null; } // old deployments may not have goals/get
+    },
+
     generationOpened() {
+      goalActivationGeneration += 1;
+      goalActivations.clear();
+      goalActivationEpochs.clear();
+      store.setGoalActivation(null);
       loadToken += 1;
       invalidateGapRepair();
       remoteEventClientId = null;

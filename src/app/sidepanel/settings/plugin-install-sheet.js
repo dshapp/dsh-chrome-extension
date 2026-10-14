@@ -2,8 +2,8 @@
 // 确认安装 → 安装中可取消 → 结果就地显示。
 //
 // 几处判断值得写下来:
-//   1. requestId 由这里生成并全程固定 —— 宿主的 cancelInstall 只认这个 id,
-//      每次重试都换 id 的话,用户上一次点的取消会取消掉这一次。
+//   1. 每次明确开始的新安装生成 requestId;该次安装取消和断线恢复始终用同一个 id。
+//      传输失败只查询原安装,不会自动开始第二次安装。
 //   2. 进度是流式事件(plugin-manager/install-state / install-log),与安装的
 //      RPC 往返并行到达。弹窗要同时吃这两路,所以它订阅 deps.sessions 的进度
 //      并按 requestId 过滤 —— 别的客户端(比如 Mac 端)的安装不该出现在这里。
@@ -18,6 +18,9 @@ import {
   registryName, registriesText
 } from "../../../features/settings/plugin-registry.js";
 
+import { createInstallRecovery } from "./plugin-install-recovery.js";
+import { createInstallCompatibility } from "./plugin-install-compatibility.js";
+
 const MAX_LOG_LINES = 12;
 
 const CHOICE_LABEL = {
@@ -30,11 +33,11 @@ const CHOICE_LABEL = {
 /// 宿主阶段 → 弹窗阶段。installing 是"正在跑 pnpm"(Mac 把它记成 running)。
 const HOST_PHASE = { installing: "running", cancelling: "cancelling", applying: "applying" };
 
-export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsService, showToast, onInstalled }) {
-  // 一次安装一个 requestId;整个弹窗生命周期内不变。
-  const requestId = `dsh-ext-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  let inspectResult = null;
-  let spec = "";
+export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsService, showToast, onInstalled, initialSpec = "", catalog = null, enabled = true, saveExact = true }) {
+  // 每次安装独立 requestId;该次安装恢复 / 取消保持不变。
+  let requestId;
+  let inspectResult = catalog ? { status: "accepted", ...catalog } : null;
+  let spec = initialSpec;
   let phase = "idle";
   let error = null;
   const logLines = [];
@@ -47,12 +50,22 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
   let attempts = [];
   let attemptTotal = 0;
   let failure = null;
+  const compatibility = createInstallCompatibility({ settingsService, onChange: paint });
+  const recovery = createInstallRecovery({ settingsService, onSettled: settle,
+    onUncertain(cause, unknown) {
+      phase = unknown ? "unknown" : "uncertain";
+      error = t(unknown ? "plug.installUnknown" : "plug.installUncertain")
+        + (cause ? ` ${deps.formatErrorDetails(cause)}` : "");
+      if (unknown) { inspectResult = null; requestId = null; }
+      paint();
+    }
+  });
 
   const unsubscribe = deps.sessions?.onPluginInstallProgress?.((channel, payload) => {
-    if (!payload || payload.requestId !== requestId) return;
+    if (!requestId || !payload || payload.requestId !== requestId) return;
     if (channel === "state") {
       // 已经在取消时,晚到的 installing 不把按钮拨回"取消安装"(Mac installProgress)。
-      if (!(phase === "cancelling" && payload.phase === "installing")) {
+      if (phase !== "uncertain" && !(phase === "cancelling" && payload.phase === "installing")) {
         phase = HOST_PHASE[payload.phase] ?? payload.phase ?? phase;
       }
       if (payload.attempt) {
@@ -77,7 +90,7 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
 
   function busy() {
     return phase === "inspecting" || phase === "running" || phase === "cancelling"
-      || phase === "applying" || phase === "done";
+      || phase === "applying" || phase === "done" || phase === "uncertain" || phase === "starting";
   }
 
   function registryPicker() {
@@ -150,7 +163,7 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
         + `<div class="set-sheet-text"><strong>${escapeHtml(inspectResult.name ?? spec)}${escapeHtml(version)}</strong></div>`
         + `<div class="set-row-hint">${escapeHtml(kind)}${inspectResult.description ? " · " + escapeHtml(inspectResult.description) : ""}</div>`
         + progressLines()
-        + (error ? notice(error) : "")
+        + (error ? notice(error) : "") + compatibility.render()
         + (logLines.length
           ? `<pre class="set-code set-install-log">${escapeHtml(logLines.join(""))}</pre>`
           : "");
@@ -159,7 +172,8 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
   }
 
   function actions() {
-    if (phase === "running" || phase === "cancelling" || phase === "applying") {
+    if (phase === "uncertain") return button({ id: "plug-install-recover", label: t("plug.recoverInstall"), kind: "primary" });
+    if (phase === "starting" || phase === "running" || phase === "cancelling" || phase === "applying") {
       return button({
         id: "plug-install-cancel",
         label: phase === "cancelling" ? t("plug.installCancelling") : t("plug.installCancel"),
@@ -193,9 +207,11 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
 
   /// spec 或源变了:检查结果作废(它属于上一个 spec / 上一个源)。返回是否真的作废了什么。
   function invalidateInspection() {
-    if (phase !== "idle" && phase !== "failed") return false;
+    if (phase !== "idle" && phase !== "failed" && phase !== "unknown") return false;
     const had = inspectResult !== null || phase === "failed";
     inspectResult = null;
+    installRegistry = undefined;
+    compatibility.set(null);
     error = null;
     failure = null;
     phase = "idle";
@@ -204,9 +220,14 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
 
   function bind(root) {
     if (!root) return;
+    compatibility.bind(root);
     root.querySelector("#plug-add-spec")?.addEventListener("input", (event) => {
       spec = event.target.value;
-      invalidateInspection();
+      if (invalidateInspection()) {
+        paint();
+        const fresh = sheet.root?.querySelector("#plug-add-spec");
+        if (fresh) { fresh.focus(); fresh.setSelectionRange(spec.length, spec.length); }
+      }
       // 输入变化只更新按钮可用性,不整块重画 —— 重画会把输入框里的光标弄丢。
       const inspect = root.querySelector("#plug-install-inspect");
       if (inspect) inspect.disabled = !spec.trim();
@@ -232,10 +253,12 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
     });
     root.querySelector("#plug-install-close")?.addEventListener("click", () => {
       unsubscribe?.();
+      recovery.dispose();
       sheet.close(token);
     });
     root.querySelector("#plug-install-inspect")?.addEventListener("click", inspect);
     root.querySelector("#plug-install-run")?.addEventListener("click", install);
+    root.querySelector("#plug-install-recover")?.addEventListener("click", () => recovery.recover());
     root.querySelector("#plug-install-cancel")?.addEventListener("click", cancel);
   }
 
@@ -252,7 +275,9 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
         inspectResult = null;
         return;
       }
-      inspectResult = await settingsService.inspectPlugin(spec.trim(), { registry: chosen.registry });
+      inspectResult = catalog && spec.trim() === initialSpec
+        ? { status: "accepted", ...catalog, registry: chosen.registry }
+        : await settingsService.inspectPlugin(spec.trim(), { registry: chosen.registry });
       // 通过的答复带作答的 registry(null = pnpm 自身);安装从那里开始。
       installRegistry = inspectResult && "registry" in inspectResult ? inspectResult.registry : chosen.registry;
     } catch (inspectError) {
@@ -265,7 +290,9 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
   }
 
   async function install() {
-    phase = "running";
+    if (recovery.pending || busy() || inspectResult?.status !== "accepted") return;
+    requestId = `dsh-ext-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    phase = "starting";
     error = null;
     failure = null;
     attempts = [];
@@ -273,29 +300,36 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
     logLines.length = 0;
     paint();
     try {
-      const result = await settingsService.installBundle(spec.trim(), {
-        requestId, enabled: true, registry: installRegistry
-      });
-      if (result?.application === "failed") {
-        phase = "failed";
-        error = result.error?.diagnostic || t("plug.installFailed");
-        // 宿主的答复列出它问过的每个源,不论每次尝试的通告是否到达。
-        failure = { registries: result.registries ?? attempts, failedAt: result.failedAt };
-      } else if (result?.application === "cancelled") {
-        phase = "idle";
-        error = t("plug.installCancelled");
-      } else {
-        phase = "done";
-        error = null;
-        await onInstalled?.(result);
+      if (installRegistry === undefined) {
+        const chosen = await resolveRegistryChoice(registry, settingsService);
+        if (chosen.invalid) { registry.invalid = true; phase = "idle"; paint(); return; }
+        installRegistry = chosen.registry;
       }
-    } catch (installError) {
-      phase = "failed";
-      error = deps.formatErrorDetails(installError);
-      showToast?.(error);
-    } finally {
+      phase = "running";
+      const running = recovery.start(spec.trim(), { requestId, enabled, saveExact, registry: installRegistry });
       paint();
+      await running;
+    } catch (cause) { phase = "failed"; error = deps.formatErrorDetails(cause); }
+    paint();
+  }
+
+  async function settle(result) {
+    if (!result) return;
+    requestId = null;
+    compatibility.set(result);
+    if (result.application === "failed") {
+      phase = "failed";
+      error = result.error?.diagnostic || t("plug.installFailed");
+      failure = { registries: result.registries ?? attempts, failedAt: result.failedAt };
+    } else if (result.application === "cancelled") {
+      phase = "idle";
+      error = t("plug.installCancelled");
+    } else {
+      phase = "done";
+      error = result.application === "restart-required" ? t("plug.changedRestart") : null;
+      await onInstalled?.(result);
     }
+    paint();
   }
 
   async function cancel() {
@@ -307,8 +341,8 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
       if (result?.status === "too-late") {
         phase = "running";
         error = t("plug.installTooLate");
-      } else if (result?.status === "not-running") {
-        phase = "idle";
+      } else if (result?.status === "not-running" || result?.status === "cancelled") {
+        await recovery.recover();
       }
     } catch (cancelError) {
       phase = "running";
@@ -327,6 +361,6 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
   sheet.root?.querySelector("#plug-add-spec")?.focus();
   // 关闭时一定要退订,否则下一次安装的进度还会往这块已经关掉的 dialog 上打。
   // sheet.close() 会清空 body,所以监听挂在整个 dialog 上而不是内容节点上。
-  settingsDialog?.addEventListener("close", () => unsubscribe?.(), { once: true });
+  settingsDialog?.addEventListener("close", () => { unsubscribe?.(); recovery.dispose(); }, { once: true });
   return token;
 }

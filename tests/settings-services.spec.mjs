@@ -87,16 +87,18 @@ test("plugin-manager:0.1.7 下载源 —— registry 进 options,null 照发,und
   assert.deepEqual(c.calls[5].args, {});
 });
 
-test("preset:0.1.7 只剩列表;删掉的预设端点不再暴露", async () => {
+test("preset:alpha.2 恢复只读read;旧copy/delete端点仍不暴露", async () => {
   const c = recorder();
   const service = createPresetService(c);
 
   await service.presetList();
-  assert.deepEqual(c.calls.map((x) => x.method), [RPC.agentPresetList]);
-  for (const gone of ["presetRead", "presetCopy", "presetRemove", "presetOpenDocument", "canOpenPresetDirectory"]) {
+  await service.presetRead("standard");
+  assert.deepEqual(c.calls.map((x) => x.method), [RPC.agentPresetList, RPC.agentPresetRead]);
+  assert.deepEqual(c.calls[1].args, { agentPreset: "standard" });
+  for (const gone of ["presetCopy", "presetRemove", "presetOpenDocument", "canOpenPresetDirectory"]) {
     assert.equal(service[gone], undefined, gone);
   }
-  for (const gone of ["agentPresetRead", "agentPresetCopy", "agentPresetRemove", "agentPresetOpenDocument",
+  for (const gone of ["agentPresetCopy", "agentPresetRemove", "agentPresetOpenDocument",
     "settingsCanOpenAgentPresetDirectory", "subagentList"]) {
     assert.equal(RPC[gone], undefined, gone);
   }

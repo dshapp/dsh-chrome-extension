@@ -1,57 +1,36 @@
-// 语义化版本比较(本扩展所需的最小子集)。
-//
-// 字典序比较有坑:"0.10.0" < "0.9.0" 会让每次跨 x.9 的发布都被判成没有新版,
-// 所以主版本段必须按数值逐段比较;预发布号(-beta.1 等)按 semver 规则低于
-// 同号正式版,预发布之间数字段按数值、字母段按字典序、数字段低于字母段。
-
+// Strict SemVer 2.0.0, shared by target validation and precedence comparison.
+// Decimal strings are compared without Number's precision loss; build metadata has no precedence.
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+export const UPDATE_CHANNELS = Object.freeze(["latest", "next", "alpha"]);
 function parse(version) {
-  const match = /^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?/.exec(String(version ?? "").trim());
-  if (!match) return null;
-  return { main: match[1].split(".").map(Number), pre: match[2] ?? null };
+  if (typeof version !== "string" || version.length > 256) return null;
+  const match = SEMVER.exec(version);
+  if (!match || match[0] !== version) return null;
+  const pre = match[4]?.split(".") ?? null;
+  if (pre?.some((part) => /^\d+$/.test(part) && part.length > 1 && part[0] === "0")) return null;
+  return { main: match.slice(1, 4), pre };
 }
-
-function compareMain(a, b) {
-  const len = Math.max(a.length, b.length);
-  for (let i = 0; i < len; i += 1) {
-    const diff = (a[i] ?? 0) - (b[i] ?? 0);
-    if (diff !== 0) return diff < 0 ? -1 : 1;
-  }
-  return 0;
+export function isExactVersion(value) { return Boolean(parse(value)); }
+export function validateUpdateTarget(value = "latest") {
+  if (UPDATE_CHANNELS.includes(value) || isExactVersion(value)) return value;
+  throw new TypeError("DSH update target must be latest, next, alpha or an exact semantic version");
 }
-
-function comparePre(a, b) {
-  // 无预发布 > 有预发布:1.0.0 > 1.0.0-beta。
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
-  const as = a.split(".");
-  const bs = b.split(".");
-  const len = Math.max(as.length, bs.length);
-  for (let i = 0; i < len; i += 1) {
-    const x = as[i];
-    const y = bs[i];
+function decimal(a, b) {
+  return a.length === b.length ? (a === b ? 0 : a < b ? -1 : 1) : a.length < b.length ? -1 : 1;
+}
+export function compareVersions(left, right) {
+  const a = parse(left), b = parse(right);
+  if (!a || !b) return null;
+  for (let i = 0; i < 3; i++) { const c = decimal(a.main[i], b.main[i]); if (c) return c; }
+  if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1;
+  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+    const x = a.pre[i], y = b.pre[i];
     if (x === undefined) return -1;
     if (y === undefined) return 1;
-    const xNum = /^\d+$/.test(x);
-    const yNum = /^\d+$/.test(y);
-    if (xNum && yNum) {
-      const diff = Number(x) - Number(y);
-      if (diff !== 0) return diff < 0 ? -1 : 1;
-    } else if (xNum !== yNum) {
-      return xNum ? -1 : 1;
-    } else if (x !== y) {
-      return x < y ? -1 : 1;
-    }
+    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+    const c = xn && yn ? decimal(x, y) : xn !== yn ? (xn ? -1 : 1) : x === y ? 0 : x < y ? -1 : 1;
+    if (c) return c;
   }
   return 0;
 }
-
-/// latest 严格高于 current 才算升级;解析不了任一侧一律 false(宁可漏报也不误报)。
-export function isUpgrade(current, latest) {
-  const a = parse(current);
-  const b = parse(latest);
-  if (!a || !b) return false;
-  const main = compareMain(a.main, b.main);
-  if (main !== 0) return main < 0;
-  return comparePre(a.pre, b.pre) < 0;
-}
+export function isUpgrade(current, target) { return compareVersions(current, target) === -1; }
