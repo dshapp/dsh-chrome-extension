@@ -174,27 +174,8 @@ test("install incompatibility consent persists exact pair without automatic retr
   root.querySelector("#plug-install-exempt").click(); await flush(); assert.deepEqual(calls, [["p@1", "0.2", true, true]]);
 });
 
-test("readonly settings inventory has no package writes and cleans host subscription", async () => {
-  const host = document.querySelector("aside"); let cleaned = 0, managerOpened = 0, forbidden = 0;
-  const pane = createPluginsPane({ host, deps: { ...deps, sessions: { onPluginManagerChanged: () => () => cleaned++ } }, readOnlyInventory: true,
-    settingsService: { async pluginInventory() { return { entries: [{ entryId: "e", moduleName: "m", enabled: true }] }; }, async describe() { forbidden++; } },
-    pluginActions: { async list() { forbidden++; } }, onOpenManager: () => managerOpened++ });
-  await pane.refresh(); host.querySelector("#plug-open-manager").click();
-  assert.equal(managerOpened, 1); assert.equal(forbidden, 0); assert.equal(host.querySelector("#plug-install"), null);
-  assert.equal(host.querySelector("[data-subtab]"), null); pane.dispose(); assert.equal(cleaned, 1);
-});
-
 test("marketplace remains accessible when configuration describe is unavailable", async () => {
   const host = document.querySelector("main");
   const pane = createPluginsPane({ host, deps, settingsService: { async describe() { throw new Error("no settings"); }, async pluginBundles() { return [pkg()]; }, async pluginEntries() { return []; } } });
   await pane.refresh(); assert.match(host.textContent, /no settings/); assert.ok(host.querySelector("#plug-add")); pane.dispose();
-});
-
-test("pane visibility plus force refresh coalesce and supports refresh false", async () => {
-  const host = document.querySelector("aside"); let calls = 0, finish;
-  const waiting = new Promise(resolve => { finish = resolve; });
-  const pane = createPluginsPane({ host, deps, readOnlyInventory: true, settingsService: { async pluginInventory() { calls++; await waiting; return { entries: [] }; } } });
-  pane.setVisible(true); const first = pane.refresh(); const second = pane.refresh();
-  assert.equal(first, second); assert.equal(calls, 1); finish(); await first;
-  pane.setVisible(false); pane.setVisible(true, { refresh: false }); assert.equal(calls, 1); pane.dispose();
 });

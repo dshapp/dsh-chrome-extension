@@ -75,8 +75,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   const goalActivationEpochs = new Map();
   let goalActivationGeneration = 0;
   let archivedSessionIds = new Set();
-  /// 已归档会话的摘要。活动列表(listStore)把它们滤掉了,但「已归档会话」页
-  /// 要显示标题 / 工作区 / 时间 —— 所以滤掉之前先存一份在这里。来源两处:
+  /// 已归档会话的摘要。活动列表(listStore)把它们滤掉了,但会话抽屉的「筛选会话」
+  /// 切到显示已归档时要把它们画回列表 —— 所以滤掉之前先存一份在这里。来源两处:
   /// session/list 的全量回包(宿主照样返回归档行),以及归档那一刻从 listStore
   /// 挪出来的行。
   const archivedSummaries = new Map();
@@ -508,8 +508,8 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
     /// 权威归档集合,按归档先后(宿主注册表的写入顺序)。
     archivedSessionIds() { return [...archivedSessionIds]; },
 
-    /// 归档集合里仍有摘要可寻址的会话,最近归档的在前(对齐 Mac ArchivedSessionsView.rows:
-    /// 摘要已不存在的成员直接跳过,不留一个点不动的取消归档按钮)。
+    /// 归档集合里仍有摘要可寻址的会话,最近归档的在前(摘要已不存在的成员直接跳过,
+    /// 不留一个点不动的取消归档按钮)。
     archivedItems() {
       return [...archivedSessionIds].reverse()
         .map((id) => archivedSummaries.get(id))

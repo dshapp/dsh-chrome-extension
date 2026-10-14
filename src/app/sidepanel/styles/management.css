@@ -18,7 +18,5 @@ body.management-open #jobs-btn { display: none !important; }
 .history-navigation-btn svg { flex: none; }
 .history-navigation-btn:hover, .history-navigation-btn.active { color: var(--text); background: var(--border-soft); }
 #history-settings-btn { flex: none; margin: 0; padding: 10px 14px; border-top: 1px solid var(--border-soft); border-radius: 0; }
-#session-drawer.archived-mode > #history-navigation,
-#session-drawer.archived-mode > #history-settings-btn { display: none; }
 .management-page .set-section { max-width: 100%; }
 @media (max-width: 420px) { .management-page { padding: 10px; } }

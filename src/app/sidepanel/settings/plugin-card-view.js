@@ -8,7 +8,7 @@
 // allowedModels),两段共用同一个页脚 —— 任一脏就整体可保存(Mac 的 dirty/valid)。
 import { t } from "../../../shared/i18n.js";
 import {
-  stackedRow, row, textInput, toggle, tag, notice, escapeHtml, formFooter, selectorEscape
+  stackedRow, row, textInput, secretInput, bindSecretToggles, toggle, tag, notice, escapeHtml, formFooter, selectorEscape
 } from "./settings-ui.js";
 import { createPluginSettingsState } from "../../../features/settings/plugin-settings-state.js";
 import { credentialRef } from "./plugin-config-cards.js";
@@ -111,10 +111,9 @@ export function createPluginCardViews({
     return stackedRow({
       label: escapeHtml(t(spec.label)) + status + `<span class="set-mono">${escapeHtml(ref)}</span>`,
       hint: locked ? t("plug.apiKeyLocked") : t(spec.hint),
-      control: textInput({
+      control: secretInput({
         id: `plug-cred-${card.namespace}`,
         value: draft,
-        type: "password",
         placeholder: current?.configured ? "••••••••" : "",
         disabled: form?.writable !== true || locked
       }) + `<button class="set-link" type="button" id="plug-cred-save-${card.namespace}"`
@@ -260,6 +259,8 @@ export function createPluginCardViews({
     const ref = credentialRef(card, namespaceOf(card.namespace)?.value);
     const draftKey = `cred:${card.namespace}`;
     const input = host.querySelector(`#plug-cred-${selectorEscape(card.namespace)}`);
+    const wrap = input?.closest(".set-secret");
+    if (wrap) bindSecretToggles(wrap.parentElement);
     input?.addEventListener("input", (event) => {
       credentialCache.drafts.set(draftKey, event.target.value);
       const save = host.querySelector(`#plug-cred-save-${selectorEscape(card.namespace)}`);

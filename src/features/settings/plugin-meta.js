@@ -36,6 +36,29 @@ export function bundleText(bundle) {
   };
 }
 
+/// 设置页「内置插件」里的紧凑技术名(web PluginInventorySettingsTab.moduleShortName):
+/// 去掉 scope,再去掉 cordis: / cordis-plugin- / dsh-[host-|client-] 前缀。只改显示,
+/// 模块身份(完整名称)在卡片详情里照原样给出。
+export function inventoryShortName(moduleName) {
+  const raw = String(moduleName ?? "");
+  const unscoped = raw.startsWith("@") ? raw.slice(raw.indexOf("/") + 1) : raw;
+  return unscoped
+    .replace(/^cordis:/, "")
+    .replace(/^cordis-plugin-/, "")
+    .replace(/^dsh-(?:host-|client-)?/, "");
+}
+
+/// 「内置插件」卡片的标题与说明(web pluginText):真译文原样显示,字面标题或缺省
+/// 压成 inventoryShortName;说明为空串时当作没有。
+export function inventoryText(row) {
+  const title = row?.meta?.title;
+  const description = row?.meta?.description === undefined ? "" : resolveLocalizedText(row.meta.description);
+  return {
+    title: title && typeof title === "object" ? resolveLocalizedText(title) : inventoryShortName(title ?? row?.moduleName),
+    description: description || ""
+  };
+}
+
 /// 插件清单条目(及 preset 行)的标题与说明。对齐 web PluginInventorySettingsTab.pluginText:
 /// 真译文原样显示;字面标题(宿主拿包名填的)与缺省一样压成短名。
 export function entryText(entry) {

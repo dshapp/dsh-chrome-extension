@@ -11,7 +11,7 @@
 // - 只有 llm-pi-ai 显示「获取可用模型」—— 宿主只为它注册了模型发现。
 import { t } from "../../../shared/i18n.js";
 import {
-  stackedRow, textInput, select, button, notice, escapeHtml
+  stackedRow, textInput, secretInput, bindSecretToggles, select, button, notice, tag, escapeHtml
 } from "./settings-ui.js";
 import {
   jsonValueAt, jsonPathExists, profilePathOps, deriveKeyRef, apiKeyFailure,
@@ -68,6 +68,7 @@ export function openProviderEditor({
   const keyRef = () => stringAt(userDraft, "apiKeyEnv") ?? stringAt(effective, "apiKeyEnv")
     ?? deriveKeyRef(entry.provider);
   let keyDraft = "";
+  let keyRevealed = false;
   let message = null;
   let saving = false;
 
@@ -152,6 +153,19 @@ export function openProviderEditor({
       && !catalogFailureText() && !keyFailureText();
   }
 
+  /// 用户层已有的自定义项数量(地址 / 显示名 / 协议 / 模型目录)。折叠标题上
+  /// 给出这个数,用户不展开也知道这里是不是改过。
+  function customizedCount() {
+    return ["baseURL", "displayName", "api", "models"].filter((key) => jsonPathExists(userDraft, [key])).length;
+  }
+
+  // 只在首次绘制时根据是否已有自定义项决定展开;之后尊重用户的手动开合。
+  let detailsOpen = null;
+  function customizedOpen() {
+    if (detailsOpen === null) detailsOpen = customizedCount() > 0;
+    return detailsOpen;
+  }
+
   function placeholderNames() {
     if (layout === "pi-ai" && declared) return ["displayName", "api"];
     return [];
@@ -167,11 +181,16 @@ export function openProviderEditor({
         + (catalogFailureText() ? notice(catalogFailureText()) : "")
         + (message ? notice(message) : "");
     }
+    // 标题旁的状态胶囊:打开编辑器第一眼就知道密钥在不在,不用读灰色的说明行。
+    const keyStatus = keyCredential?.configured
+      ? tag(t("prov.keyConfiguredShort"), "ok")
+      : keyCredential ? tag(t("prov.keyMissingShort"), "warn") : "";
     const keyRow = stackedRow({
-      label: escapeHtml(t("prov.apiKey")),
-      control: textInput({
-        id: "prov-key", value: keyDraft, type: "password",
-        placeholder: keyCredential?.configured ? "••••••••" : "", disabled: locked
+      label: escapeHtml(t("prov.apiKey")) + keyStatus,
+      control: secretInput({
+        id: "prov-key", value: keyDraft, revealed: keyRevealed,
+        placeholder: keyCredential?.configured ? t("prov.keyKeepPlaceholder") : t("prov.keyPastePlaceholder"),
+        disabled: locked
       }),
       hint: escapeHtml(locked ? t("prov.keyLockedFooter")
         : keyCredential?.configured ? t("prov.keyStoredFooter")
@@ -217,7 +236,8 @@ export function openProviderEditor({
       })
       + editor.html();
     return keyRow
-      + '<details class="set-details"><summary>' + escapeHtml(t("prov.customized")) + "</summary>"
+      + '<details class="set-details"' + (customizedOpen() ? " open" : "") + '><summary>' + escapeHtml(t("prov.customized"))
+      + (customizedCount() ? tag(t("prov.customizedCount", { count: customizedCount() })) : "") + "</summary>"
       + '<div class="set-details-body">' + detailBody + "</div></details>"
       + (catalogFailureText() ? notice(catalogFailureText()) : "")
       + (message ? notice(message) : "");
@@ -272,6 +292,16 @@ export function openProviderEditor({
       else delete userDraft.api;
       repaintSoft();
     });
+    // 单行字段里按 Enter 直接保存(可保存时),与原生表单的提交手感一致。
+    for (const field of root.querySelectorAll("#prov-key, #prov-baseurl, #prov-displayname")) {
+      field.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.isComposing || !canSave()) return;
+        event.preventDefault();
+        void commit();
+      });
+    }
+    bindSecretToggles(root, (_id, revealed) => { keyRevealed = revealed; });
+    root.querySelector(".set-details")?.addEventListener("toggle", (event) => { detailsOpen = event.target.open; });
     root.querySelector("#prov-cancel")?.addEventListener("click", () => sheet.close(sheetToken));
     root.querySelector("#prov-save")?.addEventListener("click", () => { void commit(); });
     editor.bind(root);

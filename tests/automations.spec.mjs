@@ -184,7 +184,7 @@ test("page is lazy, supports search/filter, new callback and safe text rendering
   assert.equal(h.conn.calls.length, 0); assert.equal(h.conn.listeners.size, 0); h.page.setVisible(true); await flush();
   assert.equal(h.host.querySelectorAll(".automations-row").length, 2); assert.equal(h.host.querySelector("img"), null);
   const search = input(h.host, "search", "needle"); assert.equal(h.host.querySelectorAll(".automations-row").length, 1);
-  input(h.host, "search", ""); const filter = h.host.querySelector('[data-field="filter"]'); filter.value = "inactive"; filter.dispatchEvent(new h.dom.window.Event("change")); assert.equal(h.host.querySelectorAll(".automations-row").length, 1);
+  input(h.host, "search", ""); h.host.querySelector('[data-filter="inactive"]').click(); assert.equal(h.host.querySelectorAll(".automations-row").length, 1); assert.equal(h.host.querySelector('[data-filter="inactive"]').getAttribute("aria-checked"), "true");
   clickText(h.host, "automationsNew"); assert.equal(h.created, 1); assert.equal(h.conn.calls.some(c => c.method.includes("create")), false);
   h.page.setVisible(false); assert.equal(h.conn.listeners.size, 0); h.page.setVisible(true); await flush(); assert.equal(h.conn.listeners.size, 1); h.close(); assert.equal(h.conn.listeners.size, 0);
 });
@@ -280,4 +280,39 @@ test("automation translations cover every page/model message key in both languag
       assert.ok(AUTOMATION_MESSAGES.en[key], key); assert.ok(AUTOMATION_MESSAGES.zh[key], key);
     }
   }
+});
+
+test("rule summaries read naturally for every kind", async () => {
+  const { scheduleSummary, intervalText, draftSummary } = await import("../src/features/automations/automation-format.js");
+  const { setLang } = await import("../src/shared/i18n.js");
+  setLang("zh");
+  assert.equal(intervalText(600), "10 分钟"); assert.equal(intervalText(7200), "2 小时"); assert.equal(intervalText(86400), "1 天"); assert.equal(intervalText(90), "90 秒");
+  assert.equal(scheduleSummary({ kind: "every", everySeconds: 600 }), "每 10 分钟");
+  assert.match(scheduleSummary({ kind: "daily", time: "09:00:00.000", timeZone: "Asia/Shanghai" }), /^每天 09:00/);
+  assert.match(scheduleSummary({ kind: "weekly", time: "10:00:00.000", weekdays: [1, 2, 3, 4, 5], timeZone: "Asia/Shanghai" }), /^工作日 10:00/);
+  assert.match(scheduleSummary({ kind: "weekly", time: "08:30:00.000", weekdays: [6, 7], timeZone: "Asia/Shanghai" }), /^周末 08:30/);
+  assert.match(scheduleSummary({ kind: "cron", expression: "0 9 * * 1-5", timeZone: "UTC" }), /^Cron 0 9 \* \* 1-5/);
+  assert.match(draftSummary({ kind: "once", date: "2030-10-14", time: "09:30", timeZone: "UTC" }), /2030-10-14 09:30/);
+  setLang("en");
+  assert.match(scheduleSummary({ kind: "weekly", time: "10:00:00.000", weekdays: [1, 3], timeZone: "UTC" }), /^Mon, Wed at 10:00/);
+  setLang("zh");
+});
+
+test("dirty drafts are protected: switching rows or Escape keeps the draft, Ctrl+S saves", async () => {
+  const updates = [];
+  const second = catalogEntry(2, { id: "schedule-2", title: "Second" });
+  const h = pageHarness((method, args) => { if (method === "schedule/update") { updates.push(args.request); return { id: base.id, updated: true, record: { ...records[3], title: args.request.title } }; } return [catalogEntry(), second]; });
+  h.page.setVisible(true); await flush();
+  h.host.querySelector('[data-task-id="schedule-1"]').click();
+  input(h.host, "title", "Draft title");
+  h.host.querySelector('[data-task-id="schedule-2"]').click();
+  assert.equal(h.host.querySelector('[data-field="title"]').value, "Draft title", "switching rows must not discard the draft");
+  assert.equal(h.notices.at(-1), t("automationsUnsavedBlock"));
+  h.host.querySelector('[data-field="title"]').dispatchEvent(new h.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.ok(h.host.querySelector(".automations-detail"), "Escape must not close a dirty detail");
+  h.host.querySelector('[data-field="title"]').dispatchEvent(new h.dom.window.KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+  await flush();
+  assert.equal(updates.length, 1); assert.equal(updates[0].title, "Draft title");
+  assert.ok(h.host.querySelector(".automations-row-rule").textContent.length > 0, "rows show a readable rule summary");
+  h.close();
 });

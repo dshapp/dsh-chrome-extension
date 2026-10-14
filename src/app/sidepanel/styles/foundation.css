@@ -560,6 +560,14 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 .h-actions button { padding: 3px; }
 .h-actions button:hover { color: var(--text); background: var(--bg-raised); }
 .history-empty { color: var(--text-faint); text-align: center; padding: 20px 0; font-size: 13px; }
+/* 「仅显示已归档」空态里回到默认筛选的那条链接(Mac SidebarEmptyRow 的 .link 按钮)。 */
+.history-empty-link {
+  background: none; border: none; padding: 0; margin-left: 4px;
+  color: var(--accent); font: inherit; cursor: pointer;
+}
+.history-empty-link:hover { text-decoration: underline; }
+/* 「筛选会话」带出来的已归档行:只把标题调暗(Mac SessionRow 的 .tertiary)。 */
+.history-item.archived .h-title { color: var(--text-faint); }
 /* 截断提示(搜索 hasMore / 单列表溢出):次要脚注,与行标题同一起点。 */
 .history-more { color: var(--text-faint); padding: 8px 10px; font-size: 12px; }
 /* 列表加载态:三点 wave 复用 conversation.css 的 .typing-dots,这里只有行内布局。 */
@@ -617,91 +625,3 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* ── 已归档会话(archived-sessions-view.js)── */
-/* 入口钉在抽屉最底部、不随列表滚动(Mac ArchivedSessionsButton):归档行被会话
-   列表滤掉了,这里是它们唯一的入口。 */
-#history-archived-btn {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 9px 14px;
-  border: none;
-  border-top: 1px solid var(--border-soft);
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-}
-#history-archived-btn:hover { background: var(--border-soft); color: var(--text); }
-#history-archived-btn svg { flex: none; }
-/* 归档页替换掉会话列表的那一整块(搜索行、列表、底部入口)。 */
-#session-drawer.archived-mode > #history-search-wrap,
-#session-drawer.archived-mode > #history-list-inner,
-#session-drawer.archived-mode > #history-archived-btn { display: none; }
-#archived-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#archived-pane[hidden] { display: none; }
-#archived-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 10px 10px 4px 6px;
-  font-size: 13px;
-  font-weight: 600;
-}
-#archived-back { padding: 4px; }
-#archived-search-wrap { flex: none; padding: 4px 12px 8px; border-bottom: 1px solid var(--border-soft); }
-#archived-search {
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 8px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  outline: none;
-}
-#archived-search:focus { border-color: var(--text-faint); }
-#archived-list {
-  list-style: none;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden auto;
-  margin: 0;
-  padding: 4px 6px 8px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-.archived-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px 7px 10px;
-  border-radius: 8px;
-}
-.archived-item:hover { background: var(--border-soft); }
-.archived-item.is-busy { opacity: 0.6; }
-.archived-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.archived-name, .archived-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.archived-name { font-size: 13px; }
-.archived-meta { font-size: 11px; color: var(--text-faint); }
-.archived-restore {
-  flex: none;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.archived-restore:hover:not(:disabled) { color: var(--text); background: var(--bg-raised); }
-.archived-restore:disabled { cursor: default; }

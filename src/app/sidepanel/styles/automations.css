@@ -1,48 +1,194 @@
 /* Scoped management page; shell header and style import are parent-owned. */
 .automations-page { height: 100%; min-height: 0; color: var(--text); container-type: inline-size; }
+/* The management page wrapper already pads 16px; the split layout bleeds into it so
+   the list and detail own their own gutters and scroll independently. */
+.management-page[data-page="automations"] { padding: 0; height: 100%; }
 .automations-layout { height: 100%; display: flex; min-width: 0; min-height: 0; }
-.automations-list-pane { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; }
-.automations-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px; border-bottom: 1px solid var(--border-soft); }
-.automations-search { flex: 1 0 100%; min-width: 0; }
-.automations-search, .automations-filter, .automations-input { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius, 8px); padding: 8px 10px; }
-.automations-filter { flex: 1; min-width: 90px; }
-.automations-button { font: inherit; font-size: 12px; color: var(--text); border: 1px solid var(--border); background: var(--bg-raised); border-radius: var(--radius, 8px); padding: 7px 10px; cursor: pointer; }
-.automations-button:hover:not(:disabled) { background: var(--bg-input); }
-.automations-button.is-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-.automations-button.is-danger { color: var(--danger); }
-.automations-button:disabled, .automations-input:disabled { opacity: .55; cursor: default; }
-.automations-button:focus-visible, .automations-row:focus-visible, .automations-input:focus-visible, .automations-search:focus-visible, .automations-filter:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
-.automations-list { overflow-y: auto; padding: 8px; min-height: 0; flex: 1; }
-.automations-row { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 12px; border: 1px solid transparent; border-radius: var(--radius, 8px); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.automations-row:hover, .automations-row.is-selected { background: var(--bg-raised); }
-.automations-row.is-selected { border-color: var(--border); }
-.automations-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
-.automations-row-summary { display: flex; flex-wrap: wrap; gap: 6px 10px; color: var(--text-dim); font-size: 11px; }
-.automations-status.active { color: var(--ok); }
-.automations-detail { flex: 1 1 380px; width: 50%; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg); }
-.automations-detail-header { display: flex; gap: 6px; padding: 12px; border-bottom: 1px solid var(--border); }
-.automations-detail-header button:last-child { margin-left: auto; }
-.automations-detail-header button[aria-pressed="true"] { border-color: var(--text-dim); }
-.automations-detail-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
-.automations-detail-title { font-size: 16px; margin-bottom: 12px; overflow-wrap: anywhere; }
-.automations-field { display: flex; flex-direction: column; gap: 6px; margin: 16px 0; font-size: 12px; }
-.automations-field > span { color: var(--text-dim); }
-.automations-input { width: 100%; min-width: 0; }
-textarea.automations-input { min-height: 110px; resize: vertical; line-height: 1.5; }
-.automations-notice { margin: 10px 0; color: var(--text-dim); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.automations-icon { display: inline-flex; flex-shrink: 0; align-items: center; }
+.automations-icon svg { display: block; }
+
+/* ── List pane ── */
+.automations-list-pane { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.automations-toolbar { display: flex; flex-direction: column; gap: 10px; padding: 14px 14px 10px; }
+.automations-toolbar-top { display: flex; gap: 8px; align-items: center; }
+.automations-search-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.automations-search-wrap > .automations-icon { position: absolute; left: 10px; color: var(--text-faint); pointer-events: none; }
+.automations-search {
+  width: 100%; min-width: 0; font: inherit; font-size: 12.5px; color: var(--text);
+  background: var(--border-soft); border: 1px solid transparent; border-radius: 999px; padding: 7px 30px;
+}
+.automations-search::-webkit-search-cancel-button { display: none; }
+.automations-search:focus { outline: none; background: var(--bg); border-color: var(--text-faint); }
+.automations-search-clear {
+  position: absolute; right: 6px; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border: 0; border-radius: 50%; background: transparent; color: var(--text-faint); cursor: pointer;
+}
+.automations-search-clear:hover { background: var(--border); color: var(--text); }
+
+.automations-segmented { display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: 8px; background: var(--border-soft); max-width: 100%; }
+.automations-segment {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.automations-segment:hover { color: var(--text); }
+.automations-segment.is-active { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+.automations-segment-count { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+.automations-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex-shrink: 0;
+  font: inherit; font-size: 12.5px; color: var(--text); border: 1px solid var(--border); background: var(--bg);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer; white-space: nowrap;
+}
+.automations-button:hover:not(:disabled) { background: var(--border-soft); }
+.automations-button.is-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.automations-button.is-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.automations-button.is-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.automations-button.is-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.automations-button.is-danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.automations-button.is-small { padding: 3px 9px; font-size: 12px; }
+.automations-button.is-block { width: 100%; margin-top: 4px; }
+.automations-button:disabled, .automations-input:disabled { opacity: .5; cursor: default; }
+.automations-icon-button {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--text-dim); cursor: pointer;
+}
+.automations-icon-button.is-small { width: 22px; height: 22px; }
+.automations-icon-button:hover { background: var(--border-soft); color: var(--text); }
+.automations-button:focus-visible, .automations-row:focus-visible, .automations-input:focus-visible, .automations-segment:focus-visible,
+.automations-icon-button:focus-visible, .automations-tab:focus-visible, .automations-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.automations-list { overflow-y: auto; padding: 2px 8px 12px; min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.automations-row {
+  position: relative; display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 10px 12px;
+  border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.automations-row:hover { background: var(--border-soft); }
+.automations-row.is-selected { background: var(--bg-input); border-color: var(--border); }
+.automations-row.is-ended .automations-row-title { color: var(--text-dim); }
+.automations-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.automations-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
+.automations-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.automations-dot.active { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+.automations-row-summary { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 15px; color: var(--text-dim); font-size: 12px; }
+.automations-row-rule { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.automations-row-next { margin-left: auto; flex-shrink: 0; color: var(--text-faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.automations-row-prompt { padding-left: 15px; color: var(--text-faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.automations-time.is-overdue { color: var(--warn); }
+
+.automations-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 12.5px; line-height: 1.6; }
+.automations-empty .automations-icon { width: 44px; height: 44px; justify-content: center; border-radius: 12px; background: var(--border-soft); color: var(--text-dim); }
+.automations-skeleton { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px; }
+.automations-skeleton-row { height: 58px; border-radius: 10px; background: linear-gradient(90deg, var(--border-soft), var(--bg-input), var(--border-soft)); background-size: 200% 100%; animation: automations-shimmer 1.4s ease-in-out infinite; }
+@keyframes automations-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.automations-inline-error { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 14px 8px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.automations-inline-error .automations-notice { margin: 0; flex: 1; min-width: 160px; }
+
+/* ── Detail pane ── */
+.automations-detail { flex: 1 1 380px; width: 50%; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border-soft); background: var(--bg); min-height: 0; }
+.automations-detail-header { display: flex; align-items: center; gap: 6px; padding: 12px 14px 6px 8px; }
+.automations-detail-heading { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.automations-detail-title { font-size: 15px; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.automations-status { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 2px 8px; border-radius: 999px; font-size: 11px; color: var(--text-faint); background: var(--border-soft); }
+.automations-status > i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.automations-status.active { color: var(--ok); background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.automations-tabs { display: flex; gap: 18px; padding: 0 16px; border-bottom: 1px solid var(--border-soft); }
+.automations-tab {
+  position: relative; padding: 8px 0 9px; border: 0; background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.automations-tab:hover { color: var(--text); }
+.automations-tab.is-active { color: var(--text); font-weight: 600; }
+.automations-tab.is-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+.automations-detail-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+.automations-overview { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); }
+.automations-overview-rule { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.automations-overview-next, .automations-overview-session { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; }
+.automations-overview-label { flex-shrink: 0; width: 64px; color: var(--text-faint); font-size: 12px; }
+.automations-relative { color: var(--text-faint); font-size: 11.5px; }
+.automations-relative::before { content: "· "; }
+.automations-session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.automations-overview .automations-notice { margin: 0; }
+
+.automations-group { display: flex; flex-direction: column; gap: 12px; }
+.automations-group-title { font-size: 11.5px; font-weight: 600; color: var(--text-faint); letter-spacing: .02em; }
+.automations-field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; font-size: 12px; }
+.automations-field-label { color: var(--text-dim); font-size: 12px; }
+.automations-field-hint { color: var(--text-faint); font-size: 11.5px; }
+.automations-field-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.automations-field-row > .automations-field { flex: 1 1 140px; }
+.automations-input { width: 100%; min-width: 0; font: inherit; font-size: 13px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.automations-input:focus { outline: none; border-color: var(--text-faint); }
+.automations-input.is-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+textarea.automations-input { min-height: 96px; resize: vertical; line-height: 1.55; }
+.automations-notice { margin: 0; color: var(--text-dim); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .automations-notice.is-error { color: var(--danger); }
-.automations-next { font-size: 12px; line-height: 1.6; color: var(--text-dim); }
-.automations-weekdays { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius, 8px); font-size: 12px; }
-.automations-weekdays legend { color: var(--text-dim); }
-.automations-weekdays label { display: inline-flex; gap: 4px; align-items: center; }
-.automations-task-id, .automations-receipt-id { font-size: 11px; color: var(--text-faint); margin: 14px 0; overflow-wrap: anywhere; }
-.automations-save-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--border); padding: 12px; background: var(--bg-raised); font-size: 12px; }
-.automations-save-bar > span { margin-right: auto; color: var(--text-dim); }
-.automations-delete-confirm { padding: 12px; border: 1px solid var(--danger); border-radius: var(--radius, 8px); font-size: 12px; }
-.automations-delete-confirm button { margin-right: 8px; }
-.automations-delivery { border: 1px solid var(--border); border-radius: var(--radius, 8px); background: var(--bg-raised); padding: 12px; margin: 12px 0; font-size: 11px; line-height: 1.6; }
-.automations-delivered-prompt { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; user-select: text; color: var(--text); }
+.automations-link { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--link); font: inherit; font-size: 12px; cursor: pointer; }
+.automations-link:hover { text-decoration: underline; }
+
+.automations-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.automations-chip {
+  padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent;
+  color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer;
+}
+.automations-chip:hover:not(:disabled) { color: var(--text); border-color: var(--text-faint); }
+.automations-chip.is-active { color: var(--text); border-color: var(--accent); background: var(--border-soft); }
+.automations-chip:disabled { opacity: .5; cursor: default; }
+
+.automations-weekdays { display: flex; flex-direction: column; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.automations-weekdays legend { margin-bottom: 6px; }
+.automations-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.automations-day { position: relative; display: flex; }
+.automations-day input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.automations-day span {
+  flex: 1; padding: 6px 0; text-align: center; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-dim); font-size: 12px; user-select: none; transition: background .12s, color .12s;
+}
+.automations-day:hover span { border-color: var(--text-faint); }
+.automations-day input:checked + span { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.automations-day input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.automations-weekdays:disabled .automations-day { opacity: .55; }
+.automations-preview { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
+.automations-preview:empty { display: none; }
+.automations-preview .automations-icon { margin-top: 3px; }
+.automations-rule-feedback:empty { display: none; }
+
+.automations-detail-footer { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+.automations-task-id { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11.5px; color: var(--text-faint); }
+.automations-task-id code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.automations-danger { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.automations-delete-confirm { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid color-mix(in srgb, var(--danger) 60%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--danger) 6%, transparent); font-size: 12.5px; }
+.automations-delete-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.automations-save-bar { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding: 10px 14px; background: var(--bg-raised); font-size: 12px; }
+.automations-save-label { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; color: var(--text-dim); min-width: 0; }
+.automations-save-label > i { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
+.automations-save-bar.is-attention { animation: automations-attention .6s ease; }
+@keyframes automations-attention { 0%, 100% { translate: 0; } 25% { translate: -4px 0; } 75% { translate: 4px 0; } }
+
+/* ── Delivery history ── */
+.automations-history-info { display: flex; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--border-soft); color: var(--text-dim); }
+.automations-history-info .automations-icon { margin-top: 3px; }
+.automations-history-info > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.automations-timeline { display: flex; flex-direction: column; gap: 10px; }
+.automations-timeline:empty { display: none; }
+.automations-delivery { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-input); padding: 10px 12px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 6px; }
+.automations-delivery-head { display: flex; align-items: center; gap: 6px; color: var(--ok); }
+.automations-delivery-head strong { font-weight: 600; }
+.automations-delivery-head .automations-relative { margin-left: auto; }
+.automations-delivery-head .automations-relative::before { content: none; }
+.automations-delivery-meta { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; color: var(--text-dim); }
+.automations-delivery-meta dt { color: var(--text-faint); }
+.automations-delivery-meta dd { margin: 0; font-variant-numeric: tabular-nums; }
+.automations-delivered-prompt { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; user-select: text; color: var(--text); max-height: 160px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border-soft); }
+.automations-receipt-id { font-size: 11px; color: var(--text-faint); overflow-wrap: anywhere; }
+
 @container (max-width: 640px) {
   .automations-layout.has-detail .automations-list-pane { display: none; }
   .automations-detail { width: 100%; flex-basis: 100%; border-left: 0; }
+}
+@container (min-width: 641px) {
+  /* Side-by-side: the list pane is a fixed sidebar, the back arrow is redundant-looking but still closes the detail. */
+  .automations-layout.has-detail .automations-list-pane { flex: 0 0 clamp(260px, 38%, 380px); }
 }

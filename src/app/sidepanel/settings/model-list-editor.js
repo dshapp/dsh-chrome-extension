@@ -217,8 +217,8 @@ export function createModelCatalogEditor({ context, discover, requestRender, for
       + '<div class="set-section-body">'
       + (state.candidates ? pickerHtml() : "")
       + (rowsHtml || '<div class="set-row-hint mle-empty">' + escapeHtml(t("cat.emptyFooter")) + "</div>")
-      + '<div class="cat-actions"><button class="set-btn" type="button" id="mle-add"' + (ctx.disabled ? " disabled" : "") + ">"
-      + lucideIconSvg("plus", { size: 13 }) + " " + escapeHtml(t("cat.add")) + "</button></div>"
+      + '<div class="cat-actions"><button class="set-btn with-icon" type="button" id="mle-add"' + (ctx.disabled ? " disabled" : "") + ">"
+      + lucideIconSvg("plus", { size: 13 }) + "<span>" + escapeHtml(t("cat.add")) + "</span></button></div>"
       + (state.failure ? notice(state.failure) : "")
       + '<div class="set-section-footer">' + escapeHtml(t("cat.footer")) + "</div>"
       + "</div></section>";

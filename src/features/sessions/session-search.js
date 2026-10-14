@@ -1,5 +1,6 @@
 // 侧栏会话搜索的纯派生,逐条对齐 web deriveSearchResults
 // (deepseek-harness packages/client/ui-workspace/src/client/tree.ts)。
+import { ArchivedFilter, archivedVisible } from "./sidebar-sections.js";
 
 /// session/search 响应的条数上限(web SESSION_SEARCH_RESULT_LIMIT)。
 export const SEARCH_RESULT_LIMIT = 20;
@@ -25,18 +26,22 @@ export function normalizeSearchQuery(value) {
 
 /**
  * 本地命中(显示标题或工作区标签包含查询)按 updatedAt 新到旧领先,宿主内容命中按后端
- * 顺序接在后面;两臂都滤掉空白、子代理与已归档会话,宿主命中还必须在名册里,按
- * sessionId 去重后截到 limit。
+ * 顺序接在后面;两臂都滤掉空白与子代理,已归档会话按侧栏同一个「筛选会话」取舍
+ *(Mac deriveSessionSearchResults 的 archivedFilter),宿主命中还必须在名册里,按
+ * sessionId 去重后截到 limit。归档命中带 archived:true。
  *
  * @param {object} options
  * @param {Array} options.sessions 名册(listStore 的会话摘要)。
  * @param {Array} options.workspaces 宿主 workspace(sessionIds / title / path)。
  * @param {Array<string>} options.archivedIds 已归档会话。
+ * @param {string} [options.archivedFilter] ArchivedFilter 之一,默认隐藏归档。
  * @param {string} options.query normalizeSearchQuery 之后的非空查询。
  * @param {{items: Array, hasMore: boolean}} options.remote 当前查询的宿主结果页。
  * @returns {{items: Array, hasMore: boolean}}
  */
-export function deriveSearchResults({ sessions, workspaces, archivedIds, query, remote, limit = SEARCH_RESULT_LIMIT }) {
+export function deriveSearchResults({
+  sessions, workspaces, archivedIds, archivedFilter = ArchivedFilter.hide, query, remote, limit = SEARCH_RESULT_LIMIT
+}) {
   const q = query.toLowerCase();
   const archived = new Set(archivedIds ?? []);
   const workspaceBySession = new Map();
@@ -46,7 +51,8 @@ export function deriveSearchResults({ sessions, workspaces, archivedIds, query, 
       if (!workspaceBySession.has(id)) workspaceBySession.set(id, label);
     }
   }
-  const visible = (item) => item && !item.blank && item.origin !== "subagent" && !archived.has(item.sessionId);
+  const visible = (item) => item && !item.blank && item.origin !== "subagent"
+    && archivedVisible(archived.has(item.sessionId), archivedFilter);
   const label = (item) => workspaceBySession.get(item.sessionId) ?? basename(item.cwd);
 
   const byId = new Map();
@@ -63,7 +69,7 @@ export function deriveSearchResults({ sessions, workspaces, archivedIds, query, 
   const include = (item) => {
     if (included.has(item.sessionId)) return;
     included.add(item.sessionId);
-    ordered.push(item);
+    ordered.push(archived.has(item.sessionId) && !item.archived ? { ...item, archived: true } : item);
   };
   for (const item of local) include(item);
   for (const hit of remote?.items ?? []) {

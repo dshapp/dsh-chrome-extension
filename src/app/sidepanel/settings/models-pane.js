@@ -4,7 +4,7 @@
 // custom-provider-sheet(声明新的)。
 import { t } from "../../../shared/i18n.js";
 import {
-  section, row, textInput, button, iconButton,
+  section, row, button, iconButton, searchField, avatar, chevron, groupHeader, bindClickableRows,
   tag, iconStatusLine, notice, spinner, escapeHtml, selectorEscape, providerDisplayName
 } from "./settings-ui.js";
 import { providerKeyState, addableProviders, deriveKeyRef } from "../../../features/settings/settings-service.js";
@@ -22,11 +22,28 @@ const KEY_STATE_KIND = { configured: "ok", notRequired: "muted", missing: "warn"
 // 比一个 6px 的圆点更容易在缩进的行里扫到。
 const KEY_STATE_ICON = { configured: "check", notRequired: "minus", missing: "triangle-alert" };
 
+// 添加提供方的标签云:常用提供方排最前,未搜索时只露出前 COLLAPSED_LIMIT 个 ——
+// 四十多个裸路由 id 一次铺满,真正想找的那个反而淹没在里面。
+const FEATURED_PROVIDERS = [
+  "openai", "anthropic", "google", "openrouter", "deepseek", "moonshotai", "xai",
+  "mistral", "groq", "zai", "minimax", "azure", "amazon-bedrock", "github-copilot"
+];
+const COLLAPSED_LIMIT = 12;
+
+function featuredOrder(entries) {
+  const rank = (entry) => {
+    const index = FEATURED_PROVIDERS.indexOf(entry.provider);
+    return index < 0 ? FEATURED_PROVIDERS.length : index;
+  };
+  return [...entries].sort((a, b) => rank(a) - rank(b));
+}
+
 export function createModelsPane({ host, sheet, deps, settingsService, showToast, onModelsChanged }) {
   let state = null;
   let loadError = null;
   let loading = true;
   let addSearch = "";
+  let showAllProviders = false;
   let savedProviderName = null;
   let loadGeneration = 0;
   let providerEditor = null;
@@ -47,10 +64,11 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     // Mac 的整行本体就是那个按钮,雪佛龙只是装饰符号;删除是行内唯一的独立控件,
     // 所以点击处理器挂在行上,删除按钮自己 stopPropagation。
     const trailing = (entry.removable
-      ? iconButton({ id: `prov-del-${entry.entry.provider}`, icon: "trash-2", title: t("prov.remove"), kind: "danger" })
+      ? iconButton({ id: `prov-del-${entry.entry.provider}`, icon: "trash-2", title: t("prov.remove"), kind: "danger reveal" })
       : "")
-      + `<span class="set-chevron" aria-hidden="true">${lucideIconSvg("chevron-right", { size: 14 })}</span>`;
+      + chevron();
     return row({
+      leading: avatar(name),
       label,
       // 账号路由没有"密钥"概念,不渲染状态行(对齐 web 无凭据圆点)。
       hint: keyState
@@ -58,7 +76,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
         : "",
       control: trailing,
       id: `prov-row-${entry.entry.provider}`
-    }).replace('<div class="set-row"', `<div class="set-row clickable" role="button" aria-label="${escapeHtml(name)}"`);
+    }).replace('<div class="set-row"', `<div class="set-row clickable" role="button" tabindex="0" aria-label="${escapeHtml(name)}"`);
   }
 
   function renderProviderSection() {
@@ -72,42 +90,62 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
       savedProviderName ? `<span class="set-ok">${escapeHtml(t("prov.saved", { name: savedProviderName }))}</span>` : "",
       state?.credentialError ? `<span class="set-warn">${escapeHtml(state.credentialError)}</span>` : ""
     ].filter(Boolean).join("<br />");
-    return section({ header: t("set.tab.models"), body, footer });
+    return section({ headerHtml: groupHeader(t("prov.configuredTitle"), rows.length), body, footer });
   }
 
-  /// 添加提供方:扁平标签云 + 搜索框。自定义提供方标签永远排第一且不参与过滤。
-  /// 搜索语义全部由 placeholder 承担 —— 不再另挂一个标题行或图标,那既占宽度
-  /// 又和 placeholder 重复。
-  function renderAddSection() {
+  /// 添加提供方:搜索框 + 「自定义提供方」入口 + 标签云。
+  /// 自定义提供方是一整行入口(而不是混在标签云里的第一个标签),它和其余
+  /// 标签不是同一类动作:前者要填地址与协议,后者只差一把密钥。
+  function addCandidates() {
     const needle = addSearch.trim().toLowerCase();
-    const candidates = addableProviders(state?.rows ?? []).filter((entry) => (
+    const all = addableProviders(state?.rows ?? []);
+    const matches = featuredOrder(all.filter((entry) => (
       !needle
       || (entry.displayName ?? "").toLowerCase().includes(needle)
       || entry.provider.toLowerCase().includes(needle)
-    ));
+    )));
+    return { all, matches, needle };
+  }
+
+  function renderChips() {
+    const { matches, needle } = addCandidates();
+    const collapsed = !needle && !showAllProviders && matches.length > COLLAPSED_LIMIT;
+    const visible = collapsed ? matches.slice(0, COLLAPSED_LIMIT) : matches;
+    const chips = visible.map((entry) => (
+      `<button class="set-chip" type="button" data-add-provider="${escapeHtml(entry.provider)}"`
+      + `${state?.writable ? "" : " disabled"} title="${escapeHtml(entry.provider)}">`
+      + `${lucideIconSvg("plus", { size: 12 })}${escapeHtml(entry.displayName || entry.provider)}</button>`
+    )).join("");
+    const toggleMore = !needle && matches.length > COLLAPSED_LIMIT
+      ? `<button class="set-chip ghost" type="button" id="prov-show-all" aria-expanded="${!collapsed}">`
+        + escapeHtml(collapsed ? t("prov.showAll", { count: matches.length }) : t("prov.showLess"))
+        + `</button>`
+      : "";
+    const empty = !matches.length && needle
+      ? `<span class="set-row-hint">${escapeHtml(t("prov.addNoMatches"))}</span>`
+      : "";
+    return `<div class="set-chips">${chips}${toggleMore}${empty}</div>`;
+  }
+
+  function renderAddSection() {
+    const { all } = addCandidates();
     const canDeclare = state?.writable && state.namespaces.has("llm-pi-ai")
       && protocolChoices(state.namespaces.get("llm-pi-ai")?.schema).length > 0;
-    const tags = `<button class="set-chip" type="button" id="prov-add-custom"${canDeclare ? "" : " disabled"}>`
-      + `${lucideIconSvg("plus", { size: 13 })} ${escapeHtml(t("prov.addCustom"))}</button>`
-      + candidates.map((entry) => (
-        `<button class="set-chip" type="button" data-add-provider="${escapeHtml(entry.provider)}"`
-        + `${state?.writable ? "" : " disabled"}>${escapeHtml(entry.displayName || entry.provider)}</button>`
-      )).join("")
-      + (!candidates.length && needle ? `<span class="set-row-hint">${escapeHtml(t("prov.addNoMatches"))}</span>` : "");
-    // Mac 的搜索框在非空时右侧有一个显式清除按钮;原生 type="search" 的取消叉
-    // 在侧栏窄宽度下几乎点不到,而且各平台外观不一致。
-    const clear = addSearch
-      ? `<button class="set-search-clear" type="button" id="prov-search-clear"`
-        + ` title="${escapeHtml(t("prov.searchClear"))}" aria-label="${escapeHtml(t("prov.searchClear"))}">`
-        + `${lucideIconSvg("x", { size: 13 })}</button>`
-      : "";
+    const custom = `<button class="set-add-row" type="button" id="prov-add-custom"${canDeclare ? "" : " disabled"}>`
+      + `<span class="set-add-row-icon" aria-hidden="true">${lucideIconSvg("plus", { size: 14 })}</span>`
+      + `<span class="set-row-text"><span class="set-row-label">${escapeHtml(t("prov.addCustom"))}</span>`
+      + `<span class="set-row-hint">${escapeHtml(t("prov.addFooter"))}</span></span>`
+      + chevron() + `</button>`;
     return section({
+      headerHtml: groupHeader(t("prov.addTitle"), all.length),
       body: `<div class="set-row stacked"><div class="set-row-control wide">`
-        + `<div class="set-search">`
-        + textInput({ id: "prov-add-search", value: addSearch, placeholder: t("prov.searchPlaceholder") })
-        + clear
-        + `</div></div></div><div class="set-chips">${tags}</div>`,
-      footer: escapeHtml(t("prov.addFooter"))
+        + searchField({
+          id: "prov-add-search", value: addSearch, placeholder: t("prov.searchPlaceholder"),
+          clearId: "prov-search-clear", clearLabel: t("prov.searchClear")
+        })
+        + `</div></div>`
+        + renderChips()
+        + custom
     });
   }
 
@@ -145,6 +183,7 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     host.querySelector("#prov-search-clear")?.addEventListener("click", () => {
       addSearch = "";
       render();
+      host.querySelector("#prov-add-search")?.focus();
     });
   }
 
@@ -155,19 +194,25 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
       addSearch = event.target.value;
       // 只重画标签云与清除按钮,避免每敲一个字就让搜索框失焦;
       // 输入框本身原地保留,所以光标与 IME 组合状态都不会丢。
-      const cloud = host.querySelector(".set-chips");
-      if (!cloud) return;
-      const container = document.createElement("div");
+      repaintChips();
+      const searchWrap = search.closest(".set-search");
+      const container = host.ownerDocument.createElement("div");
       container.innerHTML = renderAddSection();
-      const fresh = container.querySelector(".set-chips");
-      if (fresh) { cloud.replaceWith(fresh); bindChips(); }
-      const searchWrap = host.querySelector(".set-search");
       const freshClear = container.querySelector(".set-search-clear");
       const existingClear = host.querySelector("#prov-search-clear");
       if (freshClear && !existingClear) { searchWrap?.append(freshClear); bindClear(); }
       else if (!freshClear && existingClear) existingClear.remove();
     });
+    // Esc 先清空搜索,再交给外层(关设置页等)。
+    search?.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !addSearch) return;
+      event.preventDefault(); event.stopPropagation();
+      addSearch = ""; search.value = ""; repaintChips();
+      host.querySelector("#prov-search-clear")?.remove();
+    });
+    host.querySelector("#prov-add-custom")?.addEventListener("click", () => addCustomProvider());
     bindChips();
+    bindClickableRows(host);
     for (const entry of configuredRows()) {
       host.querySelector(`#prov-row-${selectorEscape(entry.entry.provider)}`)
         ?.addEventListener("click", () => editProvider(entry.entry));
@@ -180,8 +225,21 @@ export function createModelsPane({ host, sheet, deps, settingsService, showToast
     }
   }
 
+  function repaintChips() {
+    const cloud = host.querySelector(".set-chips");
+    if (!cloud) return;
+    const container = host.ownerDocument.createElement("div");
+    container.innerHTML = renderChips();
+    const fresh = container.querySelector(".set-chips");
+    if (fresh) { cloud.replaceWith(fresh); bindChips(); }
+  }
+
   function bindChips() {
-    host.querySelector("#prov-add-custom")?.addEventListener("click", () => addCustomProvider());
+    host.querySelector("#prov-show-all")?.addEventListener("click", (event) => {
+      showAllProviders = !showAllProviders;
+      repaintChips();
+      if (event.detail === 0) host.querySelector("#prov-show-all")?.focus();
+    });
     for (const chip of host.querySelectorAll("[data-add-provider]")) {
       chip.addEventListener("click", () => {
         const entry = state?.rows.find((candidate) => candidate.entry.provider === chip.dataset.addProvider)?.entry;

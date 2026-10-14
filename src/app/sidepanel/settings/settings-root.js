@@ -9,9 +9,9 @@ import { createGeneralPane } from "./general-pane.js";
 import { createModelsPane } from "./models-pane.js";
 import { createPresetsPane } from "./presets-pane.js";
 import { createPluginsPane } from "./plugins-pane.js";
+import { createBuiltinPluginsPane } from "./builtin-plugins-pane.js";
 import { createServerPane } from "./server-pane.js";
 import { createHostProxyClient } from "../../../platform/dsh/host-proxy-client.js";
-import { createPluginActions } from "../../../features/host-proxy/plugin-actions.js";
 import { createServerOps } from "../../../features/host-proxy/server-ops.js";
 import { createShortcutsPane } from "./shortcuts-pane.js";
 import { escapeHtml } from "./settings-ui.js";
@@ -103,7 +103,7 @@ export function createSheet(dialog) {
 /// 回调 —— 留着会让调用方以为"改地址仍会重连"。
 /// onStartCreatorDraft:预设页"用创造模式创作"落到会话里的动作。它必须由 shell
 /// 提供 —— 新建会话、选中预设、离开设置页这三件事都只有 app 能做。
-export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onOpenPlugins, onVisibilityChanged } = {}) {
+export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVisibilityChanged } = {}) {
   const view = document.querySelector("#view-settings");
   const openButton = document.querySelector("#hdr-settings");
   const backButton = view.querySelector("#settings-back");
@@ -144,17 +144,10 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onOp
       host: view.querySelector("#settings-pane-presets"), sheet, deps, settingsService, showToast,
       onStartCreatorDraft
     }),
-    plugins: createPluginsPane({
-      host: view.querySelector("#settings-pane-plugins"), sheet, settingsDialog: dialog,
-      deps, settingsService, showToast, readOnlyInventory: true,
-      onOpenManager: () => { close(); onOpenPlugins?.(); },
-      // 装 / 更 / 删要跑 dsh plugin(即 pnpm),扩展做不到,经 daemon 代理。
-      // 成功后用 settingsService 重拉清单,以宿主 reconcile 后的状态为准。
-      // 市场页走 pluginManager/*(dsh web),不需要这一路;它只服务内置页签。
-      pluginActions: createPluginActions({
-        client: hostProxy,
-        onInventoryChanged: () => panes.plugins.refresh()
-      })
+    // 「内置插件」:宿主插件清单的只读视图,分会话插件 / 全局插件两部分(对齐 DSH web
+    // 设置页)。插件的装 / 卸 / 启停在主区域的「插件」管理页。
+    plugins: createBuiltinPluginsPane({
+      host: view.querySelector("#settings-pane-plugins"), deps, settingsService
     }),
     server: createServerPane({
       // 渲染进 pane 内的专属容器,而不是整个 pane —— CDP 桥是同一页里的静态 DOM,
@@ -305,8 +298,7 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onOp
     },
     createPluginManager(host) {
       return createPluginsPane({
-        host, sheet, settingsDialog: dialog, deps, settingsService, showToast,
-        pluginActions: createPluginActions({ client: hostProxy }), serverOps
+        host, sheet, settingsDialog: dialog, deps, settingsService, showToast
       });
     },
     /// 语言切换后重画:tab 文案与当前 pane 都要跟着换。

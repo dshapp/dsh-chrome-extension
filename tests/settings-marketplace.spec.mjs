@@ -139,3 +139,59 @@ test("变更结果就地显示:restart-required 不写成成功", async () => {
   await FLUSH();
   assert.ok(host.textContent.includes("下次启动生效"), "应显示 restart-required 的本地化文案");
 });
+
+test("工具栏:搜索与状态筛选只过滤列表,刷新期间保留列表而不是整页 loading", async () => {
+  let release;
+  let block = false;
+  let toggled = 0;
+  const bundles = [
+    { name: "dsh-agent-team", version: "1.0.0", description: "teams", enabled: true, installed: false, optional: true, removable: false },
+    { name: "dsh-voice", version: "1.0.0", description: "voice input", enabled: false, installed: false, optional: true, removable: false }
+  ];
+  const host = document.getElementById("host");
+  host.innerHTML = "";
+  const service = {
+    async pluginBundles() { if (block) { block = false; await new Promise((resolve) => { release = resolve; }); } return bundles; },
+    async pluginEntries() { return []; },
+    async setBundleEnabled() { toggled += 1; return { application: "applied" }; }
+  };
+  let opened = 0;
+  let view;
+  view = createMarketplaceView({
+    host, sheet: null, deps: { formatErrorDetails: (error) => String(error) }, settingsService: service,
+    showToast: () => {}, settingsDialog: null, cards: [{ id: "bash", title: "plug.bashTitle", description: "plug.bashDescription" }],
+    onOpenCard: () => { opened += 1; }, onInstalled: () => {}, onChange: () => view.paint()
+  });
+  await view.refresh();
+  const rowIds = () => [...host.querySelectorAll("[id^=plug-bundle-row-], [id^=plug-card-row-]")].map((row) => row.id);
+  assert.deepEqual(rowIds(), ["plug-bundle-row-dsh-agent-team", "plug-bundle-row-dsh-voice", "plug-card-row-bash"]);
+  const search = host.querySelector("#plug-search");
+  search.value = "voice";
+  search.dispatchEvent(new dom.window.Event("input"));
+  assert.deepEqual(rowIds(), ["plug-bundle-row-dsh-voice"]);
+  assert.equal(document.activeElement?.id, "plug-search", "重画后焦点应回到搜索框");
+  host.querySelector("#plug-search-clear").click();
+  host.querySelector('#plug-filter [data-segment="enabled"]').click();
+  assert.deepEqual(rowIds(), ["plug-bundle-row-dsh-agent-team"], "已启用筛选不应包含未启用插件与配置卡片");
+  host.querySelector('#plug-filter [data-segment="disabled"]').click();
+  assert.deepEqual(rowIds(), ["plug-bundle-row-dsh-voice"]);
+  host.querySelector('#plug-filter [data-segment="all"]').click();
+  // 后台刷新:列表保留,刷新键进入转圈态。
+  block = true;
+  const pending = view.refresh({ keepNotices: true });
+  assert.equal(rowIds().length, 3, "刷新期间不应退回整页 loading");
+  assert.ok(host.querySelector("#plug-refresh").classList.contains("spinning"));
+  release(); await pending;
+  assert.ok(!host.querySelector("#plug-refresh").classList.contains("spinning"));
+  // 整行打开详情,但点开关不应打开详情。
+  host.querySelector("#plug-card-row-bash").click();
+  assert.equal(opened, 1);
+  host.querySelector("#plug-bundle-dsh-voice").closest(".set-switch").click();
+  assert.ok(host.querySelector("#plug-bundle-row-dsh-voice"), "点开关不应进入详情");
+  await FLUSH(); await FLUSH();
+  assert.equal(toggled, 1, "开关仍然独立生效");
+  assert.ok(host.querySelector("#plug-bundle-row-dsh-voice .set-row-note.ok"), "启停结果按语气就地提示");
+  host.querySelector("#plug-bundle-row-dsh-agent-team .set-row-text").click();
+  assert.ok(host.querySelector("#plug-detail-back"), "点行本体应进入详情");
+  view.dispose();
+});

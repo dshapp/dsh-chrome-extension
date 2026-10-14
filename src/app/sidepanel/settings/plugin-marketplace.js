@@ -9,11 +9,14 @@
 import { t } from "../../../shared/i18n.js";
 import {
   section, row, button, iconButton, toggle, tag, notice, spinner,
-  escapeHtml, groupHeader, selectorEscape
+  escapeHtml, groupHeader, selectorEscape, searchField, segmented, chevron,
+  busyIndicator, bindClickableRows, isRowControlTarget
 } from "./settings-ui.js";
+import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import { openPluginInstallSheet } from "./plugin-install-sheet.js";
 import { bundleText } from "../../../features/settings/plugin-meta.js";
 import { createPluginDetailView, updateAvailable } from "./plugin-detail-view.js";
+import { packageArtwork, cardArtwork } from "./plugin-artwork.js";
 
 /// 宿主给的是机器码,展示要落到本地文案。认不出的码原样显示 —— 编一个更好听的
 /// 说法会掩盖"宿主加了一条新的只读原因"。
@@ -30,6 +33,8 @@ const APPLICATION_TEXT = {
   overridden: "plug.changedOverridden",
   failed: "plug.changedFailed"
 };
+/// 结果的语气:成功 / 需要注意 / 失败,决定就地提示的颜色。
+const APPLICATION_KIND = { applied: "ok", "restart-required": "warn", overridden: "warn", failed: "err" };
 
 export function createMarketplaceView({
   host: initialHost, sheet, deps, settingsService, showToast, settingsDialog, cards,
@@ -50,15 +55,27 @@ export function createMarketplaceView({
   // 最近一次变更的结果,按 bundle 名就地显示(整页 toast 会立刻消失,用户
   // 从弹窗回到列表时看不到它)。
   const notices = new Map();
+  const noticeKinds = new Map();
+  // 列表筛选:搜索词 + 启用状态。只影响列表视图,详情页不受影响。
+  let query = "";
+  let filter = "all";
+  // 首次载入完成之前才画整页 loading;之后的刷新(启停、广播)保留列表,
+  // 只让刷新键转起来 —— 否则每拨一次开关整页都会闪一下「加载中」。
+  let loadedOnce = false;
   let opened = null;
   let disposed = false;
   const details = createPluginDetailView({ settingsService, sheet, deps, schemaConfig, renderSlot,
-    onBack() { opened = opened?.rowId ? { name: opened.name } : null; renderHost(); },
-    onOpenRow(name, rowId) { opened = { name, rowId }; renderHost(); },
+    onBack() { opened = opened?.rowId ? { name: opened.name } : null; renderHost(); scrollToTop(); },
+    onOpenRow(name, rowId) { opened = { name, rowId }; renderHost(); scrollToTop(); },
     onChange(options) { if (options?.refresh) return refresh({ keepNotices: true }); renderHost(); },
     onEnable: setEnabled, onInstall: installTarget, onRemove: confirmRemove
   });
-  function openBundle(name, rowId) { opened = { name, rowId }; details.refreshExemptions(); renderHost(); }
+  function openBundle(name, rowId) { opened = { name, rowId }; details.refreshExemptions(); renderHost(); scrollToTop(); }
+  /// 进入 / 离开详情回到顶部:沿用列表的滚动位置会让详情从半截开始。
+  function scrollToTop() {
+    const scroller = host?.closest?.("#management-content, #settings-body");
+    if (scroller) scroller.scrollTop = 0;
+  }
   function installTarget(bundle) {
     if (!bundle.installTarget || !sheet) return;
     openPluginInstallSheet({ sheet, settingsDialog, deps, settingsService, showToast,
@@ -68,37 +85,52 @@ export function createMarketplaceView({
     });
   }
 
+  function noteHtml(name) {
+    const text = notices.get(name);
+    if (!text) return "";
+    const kind = noticeKinds.get(name) ?? "muted";
+    const icon = kind === "ok" ? "check" : kind === "muted" ? "info" : "triangle-alert";
+    return `<div class="set-row-note ${kind}">${lucideIconSvg(icon, { size: 12 })}<span>${escapeHtml(text)}</span></div>`;
+  }
+
   function bundleRow(bundle) {
     const isBusy = busy.has(bundle.name);
     const readOnlyReason = bundle.readOnlyReason;
     const version = bundle.version ? tag(t("plug.versionTag", { version: bundle.version }), "muted") : "";
-    const result = notices.get(bundle.name);
     // 名称与说明取包自带的多语言 meta(0.1.7),按扩展当前语言回退;技术名留给 title 提示。
     const text = bundleText(bundle);
+    // 整行是"打开详情"的点击目标;开关 / 更新 / 卸载是行内独立控件。
     return row({
-      label: `<span title="${escapeHtml(bundle.name)}">${escapeHtml(text.title)}</span>` + version,
-      hint: escapeHtml(text.description || t("plug.noDescription"))
+      // 图标直接用接口自带的 meta.icon(与 DSH web 一致),没有就用 web 的默认图。
+      leading: packageArtwork(bundle.meta?.icon),
+      label: `<span class="set-row-title" title="${escapeHtml(bundle.name)}">${escapeHtml(text.title)}</span>` + version
+        + (updateAvailable(bundle) ? tag(t("plug.updateAvailable"), "accent") : ""),
+      hint: `<span class="set-clamp">${escapeHtml(text.description || t("plug.noDescription"))}</span>`
         + (readOnlyReason
-          ? `<div class="set-row-hint">${escapeHtml(readOnlyKey(readOnlyReason))}</div>`
+          ? `<div class="set-row-note muted">${lucideIconSvg("info", { size: 12 })}<span>${escapeHtml(readOnlyKey(readOnlyReason))}</span></div>`
           : "")
-        + (result ? `<div class="set-row-hint">${escapeHtml(result)}</div>` : ""),
-      control: iconButton({ id: `plug-bundle-open-${bundle.name}`, icon: "chevron-right", title: t("plug.details") })
+        + noteHtml(bundle.name),
+      control: (isBusy ? busyIndicator(t("plug.busy")) : "")
         + (updateAvailable(bundle) ? button({ id: `plug-bundle-update-${bundle.name}`, label: t("plug.update"), disabled: isBusy }) : "")
+        + (bundle.removable && bundle.installed
+          ? iconButton({
+            id: `plug-bundle-del-${bundle.name}`,
+            icon: "trash-2",
+            title: t("plug.uninstall"),
+            kind: "danger reveal",
+            disabled: isBusy
+          })
+          : "")
         + toggle({
-        id: `plug-bundle-${bundle.name}`,
-        checked: bundle.enabled,
-        disabled: Boolean(readOnlyReason) || isBusy || (bundle.availability === "missing" && !bundle.installTarget),
-        ariaLabel: t("plug.enableNamed", { name: text.title })
-      }) + (bundle.removable && bundle.installed
-        ? iconButton({
-          id: `plug-bundle-del-${bundle.name}`,
-          icon: "trash-2",
-          title: t("plug.uninstall"),
-          kind: "danger",
-          disabled: isBusy
+          id: `plug-bundle-${bundle.name}`,
+          checked: bundle.enabled,
+          disabled: Boolean(readOnlyReason) || isBusy || (bundle.availability === "missing" && !bundle.installTarget),
+          ariaLabel: t("plug.enableNamed", { name: text.title })
         })
-        : ""),
-      id: `plug-bundle-row-${bundle.name}`
+        + chevron(),
+      id: `plug-bundle-row-${bundle.name}`,
+      clickable: true,
+      className: isBusy ? "busy" : ""
     });
   }
 
@@ -107,13 +139,13 @@ export function createMarketplaceView({
   }
 
   /// 可配置的官方卡片在这里以一行形式出现,点了进配置视图(Mac 的 configRow)。
+  /// 它们没有启停开关(随宿主常驻),所以在开关的位置放一枚"设置"标签。
   function cardRow(card) {
     return row({
-      label: escapeHtml(t(card.title)),
-      hint: escapeHtml(t(card.description)),
-      control: iconButton({
-        id: `plug-open-${card.id}`, icon: "chevron-right", title: t(card.title)
-      }),
+      leading: cardArtwork(card.id),
+      label: `<span class="set-row-title">${escapeHtml(t(card.title))}</span>` + tag(t("plug.configurable"), "muted"),
+      hint: `<span class="set-clamp">${escapeHtml(t(card.description))}</span>`,
+      control: chevron(),
       id: `plug-card-row-${card.id}`,
       clickable: true
     });
@@ -127,9 +159,58 @@ export function createMarketplaceView({
     return bundles.filter((bundle) => !officialBundles().includes(bundle) && bundle.installed);
   }
 
+  function matchesQuery(values) {
+    const needle = query.trim().toLowerCase();
+    return !needle || values.some((value) => String(value ?? "").toLowerCase().includes(needle));
+  }
+
+  function bundleVisible(bundle) {
+    if (filter === "enabled" && !bundle.enabled) return false;
+    if (filter === "disabled" && bundle.enabled) return false;
+    const text = bundleText(bundle);
+    return matchesQuery([bundle.name, text.title, text.description]);
+  }
+
+  function cardVisible(card) {
+    // 配置卡片没有启停态:只在「全部」里出现。
+    if (filter !== "all") return false;
+    return matchesQuery([card.id, t(card.title), t(card.description)]);
+  }
+
+  /// 列表顶栏:搜索 + 状态筛选 + 刷新 / 添加。放在顶部而不是列表末尾 ——
+  /// 十几个插件时,底部的「添加插件」要滚到底才看得见。
+  function renderToolbar() {
+    const listed = [...officialBundles(), ...installedBundles()];
+    const enabledCount = listed.filter((bundle) => bundle.enabled).length;
+    const refreshing = loading && loadedOnce;
+    return `<div class="set-toolbar">`
+      + searchField({
+        id: "plug-search", value: query, placeholder: t("plug.searchPlaceholder"),
+        clearId: "plug-search-clear", clearLabel: t("plug.searchClear")
+      })
+      + `<div class="set-toolbar-row">`
+      + segmented({
+        id: "plug-filter",
+        ariaLabel: t("plug.filterAria"),
+        value: filter,
+        options: [
+          { value: "all", label: t("plug.filterAll"), count: listed.length + cardsOf().length },
+          { value: "enabled", label: t("plug.filterEnabled"), count: enabledCount },
+          { value: "disabled", label: t("plug.filterDisabled"), count: listed.length - enabledCount }
+        ]
+      })
+      + `<span class="set-spacer"></span>`
+      + `<button class="set-icon-btn${refreshing ? " spinning" : ""}" type="button" id="plug-refresh"`
+      + ` title="${escapeHtml(t("plug.refresh"))}" aria-label="${escapeHtml(t("plug.refresh"))}"${refreshing ? " disabled" : ""}>`
+      + `${lucideIconSvg("refresh", { size: 14 })}</button>`
+      + `<button class="set-btn primary with-icon" type="button" id="plug-add">`
+      + `${lucideIconSvg("plus", { size: 13 })}<span>${escapeHtml(t("plug.addTitle"))}</span></button>`
+      + `</div></div>`;
+  }
+
   function render() {
-    if (loading) return spinner();
-    if (loadError) {
+    if (loading && !loadedOnce) return spinner();
+    if (loadError && !loadedOnce) {
       return section({
         body: notice(loadError)
           + `<div class="set-form-footer"><span class="set-spacer"></span>`
@@ -147,35 +228,39 @@ export function createMarketplaceView({
     const available = cardsOf();
     const officialCount = official.length + available.length;
     if (!officialCount && !installed.length) {
-      return section({ body: `<div class="set-empty">${escapeHtml(t("plug.marketEmpty"))}</div>` });
+      return renderToolbar() + section({ body: `<div class="set-empty">${escapeHtml(t("plug.marketEmpty"))}</div>` });
     }
+    const officialRows = official.filter(bundleVisible).map(bundleRow).join("")
+      + available.filter(cardVisible).map(cardRow).join("");
+    const installedRows = installed.filter(bundleVisible).map(bundleRow).join("");
     const groups = [];
+    // 刷新失败但已有数据:保留列表,只在顶部给一条可重试的提示。
+    if (loadError) {
+      groups.push(section({
+        body: notice(loadError)
+          + `<div class="set-form-footer"><span class="set-spacer"></span>`
+          + button({ id: "plug-market-retry", label: t("set.retry"), kind: "primary" }) + `</div>`
+      }));
+    }
     if (officialCount) {
       groups.push(section({
         headerHtml: groupHeader(t("plug.official"), officialCount, "plug-count-official"),
-        body: official.map(bundleRow).join("") + available.map(cardRow).join("")
+        body: officialRows || `<div class="set-empty">${escapeHtml(t("plug.noMatches"))}</div>`
       }));
     }
     if (installed.length) {
       groups.push(section({
         headerHtml: groupHeader(t("plug.installedGroup"), installed.length, "plug-count-installed"),
-        body: installed.map(bundleRow).join("")
+        body: installedRows || `<div class="set-empty">${escapeHtml(t("plug.noMatches"))}</div>`
       }));
     }
-    return groups.join("")
-      + section({
-        body: `<div class="set-row stacked"><div class="set-row-control wide">`
-          + button({ id: "plug-add", label: `+ ${t("plug.addTitle")}`, kind: "primary" })
-          + button({ id: "plug-refresh", label: t("plug.refresh") })
-          + `</div></div>`,
-        footer: escapeHtml(t("plug.marketIntro"))
-      });
+    return renderToolbar() + groups.join("");
   }
 
   function bind() {
     if (opened) { details.bind(host); return; }
-    host.querySelector("#plug-market-retry")?.addEventListener("click", () => refresh());
-    host.querySelector("#plug-refresh")?.addEventListener("click", () => refresh());
+    host.querySelector("#plug-market-retry")?.addEventListener("click", () => refresh({ keepNotices: true }));
+    host.querySelector("#plug-refresh")?.addEventListener("click", () => refresh({ keepNotices: true }));
     host.querySelector("#plug-add")?.addEventListener("click", () => {
       openPluginInstallSheet({
         sheet, settingsDialog, deps, settingsService, showToast,
@@ -185,21 +270,53 @@ export function createMarketplaceView({
         }
       });
     });
+    bindToolbar();
     for (const card of cardsOf()) {
       host.querySelector(`#plug-card-row-${selectorEscape(card.id)}`)?.addEventListener("click", () => onOpenCard?.(card));
-      host.querySelector(`#plug-open-${selectorEscape(card.id)}`)?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        onOpenCard?.(card);
-      });
     }
     for (const bundle of bundles) {
-      host.querySelector(`#plug-bundle-open-${selectorEscape(bundle.name)}`)?.addEventListener("click", () => openBundle(bundle.name));
+      host.querySelector(`#plug-bundle-row-${selectorEscape(bundle.name)}`)?.addEventListener("click", (event) => {
+        if (isRowControlTarget(event)) return;
+        openBundle(bundle.name);
+      });
       host.querySelector(`#plug-bundle-update-${selectorEscape(bundle.name)}`)?.addEventListener("click", () => installTarget(bundle));
       host.querySelector(`#plug-bundle-${selectorEscape(bundle.name)}`)?.addEventListener("change", (event) => {
         setEnabled(bundle, event.target.checked);
       });
       host.querySelector(`#plug-bundle-del-${selectorEscape(bundle.name)}`)?.addEventListener("click", () => {
         confirmRemove(bundle);
+      });
+    }
+    bindClickableRows(host);
+  }
+
+  /// 搜索与筛选。重画由 pane 整块完成(host.innerHTML),所以每次重画后把焦点
+  /// 与光标还给搜索框;输入法组合期间不重画,组合结束再应用,避免打断拼音。
+  function bindToolbar() {
+    const search = host.querySelector("#plug-search");
+    const apply = (value) => {
+      query = value;
+      const caret = search.selectionStart;
+      renderHost();
+      const fresh = host.querySelector("#plug-search");
+      if (fresh) { fresh.focus(); try { fresh.setSelectionRange(caret, caret); } catch { /* 非文本框 */ } }
+    };
+    search?.addEventListener("input", (event) => { if (!event.isComposing) apply(search.value); });
+    search?.addEventListener("compositionend", () => apply(search.value));
+    search?.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && query) { event.preventDefault(); event.stopPropagation(); apply(""); }
+    });
+    host.querySelector("#plug-search-clear")?.addEventListener("click", () => {
+      query = "";
+      renderHost();
+      host.querySelector("#plug-search")?.focus();
+    });
+    for (const segment of host.querySelectorAll("#plug-filter [data-segment]")) {
+      segment.addEventListener("click", (event) => {
+        filter = segment.dataset.segment;
+        renderHost();
+        // 键盘触发(detail 为 0)时把焦点还给新画出的同一段;鼠标点击不抢焦点,免得出现焦点框。
+        if (event.detail === 0) host.querySelector(`#plug-filter [data-segment="${filter}"]`)?.focus();
       });
     }
   }
@@ -215,16 +332,24 @@ export function createMarketplaceView({
         ? await settingsService.setPluginEnabled(selected.entry.entryId, enabled)
         : await settingsService.setBundleEnabled(bundle.name, enabled);
       notices.set(bundle.name, applicationText(result));
+      noticeKinds.set(bundle.name, applicationKind(result));
       await refresh({ keepNotices: true });
     } catch (error) {
       // 失败时刷新会把开关拨回宿主的真实状态 —— 乐观留下的位置是假的。
       notices.set(bundle.name, deps.formatErrorDetails(error));
+      noticeKinds.set(bundle.name, "err");
       showToast?.(deps.formatErrorDetails(error));
       await refresh({ keepNotices: true });
     } finally {
       busy.delete(bundle.name);
       renderHost();
     }
+  }
+
+  function applicationKind(result) {
+    if (!result) return "muted";
+    if (result.error) return "err";
+    return APPLICATION_KIND[result.application] ?? "muted";
   }
 
   function applicationText(result) {
@@ -256,6 +381,7 @@ export function createMarketplaceView({
             if (!sheet.owns(token)) return;
             sheet.close(token);
             notices.set(bundle.name, applicationText(result));
+            noticeKinds.set(bundle.name, applicationKind(result));
             await refresh({ keepNotices: true });
           } catch (error) {
             if (!sheet.owns(token)) return;
@@ -288,7 +414,7 @@ export function createMarketplaceView({
   async function refresh({ keepNotices = false } = {}) {
     const generation = ++loadGeneration;
     loading = true;
-    if (!keepNotices) notices.clear();
+    if (!keepNotices) { notices.clear(); noticeKinds.clear(); }
     renderHost();
     try {
       const [nextBundles, nextEntries] = await Promise.all([
@@ -299,6 +425,7 @@ export function createMarketplaceView({
       bundles = Array.isArray(nextBundles) ? nextBundles : [];
       entries = Array.isArray(nextEntries) ? nextEntries : [];
       loadError = null;
+      loadedOnce = true;
     } catch (error) {
       if (generation !== loadGeneration) return;
       loadError = deps.formatErrorDetails(error);

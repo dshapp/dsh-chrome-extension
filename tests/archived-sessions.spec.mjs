@@ -1,8 +1,9 @@
 /**
- * 已归档会话:会话服务保住归档摘要 + 取消归档;抽屉底部的归档页渲染与交互。
+ * 已归档会话:会话服务保住归档摘要 + 取消归档;会话抽屉的「筛选会话」轴。
  *
- * 对齐 Mac ArchivedSessionsView:归档集合与摘要求交、最近归档在前、三种空态、
- * 每行一个「取消归档」,成功后该行回到活动列表。
+ * 对齐 Mac:没有独立的已归档会话入口,归档行由视图选项里的「筛选会话」决定
+ * 隐藏(默认)/ 一并显示 / 只显示;归档行变暗、打不开、只能取消归档,
+ * 只看归档且为空时给「查看其他会话」。
  *
  * 跑法:node --test 'tests/*.spec.mjs'
  */
@@ -14,13 +15,16 @@ import { test } from "node:test";
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom");
 
-const dom = new JSDOM('<!doctype html><html><body><aside id="session-drawer"></aside></body></html>');
+const dom = new JSDOM('<!doctype html><html><body><ul id="history-list-inner"></ul></body></html>');
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 
 const { createSessionService } = await import("../src/features/sessions/session-service.js");
-const { mountArchivedSessions } = await import("../src/app/sidepanel/archived-sessions-view.js");
+const { renderSections, renderResultRows } = await import("../src/app/sidepanel/session-drawer-view.js");
+const { buildSidebarSections, visibleSessions, ArchivedFilter, archivedVisible, SidebarGroupBy, PINNED_GROUP_ID } =
+  await import("../src/features/sessions/sidebar-sections.js");
+const { deriveSearchResults } = await import("../src/features/sessions/session-search.js");
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const summary = (id, title, extra = {}) => ({ sessionId: id, updatedAt: Date.now(), projections: { values: { title } }, ...extra });
@@ -85,78 +89,77 @@ test("service:unarchive 调 workspace/unarchiveSession,应用回包,行回到活
   assert.ok(service.listStore.get().some((item) => item.sessionId === "b"));
 });
 
-function mountView({ rows, archived, failUnarchive = false, workspaces = [] }) {
-  document.body.innerHTML = '<aside id="session-drawer"></aside>';
-  const drawer = document.getElementById("session-drawer");
-  const harness = fakeHost({ rows, archived, failUnarchive });
-  const service = createSessionService(harness.connection);
-  service.setArchivedSessionIds(archived);
-  const toasts = [];
-  const view = mountArchivedSessions({
-    drawer, sessions: service, workspaces: () => workspaces, showToast: (message) => toasts.push(message)
+const list = () => document.getElementById("history-list-inner");
+const ctx = (pinned = []) => ({
+  listStore: null, pinnedStore: { isPinned: (id) => pinned.includes(id) },
+  activeSessionId: null, selectedIndex: -1, shortcutLabels: null, draggable: true
+});
+const ws = (workspaceId, sessionIds) => ({ workspaceId, title: workspaceId, path: `/r/${workspaceId}`, sessionIds });
+
+test("筛选取值与 Mac SidebarViewOptions.archivedVisible 同义", () => {
+  assert.deepEqual(Object.values(ArchivedFilter), ["default", "show", "only"]);
+  assert.equal(archivedVisible(true, ArchivedFilter.hide), false);
+  assert.equal(archivedVisible(false, ArchivedFilter.hide), true);
+  assert.equal(archivedVisible(true, ArchivedFilter.show), true);
+  assert.equal(archivedVisible(false, ArchivedFilter.show), true);
+  assert.equal(archivedVisible(true, ArchivedFilter.only), true);
+  assert.equal(archivedVisible(false, ArchivedFilter.only), false);
+});
+
+test("visibleSessions:默认隐藏归档;显示时归档行带 archived:true", () => {
+  const rows = [summary("a", "A"), summary("b", "B")];
+  assert.deepEqual(visibleSessions(rows, { archivedIds: ["b"] }).map((item) => item.sessionId), ["a"]);
+  const shown = visibleSessions(rows, { archivedIds: ["b"], archivedFilter: ArchivedFilter.show });
+  assert.deepEqual(shown.map((item) => [item.sessionId, Boolean(item.archived)]), [["a", false], ["b", true]]);
+  const only = visibleSessions(rows, { archivedIds: ["b"], archivedFilter: ArchivedFilter.only });
+  assert.deepEqual(only.map((item) => item.sessionId), ["b"]);
+});
+
+test("分区:归档行留在自己的组、不进置顶区;只看归档时去掉没有归档的组和置顶区", () => {
+  const sessions = [summary("a", "A"), summary("b", "B"), summary("c", "C")];
+  const input = {
+    sessions, archivedIds: ["b"], pinnedIds: ["a", "b"],
+    workspaces: [ws("w1", ["a", "b"]), ws("w2", ["c"])], sortRows: (rows) => rows
+  };
+  const shown = buildSidebarSections({ ...input, archivedFilter: ArchivedFilter.show });
+  assert.deepEqual(shown.sections.map((item) => [item.id, item.rows.map((row) => row.sessionId)]),
+    [[PINNED_GROUP_ID, ["a"]], ["w1", ["b"]], ["w2", ["c"]]]);
+  const only = buildSidebarSections({ ...input, archivedFilter: ArchivedFilter.only });
+  assert.deepEqual(only.sections.map((item) => [item.id, item.rows.map((row) => row.sessionId)]), [["w1", ["b"]]]);
+});
+
+test("视图:归档行变暗、不可拖、行尾只有「取消归档」", () => {
+  const built = buildSidebarSections({
+    sessions: [summary("a", "A"), summary("b", "B")], archivedIds: ["b"],
+    archivedFilter: ArchivedFilter.show, groupBy: SidebarGroupBy.flat
   });
-  return { drawer, service, view, toasts, harness };
-}
-
-test("view:底部入口打开归档页,行带工作区名,搜索按标题或工作区过滤", async () => {
-  const { drawer, service, view } = mountView({
-    rows: [summary("a", "活跃"), summary("b", "修登录"), summary("c", "写文档", { cwd: "/x/docs-repo" })],
-    archived: ["b", "c"],
-    workspaces: [{ workspaceId: "w1", title: "pacific", sessionIds: ["b"] }]
-  });
-  await service.refreshList();
-  const entry = drawer.querySelector("#history-archived-btn");
-  assert.ok(entry, "入口在抽屉里");
-  entry.click();
-  assert.ok(view.isActive());
-  assert.ok(drawer.classList.contains("archived-mode"));
-  const names = () => [...drawer.querySelectorAll(".archived-name")].map((node) => node.textContent);
-  assert.deepEqual(names(), ["写文档", "修登录"]);
-  const metas = [...drawer.querySelectorAll(".archived-meta")].map((node) => node.textContent.split(" · ")[0]);
-  assert.deepEqual(metas, ["docs-repo", "pacific"]);
-  const search = drawer.querySelector("#archived-search");
-  search.value = "pacific";
-  search.dispatchEvent(new window.Event("input"));
-  assert.deepEqual(names(), ["修登录"]);
-  search.value = "nothing-matches";
-  search.dispatchEvent(new window.Event("input"));
-  assert.equal(drawer.querySelectorAll(".archived-item").length, 0);
-  assert.ok(drawer.querySelector(".history-empty"));
-  // 返回按钮退回会话列表。
-  drawer.querySelector("#archived-back").click();
-  assert.equal(view.isActive(), false);
+  renderSections(list(), { sections: built.sections, groupBy: SidebarGroupBy.flat, archivedFilter: ArchivedFilter.show, ctx: ctx() });
+  const row = list().querySelector('[data-session-id="b"]');
+  assert.ok(row.classList.contains("archived"));
+  assert.equal(row.dataset.archived, "true");
+  assert.equal(row.getAttribute("draggable"), null);
+  assert.deepEqual([...row.querySelectorAll("button[data-action]")].map((node) => node.dataset.action), ["unarchive"]);
+  const live = list().querySelector('[data-session-id="a"]');
+  assert.equal(live.getAttribute("draggable"), "true");
+  assert.ok([...live.querySelectorAll("button[data-action]")].some((node) => node.dataset.action === "archive"));
 });
 
-test("view:点「取消归档」后该行从归档页消失", async () => {
-  const { drawer, service, view } = mountView({ rows: [summary("b", "修登录")], archived: ["b"] });
-  await service.refreshList();
-  view.open();
-  drawer.querySelector('button[data-action="unarchive"]').click();
-  // 在途:按钮禁用,防连点。
-  assert.equal(drawer.querySelector('button[data-action="unarchive"]')?.disabled, true);
-  await flush(); await flush();
-  assert.equal(drawer.querySelectorAll(".archived-item").length, 0);
-  assert.ok(service.listStore.get().some((item) => item.sessionId === "b"));
+test("视图:只看归档且为空时,空态给「查看其他会话」", () => {
+  const built = buildSidebarSections({ sessions: [summary("a", "A")], archivedIds: [], archivedFilter: ArchivedFilter.only });
+  renderSections(list(), { sections: built.sections, groupBy: SidebarGroupBy.workspace, archivedFilter: ArchivedFilter.only, ctx: ctx() });
+  assert.ok(list().querySelector('.history-empty [data-action="show-other-sessions"]'));
+  renderSections(list(), { sections: [], groupBy: SidebarGroupBy.workspace, ctx: ctx() });
+  assert.equal(list().querySelector('[data-action="show-other-sessions"]'), null);
 });
 
-test("view:取消归档失败时给 toast,行保留可重试", async () => {
-  const { drawer, service, view, toasts } = mountView({ rows: [summary("b", "修登录")], archived: ["b"], failUnarchive: true });
-  await service.refreshList();
-  view.open();
-  drawer.querySelector('button[data-action="unarchive"]').click();
-  await flush(); await flush();
-  assert.equal(toasts.length, 1);
-  const button = drawer.querySelector('button[data-action="unarchive"]');
-  assert.ok(button);
-  assert.equal(button.disabled, false);
-});
-
-test("view:空态区分「没有归档」与「归档集合非空但一行都拼不出来」", () => {
-  const empty = mountView({ rows: [], archived: [] });
-  empty.view.open();
-  const emptyText = empty.drawer.querySelector(".history-empty").textContent;
-  const orphan = mountView({ rows: [], archived: ["gone"] });
-  orphan.view.open();
-  const orphanText = orphan.drawer.querySelector(".history-empty").textContent;
-  assert.notEqual(emptyText, orphanText);
+test("搜索:与侧栏同一个筛选,归档命中带 archived:true", () => {
+  const sessions = [summary("a", "修登录"), summary("b", "修登录页")];
+  const search = (archivedFilter) => deriveSearchResults({
+    sessions, workspaces: [], archivedIds: ["b"], archivedFilter, query: "修登录", remote: { items: [], hasMore: false }
+  }).items.map((item) => [item.sessionId, Boolean(item.archived)]);
+  assert.deepEqual(search(undefined), [["a", false]]);
+  assert.deepEqual(search(ArchivedFilter.show).sort(), [["a", false], ["b", true]]);
+  assert.deepEqual(search(ArchivedFilter.only), [["b", true]]);
+  renderResultRows(list(), { items: [{ ...summary("b", "修登录页"), archived: true }], ctx: ctx() });
+  assert.ok(list().querySelector('[data-session-id="b"]').classList.contains("archived"));
 });

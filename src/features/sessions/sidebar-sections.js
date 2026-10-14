@@ -6,9 +6,10 @@
 // 规则逐条对齐 macOS 的 SidebarRoot(SessionTreeView / FlatSessionList /
 // WorkspaceSection / PinnedSessionList):
 //
-// 1. **可见性**(Mac `sessionVisible`):子代理会话不进列表、归档行不进列表,
-//    空白(blank)行只有在它就是当前会话时才出现 —— 否则每建一个新会话都会
-//    在列表里留下一行"什么都没发生过"的幽灵。
+// 1. **可见性**(Mac `sessionVisible`):子代理会话不进列表;归档行按视图选项里的
+//    「筛选会话」取舍(默认隐藏 / 一并显示 / 只显示归档);空白(blank)行只有在
+//    它就是当前会话时才出现 —— 否则每建一个新会话都会在列表里留下一行"什么都
+//    没发生过"的幽灵。
 // 2. **置顶优先于分组**:置顶是用户明确摆出来的安排,所以它排在两种分组模式
 //    之上,并且被置顶的行不再出现在下面的分组里(否则同一行会出现两次)。
 // 3. **折叠组只画前 5 个闲置行**(Mac `collapsedGroupRowLimit`),其余折进
@@ -62,21 +63,45 @@ export const SidebarGroupBy = Object.freeze({
   flat: "flat"
 });
 
+/// 「筛选会话」轴的三个取值(Mac SidebarViewOptions.archivedFilter,同名同值):
+/// hide 隐藏归档行(默认)、show 归档行与其余会话一起列出、only 只列归档行。
+export const ArchivedFilter = Object.freeze({
+  hide: "default",
+  show: "show",
+  only: "only"
+});
+
+/// 一行在当前筛选下是否该出现(Mac SidebarViewOptions.archivedVisible)。
+export function archivedVisible(isArchived, filter = ArchivedFilter.hide) {
+  if (filter === ArchivedFilter.show) return true;
+  if (filter === ArchivedFilter.only) return isArchived;
+  return !isArchived;
+}
+
 /**
- * 名册里该出现在侧栏的那些行。
+ * 名册里该出现在侧栏的那些行。归档行带上 archived:true,视图据此把它画成
+ * 只能「取消归档」的暗行。
  *
- * @param {Array} sessions 全量名册。
+ * @param {Array} sessions 全量名册(筛选要显示归档时,调用方把归档摘要并进来)。
  * @param {object} options
  * @param {Set<string>|Array<string>} options.archivedIds 已归档的会话。
  * @param {string|null} options.activeSessionId 当前打开的会话(决定唯一可见的空白行)。
+ * @param {string} [options.archivedFilter] ArchivedFilter 之一,默认隐藏归档。
  * @returns {Array} 可见行(保持传入顺序)。
  */
-export function visibleSessions(sessions, { archivedIds = [], activeSessionId = null } = {}) {
+export function visibleSessions(sessions, {
+  archivedIds = [], activeSessionId = null, archivedFilter = ArchivedFilter.hide
+} = {}) {
   const archived = archivedIds instanceof Set ? archivedIds : new Set(archivedIds ?? []);
-  return (sessions ?? []).filter((item) => item
-    && item.origin !== "subagent"
-    && !archived.has(item.sessionId)
-    && (!item.blank || item.sessionId === activeSessionId));
+  const rows = [];
+  for (const item of sessions ?? []) {
+    if (!item || item.origin === "subagent") continue;
+    const isArchived = archived.has(item.sessionId);
+    if (!archivedVisible(isArchived, archivedFilter)) continue;
+    if (item.blank && item.sessionId !== activeSessionId) continue;
+    rows.push(isArchived === Boolean(item.archived) ? item : { ...item, archived: isArchived });
+  }
+  return rows;
 }
 
 /// 默认排序器:没有注入 listStore.sortBy 时(测试/极早首帧)按时间倒序。
@@ -91,6 +116,7 @@ function defaultSort(rows) {
  * @param {Array} options.sessions 全量名册(未过滤)。
  * @param {Array} options.workspaces 宿主的 workspace 列表(含 sessionIds / title / path)。
  * @param {Array<string>} options.archivedIds 已归档会话 id。
+ * @param {string} [options.archivedFilter] ArchivedFilter 之一:归档行隐藏 / 一并显示 / 只显示。
  * @param {Array<string>} options.pinnedIds 置顶账本(按置顶顺序)。
  * @param {string} options.groupBy SidebarGroupBy 之一。
  * @param {string} options.orderBy SessionOrderBy 之一。
@@ -108,6 +134,7 @@ export function buildSidebarSections({
   sessions = [],
   workspaces = [],
   archivedIds = [],
+  archivedFilter = ArchivedFilter.hide,
   pinnedIds = [],
   groupBy = SidebarGroupBy.workspace,
   orderBy = "updated",
@@ -124,11 +151,15 @@ export function buildSidebarSections({
   const sort = typeof sortRows === "function" ? sortRows : defaultSort;
   const collapsed = new Set(collapsedGroupIds ?? []);
   const expanded = new Set(expandedGroupIds ?? []);
-  const visible = visibleSessions(sessions, { archivedIds, activeSessionId });
+  const visible = visibleSessions(sessions, { archivedIds, activeSessionId, archivedFilter });
   const byId = new Map(visible.map((item) => [item.sessionId, item]));
 
   // 置顶区:按账本顺序,不受 orderBy 影响 —— 那个顺序是用户自己摆的。
-  const pinnedOrder = (pinnedIds ?? []).filter((id) => byId.has(id));
+  // 归档行不进置顶区,留在它原来的组里(Mac pinnedSidebarSessions);只看归档时
+  // 整个置顶区都不出现。
+  const pinnedOrder = archivedFilter === ArchivedFilter.only
+    ? []
+    : (pinnedIds ?? []).filter((id) => byId.has(id) && !byId.get(id).archived);
   const pinnedSet = new Set(pinnedOrder);
   const rest = visible.filter((item) => !pinnedSet.has(item.sessionId));
 
@@ -165,6 +196,8 @@ export function buildSidebarSections({
       // 宿主的 sessionIds 就是这个 workspace 的手动序,所以先按它取行,
       // 再按当前排序档重排(manual 档下这一步原样返回)。
       const rows = memberIds.map((id) => byId.get(id)).filter((item) => item && !pinnedSet.has(item.sessionId));
+      // 只看归档时,一行归档都没有的工作区不出组(Mac SessionTreeView.shownWorkspaces)。
+      if (archivedFilter === ArchivedFilter.only && !rows.length) continue;
       const groupId = workspace.workspaceId;
       sections.push(section({
         kind: "workspace",

@@ -9,7 +9,7 @@
 // - 密钥留空是合法的:该路由走提供方原生认证(getenv / ADC)。
 import { t } from "../../../shared/i18n.js";
 import {
-  section, stackedRow, select, textInput, button, notice, escapeHtml
+  section, stackedRow, select, textInput, secretInput, bindSecretToggles, button, notice, escapeHtml
 } from "./settings-ui.js";
 import {
   deriveKeyRef, apiKeyFailure, jsonValueAt, providerKeyCredential
@@ -77,6 +77,7 @@ export function openCustomProvider({ state, getState = () => state, sheet, deps,
   const initialDraft = JSON.stringify(draft);
   const keyLocked = () => providerKeyCredential(getState()?.rows?.find((row) => row.entry.provider === draft.routeId))?.writable === false;
   let saving = false;
+  let keyRevealed = false;
   let profileCommitted = false;
   let message = null;
 
@@ -198,8 +199,8 @@ export function openCustomProvider({ state, getState = () => state, sheet, deps,
         })
         + stackedRow({
           label: escapeHtml(t("prov.apiKey")),
-          control: textInput({
-            id: "cst-key", value: draft.apiKey, type: "password",
+          control: secretInput({
+            id: "cst-key", value: draft.apiKey, revealed: keyRevealed,
             placeholder: t("custom.keyOptional"), disabled: saving || getState()?.writable === false || keyLocked()
           })
         })
@@ -262,6 +263,7 @@ export function openCustomProvider({ state, getState = () => state, sheet, deps,
       draft.api = event.target.value;
       repaintSoft();
     });
+    bindSecretToggles(root, (_id, revealed) => { keyRevealed = revealed; });
     root.querySelector("#cst-cancel")?.addEventListener("click", () => sheet.close(sheetToken));
     root.querySelector("#cst-save")?.addEventListener("click", () => { void create(); });
     editor.bind(root);

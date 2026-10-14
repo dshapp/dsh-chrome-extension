@@ -39,9 +39,11 @@ export function section({ header, headerHtml, footer, body, id } = {}) {
 
 /// 一行(Mac LabeledContent):左侧标题 + 副标题,右侧控件。
 /// control 为空时整行只是说明文字。
-export function row({ label, hint, control, id, extra, clickable } = {}) {
-  return `<div class="set-row${clickable ? " clickable" : ""}"${id ? ` id="${escapeHtml(id)}"` : ""}`
+/// leading:行首的识别块(头像 / 图标),不参与文字截断。
+export function row({ label, hint, control, id, extra, clickable, leading, className } = {}) {
+  return `<div class="set-row${clickable ? " clickable" : ""}${className ? " " + className : ""}"${id ? ` id="${escapeHtml(id)}"` : ""}`
     + `${clickable ? ' role="button" tabindex="0"' : ""}>`
+    + (leading ?? "")
     + `<div class="set-row-text">`
     + (label ? `<div class="set-row-label">${label}</div>` : "")
     + (hint ? `<div class="set-row-hint">${hint}</div>` : "")
@@ -70,10 +72,115 @@ export function select({ id, options, disabled }) {
   return `<select class="set-select" id="${escapeHtml(id)}"${disabled ? " disabled" : ""}>${items}</select>`;
 }
 
-export function textInput({ id, value, placeholder, type = "text", disabled, mono }) {
+export function textInput({ id, value, placeholder, type = "text", disabled, mono, autocomplete }) {
   return `<input class="set-input${mono ? " mono" : ""}" id="${escapeHtml(id)}" type="${type}"`
     + ` value="${escapeHtml(value ?? "")}" placeholder="${escapeHtml(placeholder ?? "")}"`
+    + `${autocomplete ? ` autocomplete="${escapeHtml(autocomplete)}"` : ""}`
     + `${disabled ? " disabled" : ""} />`;
+}
+
+/// 密钥输入:password 输入框 + 行尾「显示 / 隐藏」切换。切换只改 input.type,
+/// 不重画,所以正在输入的值和光标都不受影响;revealed 让重画后保持上次的可见态。
+export function secretInput({ id, value, placeholder, disabled, revealed = false }) {
+  const label = t(revealed ? "set.secretHide" : "set.secretShow");
+  return `<div class="set-secret">`
+    + textInput({ id, value, placeholder, disabled, type: revealed ? "text" : "password", autocomplete: "new-password", mono: true })
+    + `<button class="set-secret-toggle" type="button" data-secret-toggle="${escapeHtml(id)}"`
+    + ` aria-pressed="${revealed}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">`
+    + lucideIconSvg(revealed ? "eye-off" : "eye", { size: 14 }) + `</button></div>`;
+}
+
+/// 绑定 root 下所有密钥显隐切换。onToggle(id, revealed) 让调用方记住可见态。
+export function bindSecretToggles(root, onToggle) {
+  for (const toggleButton of root.querySelectorAll("[data-secret-toggle]")) {
+    toggleButton.addEventListener("click", () => {
+      const input = root.querySelector(`#${selectorEscape(toggleButton.dataset.secretToggle)}`);
+      if (!input) return;
+      const revealed = input.type === "password";
+      input.type = revealed ? "text" : "password";
+      const label = t(revealed ? "set.secretHide" : "set.secretShow");
+      toggleButton.setAttribute("aria-pressed", String(revealed));
+      toggleButton.title = label;
+      toggleButton.setAttribute("aria-label", label);
+      toggleButton.innerHTML = lucideIconSvg(revealed ? "eye-off" : "eye", { size: 14 });
+      onToggle?.(toggleButton.dataset.secretToggle, revealed);
+    });
+  }
+}
+
+/// 带放大镜与清除键的搜索框。清除键只在有内容时出现。
+export function searchField({ id, value, placeholder, clearId, clearLabel }) {
+  return `<div class="set-search">`
+    + `<span class="set-search-icon" aria-hidden="true">${lucideIconSvg("search", { size: 13 })}</span>`
+    + `<input class="set-input set-search-input" id="${escapeHtml(id)}" type="text"`
+    + ` value="${escapeHtml(value ?? "")}" placeholder="${escapeHtml(placeholder ?? "")}"`
+    + ` aria-label="${escapeHtml(placeholder ?? "")}" autocomplete="off" spellcheck="false" />`
+    + (value && clearId
+      ? `<button class="set-search-clear" type="button" id="${escapeHtml(clearId)}"`
+        + ` title="${escapeHtml(clearLabel ?? "")}" aria-label="${escapeHtml(clearLabel ?? "")}">`
+        + `${lucideIconSvg("x", { size: 13 })}</button>`
+      : "")
+    + `</div>`;
+}
+
+/// 分段选择(筛选条)。options: [{ value, label, count }]。
+export function segmented({ id, options, value, ariaLabel }) {
+  return `<div class="set-segmented" role="radiogroup"${id ? ` id="${escapeHtml(id)}"` : ""}`
+    + ` aria-label="${escapeHtml(ariaLabel ?? "")}">`
+    + options.map((option) => {
+      const active = option.value === value;
+      return `<button class="set-segment${active ? " active" : ""}" type="button" role="radio"`
+        + ` aria-checked="${active}" data-segment="${escapeHtml(option.value)}">`
+        + `<span>${escapeHtml(option.label)}</span>`
+        + (option.count !== undefined ? `<span class="set-segment-count">${escapeHtml(String(option.count))}</span>` : "")
+        + `</button>`;
+    }).join("")
+    + `</div>`;
+}
+
+/// 名字的首字母头像:色相按名字散列,同一个提供方 / 插件每次都是同一种颜色,
+/// 长列表里靠颜色 + 字母就能快速扫到目标。icon 给定时画图标而不是字母。
+export function avatar(name, { icon, size = "" } = {}) {
+  const text = String(name ?? "").trim();
+  let hash = 0;
+  for (const char of text) hash = (hash * 31 + char.codePointAt(0)) >>> 0;
+  const glyph = icon
+    ? lucideIconSvg(icon, { size: 14 })
+    : escapeHtml((text.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase());
+  return `<span class="set-avatar${size ? " " + size : ""}${icon ? " icon" : ""}" style="--avatar-hue:${hash % 360}" aria-hidden="true">${glyph}</span>`;
+}
+
+/// 行尾的装饰性雪佛龙:整行就是点击目标,它只是一个"可进入"的提示。
+export function chevron() {
+  return `<span class="set-chevron" aria-hidden="true">${lucideIconSvg("chevron-right", { size: 14 })}</span>`;
+}
+
+/// 返回链接(详情页左上角):图标 + 上一级的名字。
+export function backLink({ id, label }) {
+  return `<button class="set-back" type="button" id="${escapeHtml(id)}">`
+    + lucideIconSvg("chevron-left", { size: 14 }) + `<span>${escapeHtml(label)}</span></button>`;
+}
+
+/// 忙碌指示(行内小转圈)。
+export function busyIndicator(label) {
+  return `<span class="set-spinner" role="status" aria-label="${escapeHtml(label ?? "")}"></span>`;
+}
+
+/// 可点击行的键盘契约:Enter / 空格等同点击(行是 role=button 的 div)。
+/// 只在焦点就在行本身上时生效,行内的开关 / 按钮保持各自的键盘行为。
+export function bindClickableRows(root) {
+  for (const element of root.querySelectorAll(".set-row.clickable")) {
+    element.addEventListener("keydown", (event) => {
+      if (event.target !== element || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      element.click();
+    });
+  }
+}
+
+/// 行内的独立控件(开关、按钮、链接)不应触发整行的点击。
+export function isRowControlTarget(event) {
+  return Boolean(event.target?.closest?.("button, .set-switch, input, select, a, label"));
 }
 
 /// 开关。Mac 用 Toggle(.switch);这里是 checkbox + CSS 画的轨道。

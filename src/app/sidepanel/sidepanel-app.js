@@ -1764,7 +1764,6 @@ export function createSidepanelApp(root, deps, options = {}) {
         // 设置页改完提供方/模型目录后,当场重画底栏模型菜单 ——
         // 用户关掉设置页就能在对话框里看到新模型,不必切会话。
         onModelsChanged: () => { dock.refreshModelMenu(); },
-        onOpenPlugins: () => mainSurfaces?.open("plugins"),
         onVisibilityChanged: (visible) => {
           mainSurfaces?.setSuspended(visible);
           if (visible) historyDrawer?.hide?.();

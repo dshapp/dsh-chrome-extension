@@ -1,6 +1,19 @@
 import { t } from "../../../shared/i18n.js";
 import { bundleText, entryText } from "../../../features/settings/plugin-meta.js";
-import { section, row, button, toggle, tag, notice, escapeHtml } from "./settings-ui.js";
+import { section, row, button, toggle, tag, notice, escapeHtml, chevron, backLink, groupHeader, bindClickableRows } from "./settings-ui.js";
+import { packageArtwork } from "./plugin-artwork.js";
+import { lucideIconSvg } from "../../../features/chat/file-icons.js";
+
+const PHASE_KIND = { active: "ok", failed: "err", pending: "busy", loading: "busy", unloading: "busy" };
+const PHASE_TEXT = { active: "inv.active", failed: "inv.failed", pending: "inv.pending", loading: "inv.loadingPhase", unloading: "inv.unloading" };
+function phaseStatus(phase) {
+  const label = phase ? (PHASE_TEXT[phase] ? t(PHASE_TEXT[phase]) : phase) : t("inv.unobserved");
+  return `<span class="set-status ${PHASE_KIND[phase] ?? "muted"}"><i aria-hidden="true"></i>${escapeHtml(label)}</span>`;
+}
+function readOnlyText(status) {
+  return status === "management-required" ? t("plug.readOnlyManagement")
+    : status === "unaddressable" ? t("plug.readOnlyUnaddressable") : status;
+}
 export function updateAvailable(pkg) {
   if (!pkg.installed || pkg.availability === "installation" || !pkg.installTarget) return false;
   const linked = pkg.installTarget.spec.startsWith("link:") || pkg.source?.startsWith("link:");
@@ -57,31 +70,54 @@ export function createPluginDetailView({ settingsService, sheet, deps, schemaCon
     const status = selected ? selected.readOnlyReason : pkg.readOnlyReason
       ?? (pkg.availability === "missing" && !pkg.installTarget ? t("plug.installTargetMissing") : null);
     const active = selected ? selected.enabled : pkg.enabled;
-    const head = button({ id: "plug-detail-back", label: t("plug.backToList") })
-      + slot("plugins.detail.actions", subject)
+    // 返回链接写明上一级是谁:组件页回到所属插件,插件页回到列表。
+    const back = backLink({ id: "plug-detail-back", label: selected ? bundleText(pkg).title : t("plug.crumbRoot") });
+    const actions = slot("plugins.detail.actions", subject)
+      + (!selected && updateAvailable(pkg) ? button({ id: "plug-detail-update", label: t("plug.update"), kind: "primary", disabled: busy.size > 0 }) : "")
+      + (!selected && pkg.removable && pkg.installed ? button({ id: "plug-detail-remove", label: t("plug.uninstall"), kind: "danger", disabled: busy.size > 0 }) : "");
+    // 头部卡片:身份(头像 / 名称 / 版本 / 说明 / 包名)+ 右侧的启停开关与状态字。
+    const hero = `<div class="set-hero">`
+      // 接口自带的图标:组件页用组件行的 meta.icon,插件页用包的(web DetailTop)。
+      + (selected
+        ? packageArtwork(selected.meta?.icon ?? selected.entry?.meta?.icon, { component: true, size: "lg" })
+        : packageArtwork(pkg.meta?.icon, { size: "lg" }))
+      + `<div class="set-hero-text">`
+      + `<div class="set-hero-title">${escapeHtml(text.title)}`
+      + (pkg.version ? tag("v" + pkg.version, "muted") : "")
+      + (!selected && updateAvailable(pkg) ? tag(t("plug.updateAvailable"), "accent") : "")
+      + slot("plugins.detail.badge", subject) + `</div>`
+      + (text.description ? `<div class="set-row-hint">${escapeHtml(text.description)}</div>` : "")
+      + `<div class="set-mono">${escapeHtml(pkg.name)}${selected ? "#" + escapeHtml(selected.rowId) : ""}</div>`
+      + `</div>`
+      + `<div class="set-hero-control">`
+      + `<span class="set-hero-state${active ? " on" : ""}">${escapeHtml(active ? t("inv.enabledTag") : t("inv.disabledTag"))}</span>`
       + toggle({ id: "plug-detail-enabled", checked: active, disabled: Boolean(status) || busy.size > 0,
         ariaLabel: t("plug.enableNamed", { name: text.title }) })
-      + (!selected && updateAvailable(pkg) ? button({ id: "plug-detail-update", label: t("plug.update"), disabled: busy.size > 0 }) : "")
-      + (!selected && pkg.removable && pkg.installed ? button({ id: "plug-detail-remove", label: t("plug.uninstall"), kind: "danger" }) : "");
-    const title = row({ label: escapeHtml(text.title) + (pkg.version ? tag("v" + pkg.version) : "") + slot("plugins.detail.badge", subject),
-      hint: escapeHtml(text.description) + '<div class="set-mono">' + escapeHtml(pkg.name) + (selected ? "#" + escapeHtml(selected.rowId) : "") + '</div>' });
-    let body = section({ body: head + title
-      + (status ? notice(status === "management-required" ? t("plug.readOnlyManagement") : status === "unaddressable" ? t("plug.readOnlyUnaddressable") : status, "muted") : "")
-      + (message ? notice(message, "muted") : "")
-      + (pkg.error ? notice(pkg.error.diagnostic ?? pkg.error.code) : "")
-      + (pkg.source ? row({ label: escapeHtml(t("plug.source")), hint: escapeHtml(pkg.source) }) : "")
-      + (pkg.availability ? row({ label: escapeHtml(t("plug.availability")), hint: escapeHtml(pkg.availability) }) : "") });
+      + `</div></div>`;
+    let body = `<div class="set-detail-nav">${back}</div>`
+      + section({ body: hero
+        + (status ? notice(readOnlyText(status), "muted") : "")
+        + (message ? notice(message, "muted") : "")
+        + (pkg.error ? notice(pkg.error.diagnostic ?? pkg.error.code) : "")
+        + (actions ? `<div class="set-form-footer"><span class="set-spacer"></span>${actions}</div>` : "") });
+    const info = (pkg.source ? row({ label: escapeHtml(t("plug.source")), control: `<span class="set-value mono" title="${escapeHtml(pkg.source)}">${escapeHtml(pkg.source)}</span>` }) : "")
+      + (pkg.availability ? row({ label: escapeHtml(t("plug.availability")), control: `<span class="set-value">${escapeHtml(pkg.availability)}</span>` }) : "");
     if (selected) {
-      body += section({ body: row({ label: escapeHtml(selected.moduleName), hint: escapeHtml(selected.entry?.fiberPhase ?? t("inv.unobserved")) }) });
+      body += section({ header: t("plug.info"), body: row({ label: escapeHtml(selected.moduleName), control: phaseStatus(selected.entry?.fiberPhase) }) + info });
       body += slot("plugins.row.config", subject, pkg.name + "#" + selected.rowId)
         || schemaConfig.render(selected.rowId);
     } else {
+      if (info) body += section({ header: t("plug.info"), body: info });
       body += slot("plugins.bundle.config", subject, pkg.name);
-      body += section({ header: t("plug.components"), body: rows.map((item, index) => row({
+      // 组件:整行进入组件详情(配置在组件页里),行尾是运行状态。
+      body += section({ headerHtml: groupHeader(t("plug.components"), rows.length), body: rows.map((item, index) => row({
+        leading: packageArtwork(item.meta?.icon ?? item.entry?.meta?.icon, { component: true }),
         label: escapeHtml(entryText({ ...item, meta: item.meta }).title),
-        hint: escapeHtml(item.moduleName) + " · " + escapeHtml(item.entry?.fiberPhase ?? t("inv.unobserved"))
-          + (item.readOnlyReason ? " · " + escapeHtml(item.readOnlyReason) : ""),
-        control: button({ id: "plug-detail-row-" + index, label: t("plug.details") })
+        hint: `<span class="set-mono">${escapeHtml(item.moduleName)}</span>`
+          + (item.readOnlyReason ? `<div class="set-row-hint">${escapeHtml(readOnlyText(item.readOnlyReason))}</div>` : ""),
+        control: phaseStatus(item.entry?.fiberPhase) + chevron(),
+        id: "plug-detail-row-" + index,
+        clickable: true
       })).join("") || notice(t("plug.noComponents"), "muted") });
     }
     body += versionControls(pkg, incompatible) + slot("plugins.detail.section", subject);
@@ -136,6 +172,7 @@ export function createPluginDetailView({ settingsService, sheet, deps, schemaCon
     grants.forEach((item, index) => host.querySelector("#plug-exempt-revoke-" + index)?.addEventListener("click", () => setExemption(item, false)));
     host.querySelector("#plug-exempt-retry")?.addEventListener("click", refreshExemptions);
     if (selected) schemaConfig.bind(host, selected.rowId);
+    bindClickableRows(host);
     contributions.forEach(item => item.bind?.(host));
   }
   return { render, bind, refreshExemptions, dispose() { disposed = true; contributions.length = 0; } };

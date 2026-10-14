@@ -8,6 +8,8 @@
 //   置顶区标题 → 置顶行 → 「工作区/会话」分区标题(带视图选项与添加目录)
 //   → 分组标题(可折叠)→ 会话行 → 「展开其余 N 个会话」。
 // 单列表模式没有分组标题,行直接跟在分区标题下面。
+// 「筛选会话」显示已归档时,归档行混在列表里:标题变暗、不点状态灯、不能拖,
+// 行尾只有一颗「取消归档」(Mac SessionRow isArchived + 右键菜单只剩 Unarchive)。
 import { t } from "../../shared/i18n.js";
 import { escapeHtml } from "../../shared/md-to-html.js";
 import { lucideIconSvg } from "../../features/chat/file-icons.js";
@@ -19,7 +21,7 @@ import {
   resolveSessionRowStatus, shouldShowSessionRowStatus, SessionRowStatus
 } from "../../features/sessions/session-row-status.js";
 import { HISTORY_ACTION_ICONS } from "./history-icons.js";
-import { SidebarGroupBy, FLAT_GROUP_ID } from "../../features/sessions/sidebar-sections.js";
+import { SidebarGroupBy, ArchivedFilter, FLAT_GROUP_ID } from "../../features/sessions/sidebar-sections.js";
 import { sessionTitle } from "../../features/sessions/session-search.js";
 
 // 行首状态灯的无障碍/tooltip 文案。warning 一档不会真的渲染
@@ -114,11 +116,18 @@ function rowHtml(item, { index, groupId, grouped = false, ctx }) {
     isArchived: Boolean(item.archived),
     isBlank: Boolean(item.blank)
   });
-  const pinned = Boolean(pinnedStore?.isPinned?.(item.sessionId));
+  const archived = Boolean(item.archived);
+  const pinned = !archived && Boolean(pinnedStore?.isPinned?.(item.sessionId));
   const title = itemTitle(item);
   // 空白(blank)行是"还什么都没发生"的临时行:分叉/重命名/归档都会作用在
-  // 不存在的内容上,所以和 Mac 一样对它关掉整排行操作。
-  const actions = item.blank ? "" : [
+  // 不存在的内容上,所以和 Mac 一样对它关掉整排行操作。归档行打不开,唯一能做的
+  // 是把它取消归档。
+  const actions = archived ? [
+    `<span class="h-actions">`,
+    `<button type="button" data-action="unarchive" title="${escapeHtml(t("sessions.unarchive"))}"`,
+    ` aria-label="${escapeHtml(t("sessions.unarchiveNamed", { title }))}">${lucideIconSvg("archive-restore", { size: 13 })}</button>`,
+    `</span>`
+  ].join("") : item.blank ? "" : [
     `<span class="h-actions">`,
     actionButton("pin", pinned ? "sessions.unpin" : "sessions.pin", pinned ? "pin-off" : "pin"),
     `<button type="button" data-action="fork" title="${escapeHtml(t("fork"))}" aria-label="${escapeHtml(t("fork"))}">${HISTORY_ACTION_ICONS.fork}</button>`,
@@ -127,9 +136,11 @@ function rowHtml(item, { index, groupId, grouped = false, ctx }) {
     `</span>`
   ].join("");
   return [
-    `<li class="history-item${grouped ? " in-group" : ""}${item.sessionId === activeSessionId ? " active" : ""}${index === selectedIndex ? " selected" : ""}"`,
+    `<li class="history-item${grouped ? " in-group" : ""}${archived ? " archived" : ""}${item.sessionId === activeSessionId ? " active" : ""}${index === selectedIndex ? " selected" : ""}"`,
     ` data-session-id="${escapeHtml(item.sessionId)}" data-index="${index}" data-group-id="${escapeHtml(groupId)}"`,
-    draggable ? ' draggable="true"' : "",
+    archived ? ' data-archived="true"' : "",
+    // 归档行没有手动位置可落(Mac .moveDisabled(isArchived))。
+    draggable && !archived ? ' draggable="true"' : "",
     `>`,
     statusHtml(status, showStatus, pinned),
     `<span class="h-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>`,
@@ -193,10 +204,11 @@ function showMoreHtml(section) {
  * @param {object} options
  * @param {Array} options.sections buildSidebarSections 的产物。
  * @param {string} options.groupBy 当前分组轴(决定分区标题叫「工作区」还是「会话」)。
+ * @param {string} [options.archivedFilter] 当前归档筛选(决定空态文案)。
  * @param {object} options.ctx 行渲染上下文(见 rowHtml)。
  * @returns {Array} 实际画出来的行(按渲染顺序),供键盘导航与拖拽使用。
  */
-export function renderSections(list, { sections, groupBy, ctx }) {
+export function renderSections(list, { sections, groupBy, archivedFilter = ArchivedFilter.hide, ctx }) {
   const rendered = [];
   const html = [];
   let sectionHeadWritten = false;
@@ -234,9 +246,21 @@ export function renderSections(list, { sections, groupBy, ctx }) {
       { withActions: true }
     ));
   }
-  if (!rendered.length) html.push(`<li class="history-empty">${escapeHtml(t("sessions.empty"))}</li>`);
+  if (!rendered.length) html.push(emptyHtml(archivedFilter));
   list.innerHTML = html.join("");
   return rendered;
+}
+
+/// 列表空态。只看归档时说清是这个筛选空了,并给一条回去的路(Mac SidebarEmptyRow)。
+function emptyHtml(archivedFilter) {
+  if (archivedFilter !== ArchivedFilter.only) {
+    return `<li class="history-empty">${escapeHtml(t("sessions.empty"))}</li>`;
+  }
+  return [
+    `<li class="history-empty">${escapeHtml(t("sessions.noArchivedYet"))}`,
+    ` <button type="button" class="history-empty-link" data-action="show-other-sessions">`,
+    `${escapeHtml(t("sessions.viewOtherSessions"))}</button></li>`
+  ].join("");
 }
 
 /**

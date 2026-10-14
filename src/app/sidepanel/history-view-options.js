@@ -1,12 +1,14 @@
-// 会话抽屉的「视图选项」(分组轴 + 排序轴)、分组折叠态与行拖拽的接线。
+// 会话抽屉的「视图选项」(分组轴 + 排序轴 + 归档筛选)、分组折叠态与行拖拽的接线。
 //
 // 本文件的前身是 history-ordering.js(只有排序一根轴)。对齐 Mac 侧栏之后,
 // 分组、折叠、"展开其余 N 个"与拖拽都必须共享同一份状态:拖一下要自动切到
 // 手动档、切分组要重画、折叠要持久化 —— 拆成几个模块只会变成互相传状态。
 //
-// 两根轴与 Mac 的 SidebarViewOptions 同名同义:
+// 三根轴与 Mac 的 SidebarViewOptions 同名同义:
 //   分组 groupBy: workspace | flat      (默认 workspace)
 //   排序 orderBy: manual | updated | status (默认 updated)
+//   筛选 archivedFilter: default | show | only (默认 default = 隐藏已归档)
+// 已归档会话没有单独的入口页:与 Mac 一样,在筛选里切到「显示已归档」就在列表里看到它们。
 import { t } from "../../shared/i18n.js";
 import { SessionOrderBy } from "../../features/sessions/session-list-store.js";
 import { mountHistoryDrag } from "../../features/sessions/history-drag.js";
@@ -14,10 +16,11 @@ import { mountHistoryGroupDrag } from "../../features/sessions/history-group-dra
 import { resolveReorder } from "../../features/sessions/sidebar-reorder.js";
 import { renderMenuItems } from "./menu-items.js";
 import { lucideIconSvg } from "../../features/chat/file-icons.js";
-import { SidebarGroupBy, PINNED_GROUP_ID } from "../../features/sessions/sidebar-sections.js";
+import { SidebarGroupBy, ArchivedFilter, PINNED_GROUP_ID } from "../../features/sessions/sidebar-sections.js";
 
 const ORDER_KEY = "dsh_history_order_by";
 const GROUP_KEY = "dsh_history_group_by";
+const ARCHIVED_KEY = "dsh_history_archived_filter";
 const COLLAPSED_KEY = "dsh_history_group_collapsed";
 
 async function resolveStorage() {
@@ -45,6 +48,7 @@ export function mountHistoryViewOptions({
   // 默认档与 Mac 一致:按工作区分组、最近更新优先。
   let orderBy = SessionOrderBy.updated;
   let groupBy = SidebarGroupBy.workspace;
+  let archivedFilter = ArchivedFilter.hide;
   /// 折叠起来的分组(持久化)。
   let collapsed = new Set();
   /// 点过「展开其余 N 个」的分组。与 Mac 的 showAll 一样只活在本次挂载里 ——
@@ -53,11 +57,16 @@ export function mountHistoryViewOptions({
 
   const ORDER_MODES = [SessionOrderBy.manual, SessionOrderBy.updated, SessionOrderBy.status];
   const GROUP_MODES = [SidebarGroupBy.workspace, SidebarGroupBy.flat];
+  const ARCHIVED_MODES = [
+    [ArchivedFilter.hide, "sessions.filterHideArchived"],
+    [ArchivedFilter.show, "sessions.filterShowArchived"],
+    [ArchivedFilter.only, "sessions.filterOnlyArchived"]
+  ];
   const orderLabel = (mode) => t(`sessions.orderBy${mode[0].toUpperCase()}${mode.slice(1)}`);
   const groupLabel = (mode) => t(`sessions.groupBy${mode[0].toUpperCase()}${mode.slice(1)}`);
 
-  // 触发钮 + popover 菜单。一颗按钮里装两根轴(与 Mac 的 arrow.up.arrow.down
-  // 菜单同形):分区标题那一行宽度有限,两颗并排的下拉会把标题挤没。
+  // 触发钮 + popover 菜单。一颗按钮里装三根轴(与 Mac 的 arrow.up.arrow.down
+  // 菜单同形):分区标题那一行宽度有限,几颗并排的下拉会把标题挤没。
   const trigger = document.createElement("button");
   trigger.id = "history-view-btn";
   trigger.className = "hdr-btn";
@@ -103,9 +112,21 @@ export function mountHistoryViewOptions({
       if (orderBy === value) return;
       orderBy = value;
       void persist({ [ORDER_KEY]: value });
+    } else if (axis === "archived") {
+      setArchivedFilter(value);
+      return;
     } else return;
     paint();
     // 换了视图,高亮回到第一行 —— 原来的下标指向的已经是别的会话了。
+    rerender({ resetSelection: true });
+  }
+
+  /// 切换「筛选会话」。菜单与「只看归档」空态里的「查看其他会话」共用。
+  function setArchivedFilter(value) {
+    if (archivedFilter === value || !Object.values(ArchivedFilter).includes(value)) return;
+    archivedFilter = value;
+    void persist({ [ARCHIVED_KEY]: value });
+    paint();
     rerender({ resetSelection: true });
   }
 
@@ -117,9 +138,10 @@ export function mountHistoryViewOptions({
     addWorkspace.setAttribute("aria-label", t("workspace.add"));
     renderMenuItems(menu, [
       ...GROUP_MODES.map((mode) => ({ id: `group:${mode}`, label: groupLabel(mode), group: t("sessions.groupBy") })),
-      ...ORDER_MODES.map((mode) => ({ id: `order:${mode}`, label: orderLabel(mode), group: t("sessions.orderBy") }))
+      ...ORDER_MODES.map((mode) => ({ id: `order:${mode}`, label: orderLabel(mode), group: t("sessions.orderBy") })),
+      ...ARCHIVED_MODES.map(([mode, key]) => ({ id: `archived:${mode}`, label: t(key), group: t("sessions.filterBy") }))
     ], {
-      selectedIds: [`group:${groupBy}`, `order:${orderBy}`],
+      selectedIds: [`group:${groupBy}`, `order:${orderBy}`, `archived:${archivedFilter}`],
       groupBy: (entry) => entry.group,
       onSelect: choose
     });
@@ -151,16 +173,18 @@ export function mountHistoryViewOptions({
     });
   } catch { /* 非扩展环境(测试 / shim)没有 onChanged,单实例无所谓 */ }
 
-  // 读回上次的两根轴与折叠态,以及手动顺序/置顶账本。都是异步的,
+  // 读回上次的三根轴与折叠态,以及手动顺序/置顶账本。都是异步的,
   // 读到之前列表按默认档显示。
   const ready = (async () => {
     try {
       const area = await resolveStorage();
-      const stored = await area.get([ORDER_KEY, GROUP_KEY, COLLAPSED_KEY]);
+      const stored = await area.get([ORDER_KEY, GROUP_KEY, ARCHIVED_KEY, COLLAPSED_KEY]);
       const order = stored?.[ORDER_KEY];
       if (order && Object.values(SessionOrderBy).includes(order)) orderBy = order;
       const group = stored?.[GROUP_KEY];
       if (group && Object.values(SidebarGroupBy).includes(group)) groupBy = group;
+      const filter = stored?.[ARCHIVED_KEY];
+      if (filter && Object.values(ArchivedFilter).includes(filter)) archivedFilter = filter;
       const folded = stored?.[COLLAPSED_KEY];
       if (Array.isArray(folded)) collapsed = new Set(folded.filter((id) => typeof id === "string"));
       paint();
@@ -230,6 +254,8 @@ export function mountHistoryViewOptions({
     orderBy: () => orderBy,
     isGroupDraggable: groupDraggable,
     groupBy: () => groupBy,
+    archivedFilter: () => archivedFilter,
+    setArchivedFilter,
     /// 状态档下不让拖(置顶区在 mountHistoryDrag 的 enabled 里单独放行)。
     isDraggable: () => orderBy !== SessionOrderBy.status,
     collapsedIds: () => [...collapsed],
