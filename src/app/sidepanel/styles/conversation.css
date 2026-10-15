@@ -496,6 +496,8 @@ span.ref-chip { cursor: default; }
 }
 .maxtokens-chip, .maxtokens-chip .chip-icon { color: var(--warn); }
 .command-chip.error, .command-chip.error .chip-icon { color: var(--danger); }
+/* 工具增减提示:多个变更时标题旁的灰色计数(Mac ToolChangeRow summary)。 */
+.tool-change-count { flex: none; color: var(--text-faint); }
 /* 详情已统一由弹窗承载,chip 行内不再内联 <details>(旧规则已随之删除)。 */
 .compaction-body { margin-top: 0.25rem; font-size: 0.75rem; }
 

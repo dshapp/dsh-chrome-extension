@@ -21,7 +21,9 @@ export const NodeKind = Object.freeze({
   turnProcess: "turnProcess",
   turnTail: "turnTail",
   workflowRun: "workflowRun",
-  unknownSurface: "unknownSurface"
+  unknownSurface: "unknownSurface",
+  // developer/message 里的工具增减提示(web ContextInjectionRow 工具形态)。
+  toolChange: "toolChange"
 });
 
 export const AssistantStatus = Object.freeze({
@@ -68,6 +70,7 @@ export function nodeId(node) {
     case NodeKind.turnTail: return `ttl-${node.turn}`;
     case NodeKind.workflowRun: return `wf-${node.runId}`;
     case NodeKind.unknownSurface: return `unk-${node.seq}`;
+    case NodeKind.toolChange: return `tc-${node.seq}`;
     default: return `node-${node.seq ?? 0}`;
   }
 }
@@ -252,6 +255,10 @@ export function workflowRunNode({ runId, name, status, phases, anchorSeq: anchor
 
 export function unknownSurfaceNode({ seq, time, type, data }) {
   return { kind: NodeKind.unknownSurface, seq, time, type, data };
+}
+
+export function toolChangeNode({ seq, time, added, removed }) {
+  return { kind: NodeKind.toolChange, seq, time, added, removed };
 }
 
 // ---- 内容块辅助 ----

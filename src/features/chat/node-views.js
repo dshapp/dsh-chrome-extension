@@ -1682,6 +1682,39 @@ export function createWorkflowNode(node) {
   return wrap;
 }
 
+/// 工具增减提示(对齐 Mac ToolChangeRow / web ContextInjectionRow 工具形态):
+/// 单个变更是一行纯提示;多个变更显示「工具已更新」+ 计数,点开详情弹窗看名单。
+export function createToolChangeNode(node) {
+  const added = node.added ?? [];
+  const removed = node.removed ?? [];
+  const single = added.length + removed.length === 1;
+  const title = !single ? t("node.toolsUpdated")
+    : added.length ? t("node.toolAdded", { name: added[0] }) : t("node.toolRemoved", { name: removed[0] });
+  const wrap = el("div", "chip-row tool-change-chip");
+  const head = el(single ? "div" : "button", "chip-head");
+  const icon = el("span", "chip-icon");
+  icon.innerHTML = getToolIconSvg("wrench");
+  head.append(icon, el("span", "chip-label", title));
+  wrap.append(head);
+  if (single) return wrap;
+  const summary = added.length && removed.length
+    ? t("node.toolsChanged", { added: String(added.length), removed: String(removed.length) })
+    : added.length ? t("node.toolsAddedCount", { count: String(added.length) })
+      : t("node.toolsRemovedCount", { count: String(removed.length) });
+  head.append(el("span", "tool-change-count", summary));
+  const details = [];
+  if (added.length) details.push(t("node.toolsAdded", { names: added.join(", ") }));
+  if (removed.length) details.push(t("node.toolsRemoved", { names: removed.join(", ") }));
+  head.type = "button";
+  head.setAttribute("aria-haspopup", "dialog");
+  head.addEventListener("click", () => openCardDetail({
+    title,
+    copyText: details.join("\n"),
+    build: () => el("pre", "command-output-body", details.join("\n"))
+  }));
+  return wrap;
+}
+
 /// 未被任何定义认领的事件:保留可见行,折叠原始 JSON。
 export function createUnknownNode(node) {
   const wrap = el("div", "unknown-node");
@@ -1753,6 +1786,7 @@ export function createNodeElement(node, context) {
     case NodeKind.turnTail: return createTurnTailNode(node, context);
     case NodeKind.workflowRun: return createWorkflowNode(node);
     case NodeKind.unknownSurface: return createUnknownNode(node);
+    case NodeKind.toolChange: return createToolChangeNode(node);
     default: return null;
   }
 }

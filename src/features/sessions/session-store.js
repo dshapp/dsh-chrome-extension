@@ -14,7 +14,7 @@ import {
   nodeId, anchorSeq, assistantNode, assistantVisible, toolCallNode, toolResult,
   userNode, steeringNode, turnTriggerNode, compactionNode, modelRetryNode,
   turnErrorNode, turnMaxTokensNode, commandNode, turnProcessNode, turnTailNode, workflowRunNode,
-  unknownSurfaceNode, toAssistantBlock, emptyBlockFor
+  unknownSurfaceNode, toolChangeNode, toAssistantBlock, emptyBlockFor
 } from "./chat-nodes.js";
 import { EVT } from "../../platform/dsh/rpc-methods.js";
 import { t } from "../../shared/i18n.js";
@@ -421,6 +421,7 @@ export function createSessionStore() {
       // system/message 属于 Web 的 request/trajectory 视图,主记录里不该有行。
       case EVT.systemMessage:
       case EVT.requestHeader: return;
+      case EVT.developerMessage: return applyDeveloperMessage(event);
       default:
         // Web 的会话投影只认领对白事件:system/* 与 request/* 属于
         // request/trajectory 等旁路视图,任何变体都不该在主记录里长行。
@@ -433,6 +434,24 @@ export function createSessionStore() {
   /// system/* 与 request/* 事件在主聊天记录里永不占位(对齐 Web 的会话投影)。
   function isNonTranscriptType(type) {
     return typeof type === "string" && (type.startsWith("system/") || type.startsWith("request/"));
+  }
+
+  /// developer/message 是 context(web developerMessageDefinition):只有工具增减块
+  /// (tool-addition / tool-removal)留一行提示(web isVisibleChatNode),其余内容不显示,
+  /// 也不落进未知面兜底。
+  function applyDeveloperMessage(event) {
+    const added = [];
+    const removed = [];
+    const content = event.data?.message?.content;
+    for (const block of Array.isArray(content) ? content : []) {
+      const name = isObject(block) ? str(block.toolName) : null;
+      if (!name) continue;
+      if (block.type === "tool-addition") added.push(name);
+      else if (block.type === "tool-removal") removed.push(name);
+    }
+    if (!added.length && !removed.length) return;
+    const node = toolChangeNode({ seq: event.seq, time: event.time, added, removed });
+    state.contexts.set(`tool-change:${event.seq}`, { type: "finalized", node });
   }
 
   /// 没有任何定义认领的 **append 面**:保留一个可见行,而不是从记录里消失。

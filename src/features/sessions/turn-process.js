@@ -30,13 +30,14 @@ export const PROCESS_INDEPENDENT_KINDS = new Set([
   NodeKind.turnTail
 ]);
 
-/// 标记过程起点、但不进计数的种类(Mac:.modelRetry, .compaction, .command, .workflowRun, .unknownSurface)。
+/// 标记过程起点、但不进计数的种类(Mac:.modelRetry, .compaction, .command, .workflowRun, .unknownSurface, .toolChange)。
 const PROCESS_EVIDENCE_KINDS = new Set([
   NodeKind.modelRetry,
   NodeKind.compaction,
   NodeKind.command,
   NodeKind.workflowRun,
-  NodeKind.unknownSurface
+  NodeKind.unknownSurface,
+  NodeKind.toolChange
 ]);
 
 /// 开启新框架的输入:之后的行不能再记到它之前那一轮。

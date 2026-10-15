@@ -165,6 +165,9 @@ export const EVT = Object.freeze({
   // system/message 属于 Web 的 request/trajectory 视图,不进主聊天记录:
   // 不显式忽略会在每次会话开头画一行"未处理的事件:system/message"。
   systemMessage: "system/message",
+  // developer/message 是 context(web developerMessageDefinition):只有其中的
+  // 工具增减留一行提示,其余内容不进主记录。
+  developerMessage: "developer/message",
   userMessage: "user/message",
   turnStart: "turn/start",
   turnEnd: "turn/end",
