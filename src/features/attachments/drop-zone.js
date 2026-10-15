@@ -2,7 +2,9 @@
 // 非图片走 session/uploadFileBinary 真上传(见 attachments.js)。
 //
 // 这一层只认 DOM 与 DataTransfer,不认识附件的内部结构 —— 文件交给 onFiles,
-// 文件夹交给 onRejected,校验/上传/预览全由 attachments 那边复用粘贴的同一条路。
+// 文件夹(名字)交给 onDirectories,认不出的条目交给 onRejected;校验/上传/预览
+// 全由 attachments 那边复用粘贴的同一条路。文件夹不上传,而是按绝对路径写进
+// 提示词(路径由 native host 读系统拖拽板得到,见 folder-paths.js)。
 //
 // ⚠️ 为什么非图片能收:浏览器**刻意不暴露**拖入文件的真实路径。File 没有 .path
 // (那是 Electron 的私有补丁),webkitGetAsEntry().fullPath 是沙箱虚拟路径,
@@ -21,29 +23,56 @@ export function hasFiles(dataTransfer) {
   return Array.from(types).includes("Files");
 }
 
-/// 把 drop 下来的文件分成"能收的图片"与"收不了的其余"。
+/// 带文字吗?(纯文本、富文本或链接)
+///
+/// 粘贴时用来区分两种剪贴板:Finder 拷贝文件时 types 只有 "Files",没有任何文字
+/// 类型,但 Chrome 的默认粘贴动作仍会把**文件名**插进输入框 —— 这种要吃掉;
+/// Excel/Word 拷贝会同时带文字与一张 png 渲染图,文字是用户要的,不能吃。
+export function hasText(dataTransfer) {
+  const types = dataTransfer?.types;
+  if (!types) return false;
+  return Array.from(types).some((type) => type === "text/plain" || type === "text/html" || type === "text/uri-list");
+}
+
+/// 把 drop/paste 下来的条目分成图片、其余文件与文件夹(按名字);认不出的标记 opaque。
+///
+/// 拖放与粘贴共用:两者的 DataTransfer 形状相同。
 export function partitionDropped(dataTransfer) {
-  const files = Array.from(dataTransfer?.files ?? []);
+  const items = Array.from(dataTransfer?.items ?? []).filter((item) => item.kind === "file");
+  let files;
+  const directories = [];
+  let opaque = false;
+  if (items.length) {
+    // 文件夹在 files 里也会占一项(type 为空、读取时报 NotFoundError),必须靠
+    // webkitGetAsEntry 认出来单独拿走,否则会变成一个"上传失败"的附件。
+    files = [];
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry?.isDirectory) { directories.push(entry.name); continue; }
+      const file = item.getAsFile?.();
+      if (file) files.push(file);
+      // 拖**文件夹**时有的环境拿不到 entry,getAsFile 也是 null,只剩一条 kind="file"。
+      // 不当成 opaque 的话,拖文件夹会静默无反应 —— 用户以为侧栏坏了。
+      else opaque = true;
+    }
+  } else {
+    files = Array.from(dataTransfer?.files ?? []);
+  }
   const images = files.filter((file) => String(file.type).startsWith("image/"));
   const others = files.filter((file) => !String(file.type).startsWith("image/"));
-  // 拖**文件夹**时 dataTransfer.files 通常是空的,只有 items 里留下一条 kind="file"。
-  // 不看 items 的话,拖文件夹会静默无反应 —— 用户以为侧栏坏了。
-  if (!files.length) {
-    const items = Array.from(dataTransfer?.items ?? []);
-    if (items.some((item) => item.kind === "file")) return { images, others, opaque: true };
-  }
-  return { images, others, opaque: false };
+  return { images, others, directories, opaque };
 }
 
 /**
  * @param {HTMLElement} root 监听拖放的根(整个侧栏)
  * @param {object} options
  * @param {HTMLElement} options.overlay 拖拽中显示的覆盖层
- * @param {(files: File[]) => void} options.onFiles 收到图片
- * @param {() => void} options.onRejected 收到非图片/文件夹
+ * @param {(files: File[]) => void} options.onFiles 收到图片/文件
+ * @param {(names: string[]) => void} [options.onDirectories] 收到文件夹(名字)
+ * @param {() => void} options.onRejected 收到认不出的条目(拿不到文件也拿不到 entry)
  * @param {() => boolean} [options.isEnabled] false 时完全不响应(会话未就绪等)
  */
-export function mountDropZone(root, { overlay, onFiles, onRejected, isEnabled = () => true }) {
+export function mountDropZone(root, { overlay, onFiles, onDirectories, onRejected, isEnabled = () => true }) {
   // dragenter/dragleave 在掠过**每一个子元素**时都会成对触发,直接在 dragleave
   // 里关覆盖层会让拖拽经过按钮/消息卡时疯狂闪烁。维护一个深度计数,归零才关。
   let depth = 0;
@@ -84,10 +113,11 @@ export function mountDropZone(root, { overlay, onFiles, onRejected, isEnabled = 
     event.preventDefault();
     hide();
     if (!isEnabled()) return;
-    const { images, others, opaque } = partitionDropped(event.dataTransfer);
-    // 非图片文件现在走 session/uploadFileBinary 真上传,和图片同一条 onFiles 路;
-    // 文件夹仍提示一次,拖 10 个文件夹不该刷 10 条 toast。
+    const { images, others, directories, opaque } = partitionDropped(event.dataTransfer);
+    // 非图片文件走 session/uploadFileBinary 真上传,和图片同一条 onFiles 路;
+    // 文件夹一次性整批交出去(一次读拖拽板);认不出的只提示一次。
     if (images.length || others.length) onFiles([...images, ...others]);
+    if (directories.length) onDirectories?.(directories);
     if (opaque) onRejected();
   }
 

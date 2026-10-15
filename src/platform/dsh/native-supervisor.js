@@ -89,4 +89,19 @@ export async function requestSessionCookie(host = "127.0.0.1", port = 3080) {
   }
 }
 
+/**
+ * 读 macOS 剪贴板(board:"general")或拖拽板(board:"drag")上文件/文件夹的
+ * 绝对路径。浏览器不暴露粘贴/拖入项的真实路径,文件夹只能靠这里按路径引用。
+ * 旧版宿主没有这条命令,会回 { ok:false, reason:"unknown-cmd" }。
+ */
+export async function requestPasteboardPaths(board) {
+  if (!canCallNative()) return { ok: false, reason: "native-messaging-unavailable" };
+  try {
+    const reply = await chrome.runtime.sendNativeMessage(HOST_NAME, { cmd: "filePaths", board });
+    return reply || { ok: false, reason: "empty-reply" };
+  } catch (error) {
+    return { ok: false, reason: String(error?.message || error || "native-call-failed") };
+  }
+}
+
 export const NATIVE_HOST_NAME = HOST_NAME;
