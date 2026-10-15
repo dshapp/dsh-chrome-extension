@@ -1694,7 +1694,8 @@ export function createSessionStore() {
       hasMore: state.hasMore,
       turnClosedAfter: (seq) => turnEndBoundaryAfter(seq) != null,
       turnEnd: (turn) => state.turnEnds.get(turn),
-      turnStartTime: (turn) => state.turnStartTimes.get(turn)
+      turnStartTime: (turn) => state.turnStartTimes.get(turn),
+      turnStartSeq: (turn) => state.turnStartSeqs.get(turn)
     });
     state.turnProcessByTurn = new Map();
     if (processSpecs.size) {

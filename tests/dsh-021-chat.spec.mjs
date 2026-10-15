@@ -130,16 +130,17 @@ test('completed process keeps answer external and collapses its final reasoning,
   control.click(); assert.equal(container.querySelector('.thinking-bubble').hidden, true)
 })
 
-test('open partial turn has no process disclosure; closed without final reply cannot fold evidence', () => {
+test('open partial turn has no process disclosure; closed without final reply folds whole (web parity)', () => {
   const store = createSessionStore(); store.reset('s'); start(store); store.setHasMore(true)
   store.applyEvent(call(1))
   assert.equal(store.getSnapshot().turnProcessByTurn.size, 0)
   store.applyEvent(end(2))
   const spec = store.getSnapshot().turnProcessByTurn.get(1)
-  assert.equal(spec.answerAnchorSeq, null); assert.equal(spec.inlineReasoning, false)
+  assert.equal(spec.answerAnchorSeq, null); assert.equal(spec.inlineReasoning, false); assert.equal(spec.foldEndSeq, 2.5)
   const container = document.createElement('div'); createChatRenderer(container).render(store.getSnapshot().nodes)
-  assert.equal(container.querySelector('.tool-row').hidden, false)
-  assert.equal(container.querySelector('.turn-process').tagName, 'DIV')
+  assert.equal(container.querySelector('.tool-row').hidden, true)
+  const control = container.querySelector('.turn-process'); assert.equal(control.tagName, 'BUTTON')
+  control.click(); assert.equal(container.querySelector('.tool-row').hidden, false)
 })
 
 test('stopped/failed process outcomes have no disclosure and no successful duration', () => {
@@ -147,7 +148,7 @@ test('stopped/failed process outcomes have no disclosure and no successful durat
     const store = createSessionStore(); store.reset('s'); start(store)
     store.applyEvent(assistant(1, 1, text('Partial answer'))); store.applyEvent(end(2, kind))
     const spec = store.getSnapshot().turnProcessByTurn.get(1)
-    assert.equal(spec.outcome, outcome); assert.equal(spec.answerAnchorSeq, null); assert.equal(spec.durationMs, null)
+    assert.equal(spec.outcome, outcome); assert.equal(spec.foldEndSeq, null); assert.equal(spec.durationMs, null)
   }
 })
 

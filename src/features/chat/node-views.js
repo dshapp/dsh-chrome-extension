@@ -1709,7 +1709,7 @@ function safeJson(value) {
 /// Turn process 折叠头:整行可点(button 自带 Enter/Space),chevron + 计数。
 /// 无最终回答或停止/失败时只显示状态,不折叠过程证据。
 export function createTurnProcessNode(node, context = {}) {
-  const foldable = node.answerAnchorSeq != null && (node.memberCount > 0 || node.inlineReasoning);
+  const foldable = node.foldEndSeq != null && (node.memberCount > 0 || node.inlineReasoning);
   const button = el(foldable ? "button" : "div", "turn-process");
   if (foldable) button.type = "button";
   button.dataset.turnProcess = String(node.turn);
