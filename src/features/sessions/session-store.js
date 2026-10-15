@@ -1287,6 +1287,9 @@ export function createSessionStore() {
         if (ctx?.type === "assistant") {
           ctx.node.blocks = [];
           ctx.node.status = AssistantStatus.running;
+          // 重试产出的内容排在重试行之后(web 以最终 assistant/message 的 seq 作回答边界):
+          // 否则这一步沿用失败尝试的位置,回答排到重试行上方,重试行落在折叠区间外。
+          ctx.node.startSeq = event.seq + 0.5;
           ctx.node.firstVisibleSeq = null;
           ctx.node.messageId = null;
           ctx.node.usage = null;

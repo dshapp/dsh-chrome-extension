@@ -140,3 +140,29 @@ test('压缩行摘要位:项数+token → 摘要首行 → 不可用', () => {
   assert.equal(missing.textContent, 'Compaction summary unavailable')
   assert.equal(missing.querySelector('button'), null)
 })
+
+test('重试后的回答排在重试行之后,重试行随过程折叠(web answerAnchorSeq = 最终 assistant/message)', () => {
+  const store = createSessionStore()
+  store.reset('s1')
+  const events = [
+    { seq: 4, type: 'turn/start', data: { turn: 1 } },
+    { seq: 6, type: 'step/start', data: { turn: 1, step: 1 } },
+    { seq: 8, type: 'user/message', surfaceOp: 'append',
+      data: { message: { id: 'u1', role: 'user', source: { kind: 'user' }, content: text('hi') } } },
+    // 失败的那次尝试先结算,随后调度并开始重试。
+    { seq: 10, type: 'assistant/attempt', data: { turn: 1, step: 1 } },
+    { seq: 11, type: 'llm/retry', data: { turn: 1, step: 1, retryId: 'r1', retry: 1, maxRetries: 5, delayMs: 1000 } },
+    { seq: 12, type: 'llm/retry-started', data: { turn: 1, step: 1, retryId: 'r1', retry: 1 } },
+    { seq: 13, type: 'assistant/message', surfaceOp: 'append',
+      data: { turn: 1, step: 1, message: { role: 'assistant', content: text('answer') } } },
+    { seq: 14, type: 'step/end', data: { turn: 1, step: 1 } },
+    { seq: 15, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }
+  ]
+  for (const event of events) store.applyEvent({ time: event.seq, ...event })
+  const nodes = store.getSnapshot().nodes
+  const kinds = nodes.map((node) => node.kind)
+  assert.ok(kinds.indexOf(NodeKind.modelRetry) < kinds.indexOf(NodeKind.assistant), kinds.join(','))
+  const specs = new Map(nodes.filter((node) => node.kind === NodeKind.turnProcess).map((node) => [node.turn, node]))
+  const retry = nodes.find((node) => node.kind === NodeKind.modelRetry)
+  assert.equal(processSpecFor(retry, specs)?.turn, 1)
+})
