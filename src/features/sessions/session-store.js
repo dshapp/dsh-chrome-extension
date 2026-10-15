@@ -813,7 +813,7 @@ export function createSessionStore() {
         // 时没有 step 可寻址,durable settlement 会补上内容。
         const attempt = state.liveAttempt;
         if (!attempt || attempt.attemptId !== frame.attemptId) return;
-        applyAssistantLiveChunk(attempt.turn, attempt.step, attempt.startedAfterSeq,
+        applyAssistantLiveChunk(attempt.turn, attempt.step, liveAnchorSeq(attempt),
           num(frame.time) ?? 0, frame.chunk);
         state.nodesDirty = true;
         break;
@@ -827,6 +827,13 @@ export function createSessionStore() {
     }
   }
 
+  /// live 行的排序位置(Mac nextLiveChunkSeq):排在本端已收到的全部 durable 事件之后。
+  /// start 帧的 startedAfterSeq 是宿主发帧时的游标,可能早于随后才送达的本步
+  /// user/message;直接用它会让正在流式的行(连同思考态)排到用户消息上方。
+  function liveAnchorSeq(attempt) {
+    return Math.max(attempt.startedAfterSeq, state.lastSeq + 0.5);
+  }
+
   /// 重连快照时从 baseline 恢复被打断的 attempt。
   function applyAssistantStreamBaseline(baseline) {
     const attempt = baseline?.activeAttempt;
@@ -838,7 +845,7 @@ export function createSessionStore() {
     const step = num(attempt.step) ?? 0;
     const startedAfterSeq = num(attempt.startedAfterSeq) ?? 0;
     state.liveAttempt = { attemptId: attempt.attemptId, turn, step, startedAfterSeq };
-    applyAssistantStreamRecords(turn, step, startedAfterSeq, attempt.stream);
+    applyAssistantStreamRecords(turn, step, liveAnchorSeq(state.liveAttempt), attempt.stream);
     state.nodesDirty = true;
   }
 

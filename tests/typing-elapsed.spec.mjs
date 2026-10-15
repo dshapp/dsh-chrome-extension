@@ -17,7 +17,7 @@ globalThis.window = dom.window
 globalThis.document = dom.window.document
 globalThis.Node = dom.window.Node
 
-const { createChatRenderer } = await import('../src/features/chat/chat-renderer.js')
+const { createChatRenderer, agentStatusLabel, isThinking } = await import('../src/features/chat/chat-renderer.js')
 const { createSessionStore } = await import('../src/features/sessions/session-store.js')
 
 test('快照:运行中给出本轮 turn/start 时间,结束后为 null', () => {
@@ -42,4 +42,21 @@ test('指示器:用时取 turn/start 起点,思考态也显示,切换后不归�
   renderer.setTyping(true, 'preparing')
   assert.equal(host.querySelector('.typing-time').textContent, '')
   renderer.reset()
+})
+
+test('live 思考:start 帧游标早于本步 user/message 时,流式行仍排在用户消息之后,进入思考态', () => {
+  const store = createSessionStore()
+  store.reset('s1')
+  store.applyEvent({ type: 'turn/start', seq: 4, time: 1000, data: { turn: 1 } })
+  store.applyEvent({ type: 'step/start', seq: 6, time: 1000, data: { turn: 1, step: 1 } })
+  // 宿主发 start 帧时游标还停在 step/start,本步的 user/message 随后才送达。
+  store.applyAssistantStreamFrame({ type: 'start', attemptId: 'a', turn: 1, step: 1, startedAfterSeq: 6 })
+  store.applyEvent({ type: 'user/message', seq: 8, time: 1000, data: { id: 'm1', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } } })
+  store.applyAssistantStreamFrame({ type: 'chunk', attemptId: 'a', index: 0, time: 1001, chunk: { type: 'block-start', index: 0, blockType: 'reasoning' } })
+  store.applyAssistantStreamFrame({ type: 'chunk', attemptId: 'a', index: 1, time: 1001, chunk: { type: 'reasoning-delta', index: 0, text: '想一想' } })
+  const snapshot = store.getSnapshot()
+  assert.deepEqual(snapshot.nodes.filter((node) => node.kind !== 'turnTail').map((node) => node.kind), ['user', 'assistant'])
+  assert.equal(isThinking(snapshot), true)
+  assert.equal(agentStatusLabel(snapshot), null)
+  assert.equal(snapshot.runningStartTime, 1000)
 })
