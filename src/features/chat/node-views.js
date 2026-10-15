@@ -965,7 +965,7 @@ export function createModelRetryNode(node) {
   wrap.append(el("span", "chip-icon", "↻"));
   const reason = node.failureMessage || node.failureCode || "";
   const label = node.retryState === "started"
-    ? t("node.retryStarted", { retry: String(node.retry) })
+    ? t("node.retryStarted", { retry: String(node.retry), max: String(node.maxRetries ?? "∞") })
     : t("node.retryScheduled", {
         retry: String(node.retry),
         max: String(node.maxRetries ?? "?"),
@@ -973,9 +973,13 @@ export function createModelRetryNode(node) {
       });
   wrap.append(el("span", "chip-label", label));
 
-  // 倒计时(web ModelRetryItem):只在等待期内跳动,到 1s 停止。
-  const active = node.retryState === "scheduled" || node.retryState === "started";
+  // 倒计时(web ModelRetryItem):只在等待期(scheduled)内跳动,到 1s 停止;
+  // 已开始的重试只显示调度时的静态秒数。
+  const active = node.retryState === "scheduled";
   const delayMs = Number(node.delayMs);
+  if (node.retryState === "started" && node.delayMs != null && Number.isFinite(delayMs)) {
+    wrap.append(el("span", "chip-seconds", ` · ${Math.max(1, Math.ceil(delayMs / 1000))}s`));
+  }
   if (active && Number.isFinite(delayMs)) {
     const seconds = el("span", "chip-seconds", "");
     wrap.append(seconds);
