@@ -78,7 +78,8 @@ export function nodeId(node) {
 /// 排序锚点。小数偏移照搬 Mac:同 seq 上 turnMaxTokens 后置 0.05、turnTail 后置 0.1。
 export function anchorSeq(node) {
   switch (node.kind) {
-    case NodeKind.assistant: return node.firstVisibleSeq ?? node.startSeq;
+    // 对齐 web projectAssistant / Mac:结算 seq 优先,位置不再取决于是否实时看过这一步。
+    case NodeKind.assistant: return node.settledSeq ?? node.firstVisibleSeq ?? node.startSeq;
     case NodeKind.toolCall: return node.startSeq;
     case NodeKind.turnMaxTokens: return node.seq + 0.05;
     // 对齐 Mac ChatNode.turnProcess:紧贴在它折叠的首行之前(processStartSeq - 0.001)。
@@ -155,6 +156,8 @@ export function assistantNode({ turn, step, startSeq, time }) {
     kind: NodeKind.assistant,
     turn, step, startSeq, time,
     firstVisibleSeq: null,
+    // 结算事件(assistant/message / assistant/attempt)自己的 seq;重试时置空。
+    settledSeq: null,
     status: AssistantStatus.running,
     blocks: [],
     usage: null,

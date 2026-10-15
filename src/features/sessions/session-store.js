@@ -720,6 +720,7 @@ export function createSessionStore() {
     // 所以该行保留"已停止"的观感,而不是读作一个完成的回答。
     node.status = interrupted ? AssistantStatus.interrupted : AssistantStatus.settled;
     node.interrupted = interrupted;
+    node.settledSeq = event.seq;
     node.blocks = (Array.isArray(message.content) ? message.content : []).map(toAssistantBlock);
     node.messageId = str(message.id);
     node.provider = str(d.provider ?? message.provider);
@@ -792,6 +793,7 @@ export function createSessionStore() {
     node.time = event.time;
     node.status = AssistantStatus.interrupted;
     node.interrupted = true;
+    node.settledSeq = event.seq;
     state.contexts.set(key, { type: "assistant", node });
   }
 
@@ -1287,10 +1289,8 @@ export function createSessionStore() {
         if (ctx?.type === "assistant") {
           ctx.node.blocks = [];
           ctx.node.status = AssistantStatus.running;
-          // 重试产出的内容排在重试行之后(web 以最终 assistant/message 的 seq 作回答边界):
-          // 否则这一步沿用失败尝试的位置,回答排到重试行上方,重试行落在折叠区间外。
-          ctx.node.startSeq = event.seq + 0.5;
           ctx.node.firstVisibleSeq = null;
+          ctx.node.settledSeq = null;
           ctx.node.messageId = null;
           ctx.node.usage = null;
         }
