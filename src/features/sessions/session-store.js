@@ -1922,6 +1922,8 @@ export function createSessionStore() {
       running: state.running,
       historyError: state.historyError,
       currentTurn: state.currentTurn,
+      // 运行中本轮的 turn/start 时间(Mac runningStartTime),底部状态行的用时从这里起算。
+      runningStartTime: state.running ? state.turnStartTimes.get(state.currentTurn) ?? null : null,
       lastSeq: state.lastSeq,
       hasMore: state.hasMore,
       nodes: state.nodes,

@@ -15,7 +15,7 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
   let rendered = new Map();
   let typingEl = null;
   let typingTimer = null;
-  let typingStartTs = 0;
+  let typingStartedAt = null;
   // Turn process 展开态(turn 集合)与当前渲染用的折叠规格。
   // 默认收起;同一会话内切换后保持,换会话 reset 时清空。
   const openProcessTurns = new Set();
@@ -200,8 +200,33 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
   }
 
   // ---- 等待指示 ----
+  // 用时取本轮 turn/start 的时间(对齐 Mac runningStartTime = turnStartTimes[currentTurn]):
+  // 进出思考态、切会话、指示器重建都不归零;还没有 turn/start 时不显示用时。
 
-  function setTyping(active, label) {
+  function paintTypingTime() {
+    const timeEl = typingEl?.querySelector(".typing-time");
+    if (!timeEl) return;
+    if (typingStartedAt == null) { timeEl.textContent = ""; return; }
+    // 与 web/Mac 一致:下限 1 秒。
+    const sec = Math.max(1, Math.floor((Date.now() - typingStartedAt) / 1000));
+    timeEl.textContent = ` · ${sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${sec % 60 ? ` ${sec % 60}s` : ""}`}`;
+  }
+
+  function mountTyping(thinking, label, startedAt) {
+    setTyping(false);
+    typingStartedAt = startedAt ?? null;
+    typingEl = document.createElement("div");
+    typingEl.className = thinking ? "typing-indicator thinking" : "typing-indicator";
+    const dots = thinking ? "" : '<div class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></div>';
+    typingEl.innerHTML = `${dots}<span class="typing-label" role="status" aria-live="polite"></span><span class="typing-time" aria-hidden="true"></span>`;
+    typingEl.querySelector(".typing-label").textContent = label;
+    paintTypingTime();
+    typingTimer = setInterval(paintTypingTime, 1000);
+    container.append(typingEl);
+  }
+
+  /// startedAt:本轮 turn/start 的时间戳(ms),来自快照的 runningStartTime。
+  function setTyping(active, label, startedAt = null) {
     if (!active) {
       if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
       typingEl?.remove();
@@ -209,43 +234,25 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
       return;
     }
     const text = label || t("working");
-    // 已有一个 working 指示 → 原地改文案,计时保持连续。
+    // 已有一个 working 指示 → 原地改文案与起点。
     if (typingEl && !typingEl.classList.contains("thinking")) {
       const labelEl = typingEl.querySelector(".typing-label");
       if (labelEl) labelEl.textContent = text;
+      typingStartedAt = startedAt ?? null;
+      paintTypingTime();
       if (typingEl.parentNode !== container || typingEl !== container.lastElementChild) container.append(typingEl);
       return;
     }
-    if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
-    typingEl?.remove();
-    typingStartTs = Date.now();
-    typingEl = document.createElement("div");
-    typingEl.className = "typing-indicator";
-    typingEl.innerHTML = '<div class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></div><span class="typing-label" role="status" aria-live="polite"></span><span class="typing-time" aria-hidden="true"></span>';
-    typingEl.querySelector(".typing-label").textContent = text;
-    const timeEl = typingEl.querySelector(".typing-time");
-    const tick = () => {
-      const sec = Math.floor((Date.now() - typingStartTs) / 1000);
-      timeEl.textContent = sec > 0
-        ? ` · ${sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${sec % 60 ? ` ${sec % 60}s` : ""}`}`
-        : "";
-    };
-    tick();
-    typingTimer = setInterval(tick, 1000);
-    container.append(typingEl);
+    mountTyping(false, text, startedAt);
   }
 
-  function setThinking(thinking) {
+  function setThinking(thinking, startedAt = null) {
     if (!thinking) {
       if (typingEl?.classList.contains("thinking")) setTyping(false);
       for (const node of container.querySelectorAll(".typing-indicator.thinking")) node.remove();
       return;
     }
-    setTyping(false);
-    typingEl = document.createElement("div");
-    typingEl.className = "typing-indicator thinking";
-    typingEl.innerHTML = `<span class="typing-label" role="status" aria-live="polite">${t("thinking")} …</span>`;
-    container.append(typingEl);
+    mountTyping(true, `${t("thinking")} …`, startedAt);
   }
 
   function reset() {

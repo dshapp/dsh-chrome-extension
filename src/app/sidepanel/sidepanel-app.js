@@ -330,8 +330,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     realizePendingJump();
     const statusLabel = agentStatusLabel(snapshot, { awaitingTurnStart });
     // 空会话 + 加载失败:空态提示比一片空白更能说明"这不是在加载"。
-    chatRenderer.setTyping(statusLabel != null, statusLabel);
-    chatRenderer.setThinking(isThinking(snapshot));
+    chatRenderer.setTyping(statusLabel != null, statusLabel, snapshot.runningStartTime);
+    chatRenderer.setThinking(isThinking(snapshot), snapshot.runningStartTime);
     elements.emptyHint.hidden = snapshot.nodes.length > 0 || pendingSteering.length > 0;
 
     renderTakeover(snapshot);
