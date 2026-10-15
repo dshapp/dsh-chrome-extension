@@ -1127,11 +1127,12 @@ export function createSidepanelApp(root, deps, options = {}) {
   ///
   /// 注意 options 必须防御非对象:这个函数直接当过 click 监听器,
   /// 那时传进来的是 MouseEvent。
+  /// draft:预填到新会话输入框的文字,打开后聚焦并把光标放在末尾(自动化页「新建」用)。
   async function newSession(options) {
     mainSurfaces?.close();
     settingsView?.close();
     historyDrawer?.hide?.();
-    const { _retried = false, agentPreset = null } = (options && typeof options === "object" && !("target" in options))
+    const { _retried = false, agentPreset = null, draft = "" } = (options && typeof options === "object" && !("target" in options))
       ? options : {};
     const workspace = workspaceMenu?.selected() ?? await prepareDefaultWorkspace();
     // agentPreset 只在"用创造模式创作"那条路径上传:宿主在 create 时就按它组装
@@ -1146,7 +1147,12 @@ export function createSidepanelApp(root, deps, options = {}) {
     };
     try {
       const sessionId = await deps.sessions.create(input);
-      await openSession(sessionId, { fresh: true, _retried });
+      setDraft(sessionId, draft);
+      const opened = await openSession(sessionId, { fresh: true, _retried });
+      if (draft && opened === sessionId) {
+        elements.input.focus();
+        elements.input.setSelectionRange(draft.length, draft.length);
+      }
       return sessionId;
     } catch (error) {
       // 该函数直接作为 click handler；错误若继续冒泡只会变成控制台里的
@@ -1786,7 +1792,7 @@ export function createSidepanelApp(root, deps, options = {}) {
         plugins: { titleKey: "management.plugins", mount: (host) => settingsView.createPluginManager(host) },
         automations: { titleKey: "management.automations", mount: (host) => mountAutomationsPage(host, {
           service: deps.automations, sessions: deps.sessions, workspaces: deps.workspaces, showToast,
-          onNewSession: () => newSession({ agentPreset: "cordis" }), onOpenSession: openSession
+          onNewSession: () => newSession({ agentPreset: "cordis", draft: t("automationsNewDraft") }), onOpenSession: openSession
         }) }
       }
     });
