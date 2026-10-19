@@ -1,20 +1,27 @@
 /**
- * 标签页「正在被接管」的 favicon 动效 —— 注入页面的那一半。
+ * 标签页「受插件控制 / 正在被操作」的 favicon 标记 —— 注入页面的那一半。
  *
  * 由 sw/tab-takeover.js 通过 chrome.scripting.executeScript 注入到隔离世界。
  * 函数会被序列化后送进页面,所以必须完全自包含:不能引用模块里的任何其它绑定。
  *
+ * 两种模式,同一圈蓝色弧线包住原站图标:
+ *   - idle:   静止的整圈 —— 这个标签页受插件控制(操作过 / 会被操作);
+ *   - active: 旋转的弧线 —— 插件此刻正在操作它。
+ *
  * Chrome 的标签栏不播放 GIF/SVG favicon 动画,能动起来的唯一办法是不停地换
- * <link rel="icon"> 的 href。这里预先用 canvas 画好一圈旋转的帧,再按定时器轮播。
+ * <link rel="icon"> 的 href。这里预先用 canvas 画好静止帧和 12 帧旋转帧。
  *
  * 期间页面自己的 icon link 被暂时"停用"(rel 改名并记下原值),否则 Chrome
  * 可能在多个候选里挑中页面的那个;页面中途新加/改回的 icon link 也会被
  * MutationObserver 立刻停用。stop 时把 rel 全部还原,Chrome 随之换回原图标。
  *
- * 看门狗:每次 start 都把截止时间往后推 ttlMs。Service Worker 被回收、来不及
- * 发 stop 时,页面到点自己收尾,不会永远转下去。
+ * 两道兜底:
+ *   - active 带截止时间,每次注入往后推 ttlMs;Service Worker 被回收、没来得及
+ *     切回 idle 时,页面到点自己停转,退回静止圈;
+ *   - 扩展被重载/卸载后,这段脚本所在的上下文失效(chrome.runtime.id 消失),
+ *     页面自行拆掉标记,不留下一个无主的圈。
  *
- * @param {"start"|"stop"} command
+ * @param {"active"|"idle"|"stop"} command  "start" 是 "active" 的旧名。
  * @param {{ favicon?: string|null, ttlMs?: number }} [options]
  */
 export function tabTakeoverPageScript(command, options) {
@@ -22,14 +29,15 @@ export function tabTakeoverPageScript(command, options) {
   const existing = globalThis[KEY];
   if (command === "stop") {
     if (existing && existing.alive) existing.stop();
-    return { stopped: Boolean(existing && existing.alive === false) };
+    return { stopped: true };
   }
+  const mode = command === "idle" ? "idle" : "active";
   const opts = options || {};
   const ttlMs = typeof opts.ttlMs === "number" && opts.ttlMs > 0 ? opts.ttlMs : 15000;
   const favicon = typeof opts.favicon === "string" && opts.favicon ? opts.favicon : null;
   if (existing && existing.alive) {
-    existing.refresh(ttlMs, favicon);
-    return { refreshed: true };
+    existing.apply(mode, ttlMs, favicon);
+    return { refreshed: true, mode };
   }
 
   const doc = document;
@@ -39,19 +47,24 @@ export function tabTakeoverPageScript(command, options) {
   const SAVED = "data-dsh-takeover-rel";
   const SUSPENDED_REL = "dsh-takeover-suspended";
   const SIZE = 32;
+  const RADIUS = 13.5;
   const FRAME_COUNT = 12;
   const FRAME_MS = 90;
   const BLUE = "26,115,232";
   // 注意:不能给 data: URL 加 MIME 参数作记号(如 image/png;x=1;base64),
   // Chrome 会静默丢弃这种 favicon。要认出"这是我们的帧",用 isOwnFrame。
-  const FALLBACK =
+  const svg = (body) =>
     "data:image/svg+xml," +
-    encodeURIComponent(
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
-        '<circle cx="16" cy="16" r="13.5" fill="none" stroke="rgba(' + BLUE + ',.25)" stroke-width="3.5"/>' +
-        '<path d="M16 2.5a13.5 13.5 0 0 1 13.5 13.5" fill="none" stroke="rgb(' + BLUE + ')" stroke-width="3.5" stroke-linecap="round"/>' +
-        '<circle cx="16" cy="16" r="5.5" fill="rgb(' + BLUE + ')"/></svg>',
-    );
+    encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' + body + "</svg>");
+  const DOT = '<circle cx="16" cy="16" r="5.5" fill="rgb(' + BLUE + ')"/>';
+  const FALLBACK_IDLE = svg(
+    '<circle cx="16" cy="16" r="13.5" fill="none" stroke="rgb(' + BLUE + ')" stroke-width="3.5"/>' + DOT,
+  );
+  const FALLBACK_ACTIVE = svg(
+    '<circle cx="16" cy="16" r="13.5" fill="none" stroke="rgba(' + BLUE + ',.25)" stroke-width="3.5"/>' +
+      '<path d="M16 2.5a13.5 13.5 0 0 1 13.5 13.5" fill="none" stroke="rgb(' + BLUE + ')" stroke-width="3.5" stroke-linecap="round"/>' +
+      DOT,
+  );
 
   const isPageIcon = (node) =>
     node && node.nodeType === 1 && node.localName === "link" && !node.hasAttribute(MARK) &&
@@ -63,13 +76,16 @@ export function tabTakeoverPageScript(command, options) {
 
   const state = {
     alive: true,
+    mode,
     deadline: Date.now() + ttlMs,
     favicon: null,
-    frames: [FALLBACK],
+    idleFrame: FALLBACK_IDLE,
+    frames: [FALLBACK_ACTIVE],
     index: 0,
     timer: 0,
     watchdog: 0,
     worker: null,
+    workerFailed: false,
     pulse: false,
     lastTick: 0,
     observer: null,
@@ -95,7 +111,7 @@ export function tabTakeoverPageScript(command, options) {
   }
 
   function show(href) {
-    if (!state.link) return;
+    ensureLink();
     if (state.link.getAttribute("href") !== href) {
       state.link.setAttribute("type", href.startsWith("data:image/svg") ? "image/svg+xml" : "image/png");
       state.link.setAttribute("href", href);
@@ -113,13 +129,10 @@ export function tabTakeoverPageScript(command, options) {
     });
   }
 
-  function drawFrame(ctx, img, step) {
+  /** 圈里的内容:原站图标(缩小裁圆),没有就画一个实心圆点。 */
+  function drawCenter(ctx, img) {
     const c = SIZE / 2;
-    const radius = 13.5;
-    const phase = (step / FRAME_COUNT) * Math.PI * 2;
-    ctx.clearRect(0, 0, SIZE, SIZE);
     if (img) {
-      // 原站图标缩在圈里,用户仍认得出是哪个页面。
       ctx.save();
       ctx.beginPath();
       ctx.arc(c, c, 10, 0, Math.PI * 2);
@@ -127,20 +140,37 @@ export function tabTakeoverPageScript(command, options) {
       ctx.drawImage(img, 8, 8, 16, 16);
       ctx.restore();
     } else {
-      // 没有原图标时画一个呼吸的实心圆点。
-      const pulse = 0.5 + 0.5 * Math.sin(phase);
       ctx.beginPath();
-      ctx.arc(c, c, 4.5 + pulse * 1.5, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(" + BLUE + "," + (0.65 + 0.35 * pulse) + ")";
+      ctx.arc(c, c, 5.5, 0, Math.PI * 2);
+      ctx.fillStyle = "rgb(" + BLUE + ")";
       ctx.fill();
     }
+  }
+
+  /** 静止帧:一整圈实色蓝环。 */
+  function drawIdle(ctx, img) {
+    const c = SIZE / 2;
+    ctx.clearRect(0, 0, SIZE, SIZE);
+    drawCenter(ctx, img);
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(c, c, RADIUS, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgb(" + BLUE + ")";
+    ctx.stroke();
+  }
+
+  /** 旋转帧:淡色底圈上,一段彗星尾巴似的弧线绕圈转。 */
+  function drawActive(ctx, img, step) {
+    const c = SIZE / 2;
+    const phase = (step / FRAME_COUNT) * Math.PI * 2;
+    ctx.clearRect(0, 0, SIZE, SIZE);
+    drawCenter(ctx, img);
     ctx.lineWidth = 3.5;
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.arc(c, c, radius, 0, Math.PI * 2);
+    ctx.arc(c, c, RADIUS, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(" + BLUE + ",0.2)";
     ctx.stroke();
-    // 彗星尾巴:一段从透明渐到实色的弧,头部圆角,整体旋转。
     const start = phase - Math.PI / 2;
     const sweep = Math.PI * 1.4;
     // 渐变原点比弧起点再往回退一点:尾端的圆角帽会伸到起点之前,若正落在
@@ -155,7 +185,7 @@ export function tabTakeoverPageScript(command, options) {
       conic.addColorStop(1, "rgba(" + BLUE + ",1)");
     }
     ctx.beginPath();
-    ctx.arc(c, c, radius, start, start + sweep);
+    ctx.arc(c, c, RADIUS, start, start + sweep);
     ctx.strokeStyle = conic || "rgb(" + BLUE + ")";
     ctx.stroke();
   }
@@ -173,49 +203,120 @@ export function tabTakeoverPageScript(command, options) {
     } catch {
       ctx = null;
     }
-    if (!ctx) return; // 无 canvas 时停在静态兜底图标上。
+    if (!ctx) return; // 无 canvas 时停在 SVG 兜底图标上。
     const img = await loadImage(src);
     if (token !== state.renderToken || !state.alive) return;
+    let idle;
     const frames = [];
-    for (let i = 0; i < FRAME_COUNT; i++) {
-      drawFrame(ctx, img, i);
-      try {
+    try {
+      drawIdle(ctx, img);
+      idle = canvas.toDataURL("image/png");
+      for (let i = 0; i < FRAME_COUNT; i++) {
+        drawActive(ctx, img, i);
         frames.push(canvas.toDataURL("image/png"));
-      } catch {
-        // 画布被污染(理论上 data: 源不会),退回不带原图标的版本。
-        if (img) return void render(null);
-        return;
       }
+    } catch {
+      // 画布被污染(理论上 data: 源不会),退回不带原图标的版本。
+      if (img) void render(null);
+      return;
     }
+    state.history.add(state.idleFrame);
     for (const frame of state.frames) state.history.add(frame);
+    state.idleFrame = idle;
     state.frames = frames;
+    if (state.mode === "idle") show(state.idleFrame);
   }
 
   function tick() {
-    if (!state.alive) return;
+    if (!state.alive || state.mode !== "active") return;
     const at = Date.now();
-    if (at > state.deadline) return void stop();
+    if (at > state.deadline) return void setMode("idle");
     // 节拍可能同时来自多个来源(主线程定时器 + SW 脉冲),按时间去重,不至于转得更快。
     if (at - state.lastTick < FRAME_MS * 0.6) return;
     state.lastTick = at;
-    ensureLink();
     state.index = (state.index + 1) % state.frames.length;
     show(state.frames[state.index]);
+  }
+
+  function requestPulse() {
+    try {
+      chrome.runtime.sendMessage({ type: "dsh-tab-takeover-pulse" }).catch(() => {});
+    } catch {
+      // 扩展上下文已失效:只剩主线程定时器。
+    }
+  }
+
+  function onRuntimeMessage(message) {
+    if (message && message.type === "dsh-tab-takeover-tick") tick();
+  }
+
+  /**
+   * 拿不到 Worker(页面 CSP 不放行 blob:)时的后备:主线程定时器照跑(前台够用),
+   * 同时请 SW 发 tick 消息 —— 消息投递不受后台定时器节流,后台标签页也能流畅转。
+   */
+  function fallbackToPulse() {
+    state.workerFailed = true;
+    if (!state.alive || state.mode !== "active") return;
+    if (!state.timer) state.timer = setInterval(tick, FRAME_MS);
+    state.pulse = true;
+    requestPulse();
+  }
+
+  /**
+   * 节拍器:后台标签页主线程的定时器会被 Chrome 压到 1Hz,动效只剩一秒一帧;
+   * 专用 Worker 里的定时器不受这层节流,由它发 message 驱动换帧。
+   */
+  function startTicking() {
+    if (state.worker || state.timer) return;
+    if (state.workerFailed) return void fallbackToPulse();
+    try {
+      const source = "setInterval(function(){postMessage(0)}," + FRAME_MS + ")";
+      const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+      const worker = new Worker(url);
+      URL.revokeObjectURL(url);
+      worker.onmessage = tick;
+      worker.onerror = () => {
+        // CSP 拒绝等异步失败。
+        worker.terminate();
+        if (state.worker === worker) state.worker = null;
+        fallbackToPulse();
+      };
+      state.worker = worker;
+    } catch {
+      fallbackToPulse();
+    }
+  }
+
+  function stopTicking() {
+    clearInterval(state.timer);
+    state.timer = 0;
+    state.pulse = false;
+    if (state.worker) {
+      state.worker.terminate();
+      state.worker = null;
+    }
+  }
+
+  function setMode(next) {
+    state.mode = next;
+    if (next === "active") {
+      show(state.frames[state.index % state.frames.length]);
+      startTicking();
+    } else {
+      stopTicking();
+      show(state.idleFrame);
+    }
   }
 
   function stop() {
     if (!state.alive) return;
     state.alive = false;
-    clearInterval(state.timer);
+    stopTicking();
     clearInterval(state.watchdog);
     try {
       chrome.runtime.onMessage.removeListener(onRuntimeMessage);
     } catch {
       // 无 chrome.runtime(测试环境)或上下文失效。
-    }
-    if (state.worker) {
-      state.worker.terminate();
-      state.worker = null;
     }
     if (state.observer) state.observer.disconnect();
     if (state.link) state.link.remove();
@@ -225,39 +326,24 @@ export function tabTakeoverPageScript(command, options) {
     }
   }
 
-  /**
-   * 拿不到 Worker(页面 CSP 不放行 blob:)时的后备:主线程定时器照跑(前台够用),
-   * 同时请 SW 发 tick 消息 —— 消息投递不受后台定时器节流,后台标签页也能流畅转。
-   */
-  function fallbackToPulse() {
-    if (!state.alive) return;
-    if (!state.timer) state.timer = setInterval(tick, FRAME_MS);
-    state.pulse = true;
-    requestPulse();
+  function apply(nextMode, nextTtl, nextFavicon) {
+    state.deadline = Date.now() + nextTtl;
+    if (nextFavicon && nextFavicon !== state.favicon) void render(nextFavicon);
+    if (nextMode !== state.mode) setMode(nextMode);
+    // SW 可能被回收重启过,丢了脉冲登记:续命时顺带再报一次。
+    else if (state.pulse) requestPulse();
   }
 
-  function requestPulse() {
+  /** 扩展被重载/卸载后 chrome.runtime.id 消失,这时标记已无主。 */
+  function extensionGone() {
     try {
-      chrome.runtime.sendMessage({ type: "dsh-tab-takeover-pulse" }).catch(() => {});
+      return !(typeof chrome === "object" && chrome.runtime && chrome.runtime.id);
     } catch {
-      // 扩展上下文已失效(扩展被重载):只剩主线程定时器。
+      return true;
     }
   }
 
-  function onRuntimeMessage(message) {
-    if (message && message.type === "dsh-tab-takeover-tick") tick();
-  }
-
-  function refresh(nextTtl, nextFavicon) {
-    state.deadline = Date.now() + nextTtl;
-    // SW 可能被回收重启过,丢了脉冲登记:续命时顺带再报一次。
-    if (state.pulse) requestPulse();
-    if (nextFavicon && nextFavicon !== state.favicon) void render(nextFavicon);
-  }
-
   for (const link of doc.querySelectorAll("link")) if (isPageIcon(link)) suspend(link);
-  ensureLink();
-  show(FALLBACK);
 
   if (typeof MutationObserver === "function") {
     state.observer = new MutationObserver((records) => {
@@ -284,38 +370,24 @@ export function tabTakeoverPageScript(command, options) {
   }
 
   state.stop = stop;
-  state.refresh = refresh;
+  state.apply = apply;
   // stop 之后 Chrome 可能短暂还挂着最后一帧,所以停了也照样能认。
-  state.isOwnFrame = (url) => url === FALLBACK || state.frames.includes(url) || state.history.has(url);
-  // 节拍器:后台标签页主线程的定时器会被 Chrome 压到 1Hz,动效只剩一秒一帧;
-  // 专用 Worker 里的定时器不受这层节流,由它发 message 驱动换帧。页面 CSP
-  // 不允许 blob: Worker 时退回主线程 setInterval(前台照样流畅)。
-  try {
-    const source = "setInterval(function(){postMessage(0)}," + FRAME_MS + ")";
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    const worker = new Worker(url);
-    URL.revokeObjectURL(url);
-    worker.onmessage = tick;
-    worker.onerror = () => {
-      // CSP 拒绝等异步失败。
-      worker.terminate();
-      if (state.worker === worker) state.worker = null;
-      fallbackToPulse();
-    };
-    state.worker = worker;
-  } catch {
-    fallbackToPulse();
-  }
+  state.isOwnFrame = (url) =>
+    url === FALLBACK_IDLE || url === FALLBACK_ACTIVE || url === state.idleFrame ||
+    state.frames.includes(url) || state.history.has(url);
   try {
     chrome.runtime.onMessage.addListener(onRuntimeMessage);
   } catch {
     // 无 chrome.runtime(测试环境)。
   }
-  // 看门狗独立跑在主线程:哪怕节拍器静默失效,到点也一定收尾。
+  // 看门狗跑在主线程,一秒一次足够:旋转超时退回静止;扩展没了就整个拆掉。
+  const checkRuntime = typeof chrome === "object" && chrome && chrome.runtime;
   state.watchdog = setInterval(() => {
-    if (Date.now() > state.deadline) stop();
+    if (checkRuntime && extensionGone()) return void stop();
+    if (state.mode === "active" && Date.now() > state.deadline) setMode("idle");
   }, 1000);
   globalThis[KEY] = state;
+  setMode(mode);
   void render(favicon);
-  return { started: true };
+  return { started: true, mode };
 }

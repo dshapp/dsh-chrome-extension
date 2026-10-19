@@ -1,9 +1,9 @@
 /**
- * 标签页「正在被接管」指示(Service Worker 侧装配)。
+ * 标签页「受插件控制 / 正在被操作」指示(Service Worker 侧装配)。
  *
- * CDP 桥(../background.js)在执行工具调用、或向某个标签页发 CDP 命令时,
- * 通过 globalThis.__dshTabTakeover 报告;这里据此把该标签页的 favicon
- * 换成一圈旋转的蓝色动效,操作结束(含短暂余韵)后还原。
+ * CDP 桥(../background.js)在执行工具调用、向某个标签页发 CDP 命令、或会话
+ * 选中/交还标签页时,通过 globalThis.__dshTabTakeover 报告。这里据此给标签页的
+ * favicon 套一圈蓝色弧线:受控时静止,正在被操作时旋转;标签页关闭或被交还时拆掉。
  *
  * background.js 必须保持无 import 的独立脚本(它的测试直接求值源码),
  * 所以和 __dshBridgeState 一样走 globalThis 挂钩;钩子不存在时桥照常工作。
@@ -103,9 +103,28 @@ function pulse(tabId) {
   chrome.tabs.sendMessage(tabId, { type: "dsh-tab-takeover-tick" }, { frameId: 0 }).catch(() => {});
 }
 
-export const tabTakeover = createTabTakeover({ inject, captureFavicon, pulse });
+/** 受控标签页集合,跨 SW 重启保存;浏览器会话结束即清空,正好与 tab id 的寿命一致。 */
+const CONTROLLED_KEY = "dsh_takeover_controlled";
+
+function persist(tabIds) {
+  chrome.storage.session.set({ [CONTROLLED_KEY]: tabIds }).catch(() => {});
+}
+
+export const tabTakeover = createTabTakeover({ inject, captureFavicon, pulse, persist });
 
 globalThis.__dshTabTakeover = tabTakeover;
+
+/** SW 冷启动:把仍然存在的受控标签页恢复成静止圈。 */
+async function restoreControlled() {
+  const stored = (await chrome.storage.session.get(CONTROLLED_KEY))[CONTROLLED_KEY];
+  if (!Array.isArray(stored) || stored.length === 0) return;
+  const open = new Set((await chrome.tabs.query({})).map((tab) => tab.id));
+  const alive = stored.filter((id) => open.has(id));
+  if (alive.length !== stored.length) persist(alive);
+  tabTakeover.restore(alive);
+}
+
+restoreControlled().catch(() => {});
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => tabTakeover.tabUpdated(tabId, changeInfo));
 chrome.tabs.onRemoved.addListener((tabId) => tabTakeover.tabRemoved(tabId));

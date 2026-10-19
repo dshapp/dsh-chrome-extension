@@ -354,6 +354,15 @@ function reportTabActivity(tabId) {
   }
 }
 
+/** The session handed this tab back to the user: remove the takeover mark. */
+function reportTabReleased(tabId) {
+  try {
+    globalThis.__dshTabTakeover?.release(tabId)
+  } catch {
+    // Cosmetic only.
+  }
+}
+
 /** Send one CDP command to a tab. */
 async function cdp(tabId, method, params = {}) {
   reportTabActivity(tabId)
@@ -1422,6 +1431,9 @@ const tools = {
     // ones being left open: a leftover "being debugged" banner is not a thing
     // to leave on a page the user is still using.
     for (const id of ids) await detach(id)
+    // Kept tabs go back to the user, so they lose the takeover mark; closed
+    // ones drop it on tabs.onRemoved.
+    for (const id of keep) reportTabReleased(id)
     if (close.length) await chrome.tabs.remove(close)
     sessionTabs.delete(session)
     sessionTabSets.delete(session)
@@ -3263,6 +3275,25 @@ function beginTabTakeover(name, args) {
   }
 }
 
+/** Tools after which the session's tab is no longer the session's to mark. */
+const TAB_RELEASING_TOOLS = new Set(['close_tab', 'close_session'])
+
+/**
+ * After a call, the session's current tab is one the agent will act on — e.g.
+ * find_tab just picked it — so it carries the static "controlled" mark even if
+ * nothing has operated it yet.
+ */
+function markSessionTab(name, args) {
+  const session = args?.session
+  if (session == null || TAB_RELEASING_TOOLS.has(name)) return
+  try {
+    const tabId = sessionTabs.get(session)
+    if (tabId != null) globalThis.__dshTabTakeover?.mark(tabId)
+  } catch {
+    // Cosmetic only.
+  }
+}
+
 async function runToolCall(frame) {
   const { requestId, payload } = frame
   const name = payload?.name
@@ -3291,6 +3322,7 @@ async function runToolCall(frame) {
     } catch {
       // Cosmetic only.
     }
+    markSessionTab(name, payload.args)
   }
 }
 

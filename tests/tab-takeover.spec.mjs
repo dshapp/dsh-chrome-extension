@@ -1,9 +1,9 @@
 /**
- * 标签页「正在被接管」favicon 动效。
+ * 标签页「受插件控制 / 正在被操作」favicon 标记。
  *
- * 控制器:工具调用期间(及短暂余韵内)标签页处于激活态,结束后发 stop;
- * stop 必须排在更早的 start 之后,不能被异步注入反超。
- * 页面脚本:暂时停用页面自己的 icon link,stop 时原样还原。
+ * 控制器:工具调用期间(及短暂余韵内)转圈(active),之后留下静止圈(idle),
+ * 直到标签页关闭或被交还才 stop;后发的命令不能被先发的异步注入反超。
+ * 页面脚本:idle/active 两种帧,暂时停用页面自己的 icon link,stop 时原样还原。
  *
  * Run with: node --test 'tests/*.spec.mjs'
  */
@@ -46,30 +46,36 @@ const flush = () => new Promise((r) => setImmediate(r))
 function setup() {
   const clock = fakeClock()
   const log = []
+  const saved = []
   const takeover = createTabTakeover({
     inject: async (tabId, command) => { log.push(`${command}:${tabId}`) },
     captureFavicon: async () => 'data:image/png;base64,AAAA',
+    persist: (ids) => saved.push([...ids].sort()),
     now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer,
     lingerMs: 1000, tickMs: 100, refreshMs: 5000, pageTtlMs: 15000,
   })
-  return { clock, log, takeover }
+  return { clock, log, saved, takeover }
 }
 
-test('工具调用期间激活,结束后余韵过去才 stop', async () => {
-  const { clock, log, takeover } = setup()
+test('操作中转圈,余韵过后停转留下静止圈,而不是拆掉', async () => {
+  const { clock, log, saved, takeover } = setup()
   const release = takeover.begin(() => 7)
   await flush()
-  assert.ok(takeover.isActive(7))
-  assert.deepEqual(log, ['start:7'])
+  assert.equal(takeover.modeOf(7), 'active')
+  assert.deepEqual(log, ['active:7'])
+  assert.deepEqual(saved.at(-1), [7], '操作过即记为受控并持久化')
   release()
   await clock.advance(500)
-  assert.ok(takeover.isActive(7), '余韵内仍保持')
+  assert.equal(takeover.modeOf(7), 'active', '余韵内仍在转')
   await clock.advance(600)
-  assert.equal(takeover.isActive(7), false)
-  assert.deepEqual(log, ['start:7', 'stop:7'])
+  assert.equal(takeover.modeOf(7), 'idle')
+  assert.deepEqual(log, ['active:7', 'idle:7'])
+  await clock.advance(60_000)
+  assert.equal(takeover.modeOf(7), 'idle', '静止圈一直保留')
+  assert.deepEqual(log, ['active:7', 'idle:7'])
 })
 
-test('连续调用之间不闪:余韵内的下一次调用接着用,不重新 start', async () => {
+test('受控标签页再次被操作:静止 → 转圈 → 静止;连续调用之间不闪', async () => {
   const { clock, log, takeover } = setup()
   takeover.begin(() => 3)()
   await clock.advance(300)
@@ -77,10 +83,56 @@ test('连续调用之间不闪:余韵内的下一次调用接着用,不重新 st
   await clock.advance(2000)
   release()
   await clock.advance(1100)
-  assert.deepEqual(log, ['start:3', 'stop:3'])
+  assert.deepEqual(log, ['active:3', 'idle:3'])
+  takeover.touch(3)
+  await flush()
+  await clock.advance(1100)
+  assert.deepEqual(log, ['active:3', 'idle:3', 'active:3', 'idle:3'])
 })
 
-test('调用中途会话换到新标签页(navigate newTab)也会被点亮', async () => {
+test('会话选中的标签页(find_tab)即受控:静止圈,不转', async () => {
+  const { log, takeover } = setup()
+  takeover.mark(11)
+  await flush()
+  assert.equal(takeover.modeOf(11), 'idle')
+  assert.deepEqual(log, ['idle:11'])
+  takeover.mark(11)
+  await flush()
+  assert.deepEqual(log, ['idle:11'], '重复标记无副作用')
+})
+
+test('交还(release)或关闭标签页才拆掉标记', async () => {
+  const { clock, log, saved, takeover } = setup()
+  takeover.begin(() => 4)()
+  takeover.mark(5)
+  await clock.advance(1100)
+  takeover.release(4)
+  await flush()
+  assert.equal(takeover.modeOf(4), null)
+  assert.ok(log.includes('stop:4'))
+  takeover.tabRemoved(5)
+  assert.deepEqual(takeover.controlledTabs(), [])
+  assert.deepEqual(saved.at(-1), [])
+})
+
+test('交还时即使还在余韵里,也直接拆掉而不是回到静止圈', async () => {
+  const { log, takeover } = setup()
+  takeover.begin(() => 6)()
+  await flush()
+  takeover.release(6)
+  await flush()
+  assert.equal(takeover.modeOf(6), null)
+  assert.equal(log.at(-1), 'stop:6')
+})
+
+test('SW 重启后从持久化恢复静止圈', async () => {
+  const { log, takeover } = setup()
+  takeover.restore([21, 22])
+  await flush()
+  assert.deepEqual(log.sort(), ['idle:21', 'idle:22'])
+})
+
+test('调用中途会话换到新标签页(navigate newTab)也会转圈', async () => {
   const { clock, takeover } = setup()
   let tab
   const release = takeover.begin(() => tab)
@@ -92,20 +144,20 @@ test('调用中途会话换到新标签页(navigate newTab)也会被点亮', asy
   release()
   await clock.advance(1100)
   assert.deepEqual(takeover.activeTabs(), [])
+  assert.equal(takeover.modeOf(42), 'idle')
 })
 
-test('CDP 触碰点亮标签页,长时间调用会定期续命页面看门狗', async () => {
+test('转圈期间定期续命页面截止时间,静止时不续', async () => {
   const { clock, log, takeover } = setup()
   const release = takeover.begin(() => 9)
   await clock.advance(11000)
-  assert.deepEqual(log, ['start:9', 'start:9', 'start:9'])
+  assert.deepEqual(log, ['active:9', 'active:9', 'active:9'])
   release()
-  takeover.touch(10)
-  await flush()
-  assert.ok(takeover.isActive(10))
+  await clock.advance(30000)
+  assert.deepEqual(log, ['active:9', 'active:9', 'active:9', 'idle:9'])
 })
 
-test('stop 不会被更早发出、尚未完成的 start 反超', async () => {
+test('后发的命令不会被更早发出、尚未完成的注入反超', async () => {
   const clock = fakeClock()
   const log = []
   let releaseCapture
@@ -116,36 +168,39 @@ test('stop 不会被更早发出、尚未完成的 start 反超', async () => {
   })
   const release = takeover.begin(() => 1)
   await flush()
-  assert.equal(typeof releaseCapture, 'function', 'start 已在取 favicon')
+  assert.equal(typeof releaseCapture, 'function', '首个注入正在取 favicon')
   release()
+  takeover.release(1)
   await flush()
   releaseCapture()
   await flush()
   await flush()
-  // 激活记录在 favicon 取回前就被撤销,start 自觉放弃;只剩 stop。
+  // 记录在 favicon 取回前就被撤销,先前的注入自觉放弃;只剩 stop。
   assert.deepEqual(log, ['stop'])
 })
 
-test('换页后重新注入;动效帧(data:)触发的 favIconUrl 变化被忽略', async () => {
+test('换页后重新注入(静止圈也跟着新页面走);动效帧(data:)触发的变化被忽略', async () => {
   const { clock, log, takeover } = setup()
-  takeover.begin(() => 5)
+  takeover.mark(5)
   await flush()
   takeover.tabUpdated(5, { favIconUrl: 'data:image/png;base64,QQ==' })
   await flush()
-  assert.deepEqual(log, ['start:5'])
+  assert.deepEqual(log, ['idle:5'])
   takeover.tabUpdated(5, { status: 'complete' })
   await flush()
-  assert.deepEqual(log, ['start:5', 'start:5'])
+  assert.deepEqual(log, ['idle:5', 'idle:5'])
   log.length = 0
-  // loading 后补注入几次,覆盖"loading 早于新文档提交"的情况。
   takeover.tabUpdated(5, { status: 'loading' })
   await clock.advance(2000)
-  assert.equal(log.filter((e) => e === 'start:5').length, 4)
+  assert.equal(log.filter((e) => e === 'idle:5').length, 4)
   log.length = 0
-  // 新页面的真实图标到了:重新取图标再注入。
   takeover.tabUpdated(5, { favIconUrl: 'https://a.test/favicon.ico' })
   await flush()
-  assert.deepEqual(log, ['start:5'])
+  assert.deepEqual(log, ['idle:5'])
+  log.length = 0
+  takeover.tabUpdated(99, { status: 'complete' })
+  await flush()
+  assert.deepEqual(log, [], '未受控的标签页不注入')
 })
 
 test('拿不到 Worker 的页面请求脉冲:激活期间定时 tick,结束即停', async () => {
@@ -169,21 +224,23 @@ test('拿不到 Worker 的页面请求脉冲:激活期间定时 tick,结束即�
   assert.equal(ticks.length, 10)
 })
 
-test('background.js 的工具调用经由钩子 begin/release,管理类工具不点亮', async () => {
+test('background.js 经由钩子上报:操作类 begin/release,选中后 mark,close_session 留下的标签页 release', async () => {
   const source = readFileSync(new URL('../background.js', import.meta.url), 'utf8')
   const handler = { addListener() {}, removeListener() {} }
   const chrome = {
     runtime: { id: 't', getManifest: () => ({ version: '0' }), onMessage: handler, onStartup: handler, onInstalled: handler },
     storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
-      session: { get: async () => ({}), set: async () => {} }, onChanged: handler },
+      session: { get: async () => ({ dsh_borrowed_tabs: { s: [77] } }), set: async () => {} }, onChanged: handler },
     alarms: { create() {}, onAlarm: handler },
-    tabs: { get: async () => ({ status: 'complete' }), query: async () => [], onUpdated: handler, onRemoved: handler },
+    tabs: { get: async () => ({ status: 'complete', groupId: -1 }), query: async () => [], remove: async () => {}, onUpdated: handler, onRemoved: handler },
     debugger: { attach: async () => {}, detach: async () => {}, sendCommand: async () => ({ result: { value: 1 } }), onDetach: handler, onEvent: handler },
   }
   const events = []
   globalThis.__dshTabTakeover = {
-    begin: (getter) => { events.push(['begin', getter()]); return () => events.push(['release', getter()]) },
+    begin: (getter) => { events.push(['begin', getter()]); return () => events.push(['end', getter()]) },
     touch: (id) => events.push(['touch', id]),
+    mark: (id) => events.push(['mark', id]),
+    release: (id) => events.push(['release', id]),
   }
   try {
     const internals = new Function('chrome', 'WebSocket', 'console',
@@ -193,7 +250,12 @@ test('background.js 的工具调用经由钩子 begin/release,管理类工具不
     sessionTabs.set('s', 77)
     await runToolCall({ requestId: 'r1', payload: { name: 'wait', args: { session: 's', ms: 1 } } })
     await runToolCall({ requestId: 'r2', payload: { name: 'list_tabs', args: { session: 's' } } })
-    assert.deepEqual(events.filter((e) => e[0] !== 'touch'), [['begin', 77], ['release', 77]])
+    await runToolCall({ requestId: 'r3', payload: { name: 'close_session', args: { session: 's' } } })
+    assert.deepEqual(events.filter((e) => e[0] !== 'touch'), [
+      ['begin', 77], ['end', 77], ['mark', 77],
+      ['mark', 77],
+      ['release', 77],
+    ])
   } finally {
     delete globalThis.__dshTabTakeover
   }
@@ -210,25 +272,46 @@ function pageWindow(html) {
   return { window, run }
 }
 
-test('页面脚本:停用页面 icon、插入动效 link,stop 后原样还原', async () => {
+test('页面脚本:idle 静止帧 / active 旋转帧,停用页面 icon,stop 后原样还原', async () => {
   const { window, run } = pageWindow(
     '<head><link rel="shortcut icon" href="/a.ico"><link rel="apple-touch-icon" href="/t.png"></head><body></body>')
   const doc = window.document
   try {
-    assert.deepEqual(run('start', { ttlMs: 60000 }), { started: true })
+    assert.deepEqual(run('idle', { ttlMs: 60000 }), { started: true, mode: 'idle' })
     const ours = doc.querySelector('link[data-dsh-takeover]')
-    assert.ok(ours, '插入了动效 link')
+    assert.ok(ours, '插入了标记 link')
     assert.equal(ours.getAttribute('rel'), 'icon')
-    const href = ours.getAttribute('href')
+    const idleHref = ours.getAttribute('href')
     // 不能带 MIME 参数:Chrome 会丢弃 data:image/png;x=1;base64 这种 favicon。
-    assert.match(href, /^data:image\/(png|svg\+xml)[,;]/)
-    assert.doesNotMatch(href, /^data:[^,]*;[a-z-]+=/)
-    // 页面脚本把状态挂在它所在世界的 globalThis 上(此处即 Node 的)。
-    assert.ok(globalThis.__dshTabTakeover.isOwnFrame(href), '能认出自己的帧')
-    assert.equal(globalThis.__dshTabTakeover.isOwnFrame('https://site.test/a.ico'), false)
+    assert.match(idleHref, /^data:image\/(png|svg\+xml)[,;]/)
+    assert.doesNotMatch(idleHref, /^data:[^,]*;[a-z-]+=/)
+    const state = globalThis.__dshTabTakeover
+    assert.equal(state.mode, 'idle')
+    assert.ok(state.isOwnFrame(idleHref), '能认出自己的帧')
+    assert.equal(state.isOwnFrame('https://site.test/a.ico'), false)
+    assert.equal(state.timer, 0, '静止时不跑节拍器')
+    assert.equal(state.worker, null)
+    await new Promise((r) => setTimeout(r, 250))
+    assert.equal(ours.getAttribute('href'), idleHref, '静止圈不动')
+
     const page = doc.querySelector('link[href="/a.ico"]')
     assert.equal(page.getAttribute('rel'), 'dsh-takeover-suspended')
     assert.equal(doc.querySelector('link[href="/t.png"]').getAttribute('rel'), 'apple-touch-icon', '非 icon 的 rel 不动')
+
+    // 切到转圈:换成旋转帧,开始换帧。
+    assert.deepEqual(run('active', { ttlMs: 60000 }), { refreshed: true, mode: 'active' })
+    assert.equal(state.mode, 'active')
+    const activeHref = ours.getAttribute('href')
+    assert.notEqual(activeHref, idleHref)
+    assert.ok(state.isOwnFrame(activeHref))
+    assert.ok(state.timer || state.worker, '转圈时节拍器在跑')
+
+    // 转圈截止时间到了(SW 没来得及切回)→ 自己退回静止圈,而不是拆掉。
+    state.apply('active', 1, null)
+    await new Promise((r) => setTimeout(r, 200))
+    assert.equal(state.mode, 'idle')
+    assert.equal(ours.getAttribute('href'), idleHref)
+    assert.equal(state.timer, 0)
 
     // 页面中途新加的 icon 也被停用。
     const late = doc.createElement('link')
@@ -237,8 +320,6 @@ test('页面脚本:停用页面 icon、插入动效 link,stop 后原样还原', 
     doc.head.appendChild(late)
     await flush()
     assert.equal(late.getAttribute('rel'), 'dsh-takeover-suspended')
-
-    assert.deepEqual(run('start', { ttlMs: 60000 }), { refreshed: true }, '重复注入是幂等的')
 
     run('stop')
     assert.equal(doc.querySelector('link[data-dsh-takeover]'), null)
