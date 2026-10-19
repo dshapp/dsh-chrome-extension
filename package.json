@@ -1,6 +1,6 @@
 {
   "name": "dsh-chrome-extension",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "private": true,
   "description": "DSH Chrome Bridge: the browser half of the dsh-chrome stack, plus a DSH side panel chat. Loaded unpacked by the user.",
   "type": "module",
