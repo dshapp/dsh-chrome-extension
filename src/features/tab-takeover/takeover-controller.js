@@ -5,7 +5,7 @@
  * 以便单测用假时钟驱动。Service Worker 侧的装配见 sw/tab-takeover.js。
  *
  * 每个标签页处于三种状态之一,对应页面脚本的三个命令:
- *   - active(转圈):正在被操作 ——
+ *   - active(呼吸灯):正在被操作 ——
  *       有进行中的工具调用,其会话当前指向它(begin 的 getter 实时求值,
  *       navigate 中途新开的标签页也能认出来),或它在 lingerMs 内被触碰过
  *       (工具调用结束、任一条 CDP 命令打到它)。余韵让连续调用之间不闪。
@@ -139,7 +139,7 @@ export function createTabTakeover(deps) {
     record.mode = mode;
     stopRefresh(record);
     if (mode === "active") {
-      // 定期续命页面侧的旋转截止时间;SW 若被回收,页面到点自己退回静止圈。
+      // 定期续命页面侧的呼吸截止时间;SW 若被回收,页面到点自己退回静止圈。
       const loop = () => {
         record.refresh = setTimer(() => {
           if (applied.get(tabId) !== record || record.mode !== "active") return;
@@ -213,7 +213,7 @@ export function createTabTakeover(deps) {
       linger(tabId);
       if (applied.get(tabId)?.mode !== "active") reconcile();
     },
-    /** 标记受控但不转圈:会话选中了这个标签页,接下来会操作它。 */
+    /** 标记受控但不闪:会话选中了这个标签页,接下来会操作它。 */
     mark(tabId) {
       if (!Number.isInteger(tabId) || controlled.has(tabId)) return;
       controlled.add(tabId);
@@ -234,7 +234,7 @@ export function createTabTakeover(deps) {
     },
     /**
      * 页面拿不到不受节流的 Worker 节拍器(CSP),请求由这里定时发 tick。
-     * 仅限转圈中的标签页,停转或换页即停。
+     * 仅限呼吸中的标签页,停下或换页即停。
      */
     requestPulse(tabId) {
       const record = applied.get(tabId);
@@ -261,7 +261,7 @@ export function createTabTakeover(deps) {
         stopPulse(record);
       }
       // 标记期间页面自己的 icon 已被停用,data: 的变化基本都是我们自己的帧,
-      // 转圈时每帧都会触发一次 onUpdated,必须忽略;新文档的真实图标多为
+      // 呼吸时每帧都会触发一次 onUpdated,必须忽略;新文档的真实图标多为
       // http(s) URL,再加上换页的 status 事件兜底,足以重新取到原图标。
       if (changeInfo.favIconUrl && !changeInfo.favIconUrl.startsWith("data:")) record.favicon = undefined;
       if (changeInfo.status === "complete" || changeInfo.status === "loading" || record.favicon === undefined) {

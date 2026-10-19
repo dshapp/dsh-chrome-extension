@@ -3,7 +3,7 @@
  *
  * CDP 桥(../background.js)在执行工具调用、向某个标签页发 CDP 命令、或会话
  * 选中/交还标签页时,通过 globalThis.__dshTabTakeover 报告。这里据此给标签页的
- * favicon 套一圈蓝色弧线:受控时静止,正在被操作时旋转;标签页关闭或被交还时拆掉。
+ * favicon 套一圈蓝环:受控时静止,正在被操作时像呼吸灯一样明暗;标签页关闭或被交还时拆掉。
  *
  * background.js 必须保持无 import 的独立脚本(它的测试直接求值源码),
  * 所以和 __dshBridgeState 一样走 globalThis 挂钩;钩子不存在时桥照常工作。

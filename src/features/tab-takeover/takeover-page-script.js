@@ -4,12 +4,13 @@
  * 由 sw/tab-takeover.js 通过 chrome.scripting.executeScript 注入到隔离世界。
  * 函数会被序列化后送进页面,所以必须完全自包含:不能引用模块里的任何其它绑定。
  *
- * 两种模式,同一圈蓝色弧线包住原站图标:
- *   - idle:   静止的整圈 —— 这个标签页受插件控制(操作过 / 会被操作);
- *   - active: 旋转的弧线 —— 插件此刻正在操作它。
+ * 两种模式,同一圈位置固定的蓝环包住原站图标:
+ *   - idle:   静止 —— 这个标签页受插件控制(操作过 / 会被操作);
+ *   - active: 同一圈环像呼吸灯一样明暗 —— 插件此刻正在操作它。不用旋转,
+ *             是因为转圈和 Chrome 自己的标签页加载动效太像。
  *
  * Chrome 的标签栏不播放 GIF/SVG favicon 动画,能动起来的唯一办法是不停地换
- * <link rel="icon"> 的 href。这里预先用 canvas 画好静止帧和 12 帧旋转帧。
+ * <link rel="icon"> 的 href。这里预先用 canvas 画好静止帧和 20 帧呼吸帧。
  *
  * 期间页面自己的 icon link 被暂时"停用"(rel 改名并记下原值),否则 Chrome
  * 可能在多个候选里挑中页面的那个;页面中途新加/改回的 icon link 也会被
@@ -17,7 +18,7 @@
  *
  * 两道兜底:
  *   - active 带截止时间,每次注入往后推 ttlMs;Service Worker 被回收、没来得及
- *     切回 idle 时,页面到点自己停转,退回静止圈;
+ *     切回 idle 时,页面到点自己停闪,退回静止圈;
  *   - 扩展被重载/卸载后,这段脚本所在的上下文失效(chrome.runtime.id 消失),
  *     页面自行拆掉标记,不留下一个无主的圈。
  *
@@ -47,23 +48,27 @@ export function tabTakeoverPageScript(command, options) {
   const SAVED = "data-dsh-takeover-rel";
   const SUSPENDED_REL = "dsh-takeover-suspended";
   const SIZE = 32;
-  const RADIUS = 13.5;
-  const FRAME_COUNT = 12;
-  const FRAME_MS = 90;
+  // 只有一圈细环,贴着画布外沿,尽量少占地方,把空间留给原站图标。
+  const RING_OUTER = 15.8;
+  const RING_WIDTH = 2;
+  const ICON_SIZE = 22;
+  // 呼吸一个周期 = FRAME_COUNT × FRAME_MS = 2s。
+  const FRAME_COUNT = 20;
+  const FRAME_MS = 100;
+  /** 呼吸最暗时的不透明度:淡到几乎看不见,但不完全消失。 */
+  const BREATH_MIN = 0.12;
   const BLUE = "26,115,232";
   // 注意:不能给 data: URL 加 MIME 参数作记号(如 image/png;x=1;base64),
   // Chrome 会静默丢弃这种 favicon。要认出"这是我们的帧",用 isOwnFrame。
   const svg = (body) =>
     "data:image/svg+xml," +
     encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' + body + "</svg>");
-  const DOT = '<circle cx="16" cy="16" r="5.5" fill="rgb(' + BLUE + ')"/>';
+  const DOT = '<circle cx="16" cy="16" r="7" fill="rgb(' + BLUE + ')"/>';
   const FALLBACK_IDLE = svg(
-    '<circle cx="16" cy="16" r="13.5" fill="none" stroke="rgb(' + BLUE + ')" stroke-width="3.5"/>' + DOT,
+    '<circle cx="16" cy="16" r="14.8" fill="none" stroke="rgb(' + BLUE + ')" stroke-width="2"/>' + DOT,
   );
   const FALLBACK_ACTIVE = svg(
-    '<circle cx="16" cy="16" r="13.5" fill="none" stroke="rgba(' + BLUE + ',.25)" stroke-width="3.5"/>' +
-      '<path d="M16 2.5a13.5 13.5 0 0 1 13.5 13.5" fill="none" stroke="rgb(' + BLUE + ')" stroke-width="3.5" stroke-linecap="round"/>' +
-      DOT,
+    '<circle cx="16" cy="16" r="14.8" fill="none" stroke="rgba(' + BLUE + ',.5)" stroke-width="2"/>' + DOT,
   );
 
   const isPageIcon = (node) =>
@@ -123,71 +128,61 @@ export function tabTakeoverPageScript(command, options) {
       if (!src) return resolve(null);
       const img = new Image();
       const timer = setTimeout(() => resolve(null), 1500);
-      img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth > 0 ? img : null); };
+      // 没有 width/height 的 SVG 图标(只有 viewBox)naturalWidth 为 0,但按指定尺寸画照样清楚。
+      const isSvg = /^data:image\/svg/i.test(src);
+      img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth > 0 || isSvg ? img : null); };
       img.onerror = () => { clearTimeout(timer); resolve(null); };
       img.src = src;
     });
   }
 
-  /** 圈里的内容:原站图标(缩小裁圆),没有就画一个实心圆点。 */
+  /**
+   * 圈里的内容:原站图标,尽量保持原大小(22/32,约为原图的 70%),不裁圆 ——
+   * 方形图标的四个角会稍微压到环下面,但图标本身清楚可认。没有图标就画实心圆点。
+   */
   function drawCenter(ctx, img) {
     const c = SIZE / 2;
     if (img) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(c, c, 10, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.drawImage(img, 8, 8, 16, 16);
-      ctx.restore();
+      const s = ICON_SIZE;
+      ctx.drawImage(img, c - s / 2, c - s / 2, s, s);
     } else {
       ctx.beginPath();
-      ctx.arc(c, c, 5.5, 0, Math.PI * 2);
+      ctx.arc(c, c, 7, 0, Math.PI * 2);
       ctx.fillStyle = "rgb(" + BLUE + ")";
       ctx.fill();
     }
   }
 
-  /** 静止帧:一整圈实色蓝环。 */
-  function drawIdle(ctx, img) {
+  /** 贴着画布外沿描一圈:外沿固定,宽度向内长,不额外挤占图标。 */
+  function strokeRing(ctx, width) {
     const c = SIZE / 2;
-    ctx.clearRect(0, 0, SIZE, SIZE);
-    drawCenter(ctx, img);
-    ctx.lineWidth = 3.5;
+    ctx.lineWidth = width;
     ctx.beginPath();
-    ctx.arc(c, c, RADIUS, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgb(" + BLUE + ")";
+    ctx.arc(c, c, RING_OUTER - width / 2, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  /** 旋转帧:淡色底圈上,一段彗星尾巴似的弧线绕圈转。 */
-  function drawActive(ctx, img, step) {
-    const c = SIZE / 2;
-    const phase = (step / FRAME_COUNT) * Math.PI * 2;
+  /** 静止帧:一圈细的实色蓝环。 */
+  function drawIdle(ctx, img) {
     ctx.clearRect(0, 0, SIZE, SIZE);
     drawCenter(ctx, img);
-    ctx.lineWidth = 3.5;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.arc(c, c, RADIUS, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(" + BLUE + ",0.2)";
-    ctx.stroke();
-    const start = phase - Math.PI / 2;
-    const sweep = Math.PI * 1.4;
-    // 渐变原点比弧起点再往回退一点:尾端的圆角帽会伸到起点之前,若正落在
-    // 渐变 1.0 处就会是一颗实色小点;退出这段让它落在透明区里。
-    const lead = 0.35;
-    const turn = Math.PI * 2;
-    const conic = typeof ctx.createConicGradient === "function" ? ctx.createConicGradient(start - lead, c, c) : null;
-    if (conic) {
-      conic.addColorStop(0, "rgba(" + BLUE + ",0)");
-      conic.addColorStop(lead / turn, "rgba(" + BLUE + ",0)");
-      conic.addColorStop((lead + sweep) / turn, "rgba(" + BLUE + ",1)");
-      conic.addColorStop(1, "rgba(" + BLUE + ",1)");
-    }
-    ctx.beginPath();
-    ctx.arc(c, c, RADIUS, start, start + sweep);
-    ctx.strokeStyle = conic || "rgb(" + BLUE + ")";
-    ctx.stroke();
+    ctx.strokeStyle = "rgb(" + BLUE + ")";
+    strokeRing(ctx, RING_WIDTH);
+  }
+
+  /**
+   * 呼吸帧:同一圈细环,位置、粗细都不变,只有亮度像呼吸灯一样缓缓明暗。
+   * 刻意不旋转 —— 转圈和 Chrome 自己的标签页加载动效太像,分不出来。
+   */
+  function drawActive(ctx, img, step) {
+    // 0 → 1 → 0 的余弦脉冲,一个周期 FRAME_COUNT 帧;再平方一次,让暗处停得久、
+    // 亮起来快一点,更像呼吸灯。
+    const wave = 0.5 - 0.5 * Math.cos((step / FRAME_COUNT) * Math.PI * 2);
+    const level = wave * wave;
+    ctx.clearRect(0, 0, SIZE, SIZE);
+    drawCenter(ctx, img);
+    ctx.strokeStyle = "rgba(" + BLUE + "," + (BREATH_MIN + (1 - BREATH_MIN) * level) + ")";
+    strokeRing(ctx, RING_WIDTH);
   }
 
   async function render(src) {
@@ -380,7 +375,7 @@ export function tabTakeoverPageScript(command, options) {
   } catch {
     // 无 chrome.runtime(测试环境)。
   }
-  // 看门狗跑在主线程,一秒一次足够:旋转超时退回静止;扩展没了就整个拆掉。
+  // 看门狗跑在主线程,一秒一次足够:呼吸超时退回静止;扩展没了就整个拆掉。
   const checkRuntime = typeof chrome === "object" && chrome && chrome.runtime;
   state.watchdog = setInterval(() => {
     if (checkRuntime && extensionGone()) return void stop();

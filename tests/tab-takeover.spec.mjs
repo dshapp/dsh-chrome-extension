@@ -1,7 +1,7 @@
 /**
  * 标签页「受插件控制 / 正在被操作」favicon 标记。
  *
- * 控制器:工具调用期间(及短暂余韵内)转圈(active),之后留下静止圈(idle),
+ * 控制器:工具调用期间(及短暂余韵内)呼吸(active),之后留下静止圈(idle),
  * 直到标签页关闭或被交还才 stop;后发的命令不能被先发的异步注入反超。
  * 页面脚本:idle/active 两种帧,暂时停用页面自己的 icon link,stop 时原样还原。
  *
@@ -57,7 +57,7 @@ function setup() {
   return { clock, log, saved, takeover }
 }
 
-test('操作中转圈,余韵过后停转留下静止圈,而不是拆掉', async () => {
+test('操作中呼吸,余韵过后停下留下静止圈,而不是拆掉', async () => {
   const { clock, log, saved, takeover } = setup()
   const release = takeover.begin(() => 7)
   await flush()
@@ -75,7 +75,7 @@ test('操作中转圈,余韵过后停转留下静止圈,而不是拆掉', async 
   assert.deepEqual(log, ['active:7', 'idle:7'])
 })
 
-test('受控标签页再次被操作:静止 → 转圈 → 静止;连续调用之间不闪', async () => {
+test('受控标签页再次被操作:静止 → 呼吸 → 静止;连续调用之间不断档', async () => {
   const { clock, log, takeover } = setup()
   takeover.begin(() => 3)()
   await clock.advance(300)
@@ -132,7 +132,7 @@ test('SW 重启后从持久化恢复静止圈', async () => {
   assert.deepEqual(log.sort(), ['idle:21', 'idle:22'])
 })
 
-test('调用中途会话换到新标签页(navigate newTab)也会转圈', async () => {
+test('调用中途会话换到新标签页(navigate newTab)也会呼吸', async () => {
   const { clock, takeover } = setup()
   let tab
   const release = takeover.begin(() => tab)
@@ -147,7 +147,7 @@ test('调用中途会话换到新标签页(navigate newTab)也会转圈', async 
   assert.equal(takeover.modeOf(42), 'idle')
 })
 
-test('转圈期间定期续命页面截止时间,静止时不续', async () => {
+test('呼吸期间定期续命页面截止时间,静止时不续', async () => {
   const { clock, log, takeover } = setup()
   const release = takeover.begin(() => 9)
   await clock.advance(11000)
@@ -272,7 +272,7 @@ function pageWindow(html) {
   return { window, run }
 }
 
-test('页面脚本:idle 静止帧 / active 旋转帧,停用页面 icon,stop 后原样还原', async () => {
+test('页面脚本:idle 静止帧 / active 呼吸帧,停用页面 icon,stop 后原样还原', async () => {
   const { window, run } = pageWindow(
     '<head><link rel="shortcut icon" href="/a.ico"><link rel="apple-touch-icon" href="/t.png"></head><body></body>')
   const doc = window.document
@@ -298,15 +298,15 @@ test('页面脚本:idle 静止帧 / active 旋转帧,停用页面 icon,stop 后�
     assert.equal(page.getAttribute('rel'), 'dsh-takeover-suspended')
     assert.equal(doc.querySelector('link[href="/t.png"]').getAttribute('rel'), 'apple-touch-icon', '非 icon 的 rel 不动')
 
-    // 切到转圈:换成旋转帧,开始换帧。
+    // 切到呼吸:换成呼吸帧,开始换帧。
     assert.deepEqual(run('active', { ttlMs: 60000 }), { refreshed: true, mode: 'active' })
     assert.equal(state.mode, 'active')
     const activeHref = ours.getAttribute('href')
     assert.notEqual(activeHref, idleHref)
     assert.ok(state.isOwnFrame(activeHref))
-    assert.ok(state.timer || state.worker, '转圈时节拍器在跑')
+    assert.ok(state.timer || state.worker, '呼吸时节拍器在跑')
 
-    // 转圈截止时间到了(SW 没来得及切回)→ 自己退回静止圈,而不是拆掉。
+    // 呼吸截止时间到了(SW 没来得及切回)→ 自己退回静止圈,而不是拆掉。
     state.apply('active', 1, null)
     await new Promise((r) => setTimeout(r, 200))
     assert.equal(state.mode, 'idle')
