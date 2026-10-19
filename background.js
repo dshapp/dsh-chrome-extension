@@ -323,8 +323,22 @@ function cdpErrorMessage(failure, fallback = 'CDP command failed') {
   return text
 }
 
+/**
+ * Report page activity to the takeover indicator (sw/tab-takeover.js), which
+ * animates the tab's favicon while the agent is driving it. Reached through
+ * globalThis so this file stays import-free; absent hook = no indicator.
+ */
+function reportTabActivity(tabId) {
+  try {
+    globalThis.__dshTabTakeover?.touch(tabId)
+  } catch {
+    // The indicator is cosmetic; it must never fail a tool call.
+  }
+}
+
 /** Send one CDP command to a tab. */
 async function cdp(tabId, method, params = {}) {
+  reportTabActivity(tabId)
   await attach(tabId)
   return chrome.debugger.sendCommand({ tabId }, method, params)
 }
@@ -3129,6 +3143,27 @@ function handleFrame(frame) {
   }
 }
 
+/**
+ * Tools that manage tabs rather than read or drive a page, so they do not light
+ * the takeover indicator: listing, selecting, or closing a tab is not operating it.
+ */
+const TAB_MANAGEMENT_TOOLS = new Set(['list_tabs', 'find_tab', 'close_tab', 'close_session'])
+
+/**
+ * Mark the session's tab as taken over for the duration of one tool call. The
+ * getter is re-evaluated by the indicator, so a tab the call opens midway
+ * (navigate with newTab) lights up as soon as the session points at it.
+ */
+function beginTabTakeover(name, args) {
+  const session = args?.session
+  if (session == null || TAB_MANAGEMENT_TOOLS.has(name)) return null
+  try {
+    return globalThis.__dshTabTakeover?.begin(() => sessionTabs.get(session)) ?? null
+  } catch {
+    return null
+  }
+}
+
 async function runToolCall(frame) {
   const { requestId, payload } = frame
   const name = payload?.name
@@ -3141,6 +3176,7 @@ async function runToolCall(frame) {
     }, { replayable: true })
     return
   }
+  const releaseTakeover = beginTabTakeover(name, payload.args)
   try {
     const data = await handler(payload.args || {})
     send({ type: 'tool_result', responseToRequestId: requestId, payload: { data } }, { replayable: true })
@@ -3150,6 +3186,12 @@ async function runToolCall(frame) {
       responseToRequestId: requestId,
       payload: { error: failure?.message ?? String(failure) },
     }, { replayable: true })
+  } finally {
+    try {
+      releaseTakeover?.()
+    } catch {
+      // Cosmetic only.
+    }
   }
 }
 

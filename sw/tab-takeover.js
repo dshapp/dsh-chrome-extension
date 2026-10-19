@@ -1,0 +1,116 @@
+/**
+ * 标签页「正在被接管」指示(Service Worker 侧装配)。
+ *
+ * CDP 桥(../background.js)在执行工具调用、或向某个标签页发 CDP 命令时,
+ * 通过 globalThis.__dshTabTakeover 报告;这里据此把该标签页的 favicon
+ * 换成一圈旋转的蓝色动效,操作结束(含短暂余韵)后还原。
+ *
+ * background.js 必须保持无 import 的独立脚本(它的测试直接求值源码),
+ * 所以和 __dshBridgeState 一样走 globalThis 挂钩;钩子不存在时桥照常工作。
+ */
+
+import { createTabTakeover } from "../src/features/tab-takeover/takeover-controller.js";
+import { tabTakeoverPageScript } from "../src/features/tab-takeover/takeover-page-script.js";
+
+const MAX_FAVICON_BYTES = 256 * 1024;
+
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/** 拿一个 URL 的图标内容转成 data: URL(SW 有 host 权限,不受页面 CORS 限制)。 */
+async function fetchAsDataUrl(url) {
+  if (!url) return null;
+  if (url.startsWith("data:")) return url;
+  if (!/^https?:/i.test(url)) return null;
+  const response = await fetch(url, { credentials: "include", cache: "force-cache" });
+  if (!response.ok) return null;
+  const type = (response.headers.get("content-type") || "").split(";")[0].trim();
+  if (type && !type.startsWith("image/")) return null;
+  const buffer = await response.arrayBuffer();
+  if (!buffer.byteLength || buffer.byteLength > MAX_FAVICON_BYTES) return null;
+  return `data:${type || "image/x-icon"};base64,${toBase64(buffer)}`;
+}
+
+/**
+ * 页面声明的图标候选(包括被我们临时停用的那些),以及 Chrome 当前显示的
+ * favIconUrl 是不是我们自己的动效帧。与注入脚本同在扩展的隔离世界,能看到它的状态。
+ */
+function readIconCandidatesScript(currentFavicon) {
+  const takeover = globalThis.__dshTabTakeover;
+  const ownFrame = Boolean(currentFavicon && takeover && takeover.isOwnFrame && takeover.isOwnFrame(currentFavicon));
+  const out = [];
+  for (const link of document.querySelectorAll("link")) {
+    if (link.hasAttribute("data-dsh-takeover")) continue;
+    const rel = (link.getAttribute("data-dsh-takeover-rel") ?? link.getAttribute("rel") ?? "").toLowerCase();
+    if (!rel.split(/\s+/).includes("icon") || !link.href) continue;
+    out.push(link.href);
+  }
+  return { ownFrame, candidates: out };
+}
+
+/**
+ * 当前页面的原始图标。优先用 Chrome 已选定的 favIconUrl;它若是我们的动效帧
+ * (重新注入时常见),退而读页面声明的候选,最后才猜 /favicon.ico。
+ */
+async function captureFavicon(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  const candidates = [];
+  let page = null;
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: readIconCandidatesScript,
+      args: [tab.favIconUrl ?? null],
+    });
+    page = result?.result ?? null;
+  } catch {
+    // 注入不进去的页面也就画不了动效,无所谓。
+  }
+  if (tab.favIconUrl && !page?.ownFrame) candidates.push(tab.favIconUrl);
+  if (Array.isArray(page?.candidates)) candidates.push(...page.candidates);
+  try {
+    const origin = new URL(tab.url).origin;
+    if (/^https?:/.test(origin)) candidates.push(`${origin}/favicon.ico`);
+  } catch {
+    // 无效 URL。
+  }
+  for (const url of [...new Set(candidates)]) {
+    try {
+      const data = await fetchAsDataUrl(url);
+      if (data) return data;
+    } catch {
+      // 换下一个候选。
+    }
+  }
+  return null;
+}
+
+async function inject(tabId, command, options) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: tabTakeoverPageScript,
+    args: [command, options ?? {}],
+  });
+}
+
+function pulse(tabId) {
+  chrome.tabs.sendMessage(tabId, { type: "dsh-tab-takeover-tick" }, { frameId: 0 }).catch(() => {});
+}
+
+export const tabTakeover = createTabTakeover({ inject, captureFavicon, pulse });
+
+globalThis.__dshTabTakeover = tabTakeover;
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => tabTakeover.tabUpdated(tabId, changeInfo));
+chrome.tabs.onRemoved.addListener((tabId) => tabTakeover.tabRemoved(tabId));
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type !== "dsh-tab-takeover-pulse") return;
+  if (sender.tab?.id == null || sender.frameId !== 0) return;
+  tabTakeover.requestPulse(sender.tab.id);
+});

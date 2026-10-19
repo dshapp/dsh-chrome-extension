@@ -19,3 +19,4 @@ import "./fence-rules-sync.js";
 import "./session-notify.js";
 import "./picker-presence.js";
 import "./server-supervisor.js";
+import "./tab-takeover.js";
