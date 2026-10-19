@@ -47,8 +47,12 @@ unzip -q "$out" -d "$tmp"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# 包内文件清单只取一次。不要写成 `unzip -Z1 | grep -q`:grep -q 一匹配就退出,
+# unzip 随即因 SIGPIPE 失败,在 pipefail 下整条管道判失败 —— 包明明没问题也报错。
+entries="$(unzip -Z1 "$out")"
+
 # 1) manifest.json 必须在 zip 根目录(等价于"没有多包一层目录")
-unzip -Z1 "$out" | grep -qx 'manifest.json' \
+grep -qx 'manifest.json' <<<"$entries" \
   || fail "manifest.json 不在 zip 根目录"
 
 # 2) 包内容与工作区 runtime 文件逐字节一致(即与本机 unpacked 加载的那份一致)。
@@ -63,11 +67,11 @@ diff <(manifest_of ".") <(manifest_of "$tmp") >/dev/null \
 
 # 3) 无开发文件混入
 dev_pattern='(^|/)(node_modules|tests)(/|$)|(^|/)package(-lock)?\.json$|(^|/)\.git(/|$)|\.DS_Store$|(^|/)\.idea(/|$)|(^|/)AGENTS\.md$|(^|/)vitest\.config\.js$'
-if unzip -Z1 "$out" | grep -Eq "$dev_pattern"; then
-  unzip -Z1 "$out" | grep -E "$dev_pattern" >&2
+if grep -Eq "$dev_pattern" <<<"$entries"; then
+  grep -E "$dev_pattern" <<<"$entries" >&2
   fail "zip 混入开发文件"
 fi
 
 echo "created : $root/$out ($(du -h "$out" | cut -f1))"
-echo "entries : $(unzip -Z1 "$out" | wc -l | tr -d ' ') files"
+echo "entries : $(wc -l <<<"$entries" | tr -d ' ') files"
 echo "verified: manifest.json 在 zip 根目录 / 包内容与工作区逐字节一致 / 无开发文件混入"
