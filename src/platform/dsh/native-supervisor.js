@@ -7,6 +7,7 @@
 // port before spawning, so a redundant call when the server is already up is a
 // no-op, and a per-target cooldown keeps it off the hot reconnect path.
 import { createSettings } from "../storage/settings.js";
+import { classifyNativeFailure } from "./native-host-error.js";
 
 const HOST_NAME = "com.dsh.chrome";
 const COOLDOWN_MS = 30000;
@@ -15,6 +16,13 @@ const lastAttemptByTarget = new Map();
 
 function canCallNative() {
   return typeof chrome !== "undefined" && Boolean(chrome.runtime?.sendNativeMessage);
+}
+
+/// sendNativeMessage 的异常 → 结构化失败。认得出的(宿主没装/没授权/起不来)
+/// 换成稳定的 reason code,原文留在 detail;认不出的照旧把原文当 reason。
+function nativeFailure(error) {
+  const detail = String(error?.message || error || "native-call-failed");
+  return { ok: false, reason: classifyNativeFailure(detail) ?? detail, detail };
 }
 
 function parseHostPort(url) {
@@ -61,7 +69,7 @@ export async function ensureServerRunning(target, options = {}) {
     const reply = await chrome.runtime.sendNativeMessage(HOST_NAME, message);
     return reply || { ok: false, reason: "empty-reply" };
   } catch (error) {
-    return { ok: false, reason: String(error?.message || error || "native-call-failed") };
+    return nativeFailure(error);
   }
 }
 
@@ -75,7 +83,7 @@ export async function probeHost() {
     const reply = await chrome.runtime.sendNativeMessage(HOST_NAME, { cmd: "status" });
     return reply || { ok: false, reason: "empty-reply" };
   } catch (error) {
-    return { ok: false, reason: String(error?.message || error || "native-call-failed") };
+    return nativeFailure(error);
   }
 }
 
@@ -85,7 +93,7 @@ export async function requestSessionCookie(host = "127.0.0.1", port = 3080) {
     const reply = await chrome.runtime.sendNativeMessage(HOST_NAME, { cmd: "cookie", host, port });
     return reply || { ok: false, reason: "empty-reply" };
   } catch (error) {
-    return { ok: false, reason: String(error?.message || error || "native-call-failed") };
+    return nativeFailure(error);
   }
 }
 
@@ -100,7 +108,7 @@ export async function requestPasteboardPaths(board) {
     const reply = await chrome.runtime.sendNativeMessage(HOST_NAME, { cmd: "filePaths", board });
     return reply || { ok: false, reason: "empty-reply" };
   } catch (error) {
-    return { ok: false, reason: String(error?.message || error || "native-call-failed") };
+    return nativeFailure(error);
   }
 }
 

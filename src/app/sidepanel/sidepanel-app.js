@@ -38,6 +38,9 @@ import { createPageContext } from "../../features/page-context/page-context.js";
 import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER, steerChordLabel } from "../../features/prompt-queue/index.js";
 import { isFirstUse, initializeDefaultWorkspace } from "../../features/workspaces/default-workspace.js";
 import { mountHistoryLoadOlder } from "./history-load-older.js";
+import { mountSetupGuide } from "../../features/onboarding/setup-guide.js";
+import { isNativeHostSetupError } from "../../platform/dsh/native-host-error.js";
+import { probeHost } from "../../platform/dsh/native-supervisor.js";
 
 export function createSidepanelApp(root, deps, options = {}) {
   // 主题句柄由入口创建(首帧要在 app 组装前就定色),app 只负责把本地镜像与
@@ -49,6 +52,7 @@ export function createSidepanelApp(root, deps, options = {}) {
   let workspaceMenu = null;
   let settingsView = null;
   let mainSurfaces = null;
+  let setupGuide = null;
   // 每会话草稿:切走时保存未发送文本,切回时恢复。
   const drafts = new Map();
   /// 草稿的唯一写入口 —— 顺带把「有没有未发送文字」同步给列表 store,
@@ -1714,6 +1718,32 @@ export function createSidepanelApp(root, deps, options = {}) {
     void dock.refreshPresetMenu();
     historyDrawer?.relabel?.();
     historyDrawer?.refresh?.();
+    setupGuide?.relabel();
+  }
+
+  // ---- 首次使用引导 ----
+  /// 本机没装好 dsh / dsh-chrome-control(或启动器坏了)时,用安装引导替代那句
+  /// "Specified native messaging host not found." toast。引导自己轮询只读的
+  /// probe,一旦检测到就收起并重新走一遍 startConnection。
+  function showSetupGuide(error) {
+    const host = document.querySelector("#setup-guide");
+    if (!host) return false;
+    setupGuide ||= mountSetupGuide(host, {
+      probe: deps.probeNativeHost ?? probeHost,
+      onReady: async () => {
+        hideSetupGuide();
+        setStreamState(deps.DshStreamState.CONNECTING);
+        await startConnection();
+      }
+    });
+    document.body.classList.add("setup-required");
+    void setupGuide.show(error.issue, error.detail);
+    return true;
+  }
+
+  function hideSetupGuide() {
+    setupGuide?.hide();
+    document.body.classList.remove("setup-required");
   }
 
   async function start() {
@@ -1863,8 +1893,15 @@ export function createSidepanelApp(root, deps, options = {}) {
       state.hostHome = deps.sessions.hostHome ?? null;
       state.hostCwd = null;
     } catch (error) {
+      // 本机还没装好 DSH:后面的列表/模型/会话全都会因同一原因失败,
+      // 展示安装引导并就此打住,装好后由引导重新调用 startConnection。
+      if (isNativeHostSetupError(error) && showSetupGuide(error)) {
+        setStreamState(deps.DshStreamState.DISCONNECTED);
+        return;
+      }
       showToast(format(error));
     }
+    hideSetupGuide();
     await Promise.allSettled([
       deps.sessions.refreshList(),
       workspaceMenu ? workspaceMenu.refresh() : deps.workspaces.refresh(),

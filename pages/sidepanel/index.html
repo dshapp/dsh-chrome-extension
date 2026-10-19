@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/trajectory.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/management.css">
   <link rel="stylesheet" href="../../src/app/sidepanel/styles/automations.css">
+  <link rel="stylesheet" href="../../src/features/onboarding/setup-guide.css">
   <!-- KaTeX 样式(MIT,vendor 自 katex@0.16)。样式表静态引入而脚本按需异步加载:
        CSS 只有 24KB 且必须与公式同帧就位,否则会闪一下无样式的公式;
        268KB 的脚本则由 katex-loader 在首次遇到公式时才拉。 -->
@@ -102,6 +103,10 @@
 
   <!-- ── 主区域 ── -->
   <div id="main">
+
+    <!-- 首次使用引导:本机还没装好 dsh / dsh-chrome-control 时由 setup-guide.js
+         渲染,占据消息区与输入区的位置(见 setup-guide.css 的 body.setup-required)。 -->
+    <div id="setup-guide" role="region" aria-labelledby="setup-guide-title" hidden></div>
 
     <!-- 消息区 -->
     <div id="messages">

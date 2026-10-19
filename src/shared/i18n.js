@@ -1,9 +1,11 @@
 // 中英双语文案。t(key, params) 查表;缺失 key 回退英文再回退 key 本身。
 import { AUTOMATION_MESSAGES } from "../features/automations/automation-messages.js";
+import { SETUP_MESSAGES } from "../features/onboarding/setup-messages.js";
 
 const MESSAGES = Object.freeze({
   en: Object.freeze({
     ...AUTOMATION_MESSAGES.en,
+    ...SETUP_MESSAGES.en,
     "set.secretShow": "Show key",
     "set.secretHide": "Hide key",
     "prov.configuredTitle": "Configured providers",
@@ -1182,6 +1184,7 @@ const MESSAGES = Object.freeze({
   }),
   zh: Object.freeze({
     ...AUTOMATION_MESSAGES.zh,
+    ...SETUP_MESSAGES.zh,
     "set.secretShow": "显示密钥",
     "set.secretHide": "隐藏密钥",
     "prov.configuredTitle": "已配置的提供方",

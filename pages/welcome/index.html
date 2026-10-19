@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deepseek Harness APP</title>
+  <!-- 复用侧栏的主题变量与 .btn 胶囊按钮,引导卡片本身来自 setup-guide.css。 -->
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/foundation.css">
+  <link rel="stylesheet" href="../../src/app/sidepanel/styles/composer.css">
+  <link rel="stylesheet" href="../../src/features/onboarding/setup-guide.css">
+  <style>
+    body { overflow-y: auto; display: block; }
+    .welcome-top {
+      max-width: 560px; margin: 0 auto; padding: 40px 18px 0;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .welcome-top img { width: 28px; height: 28px; }
+    .welcome-top span { font-size: 15px; font-weight: 600; }
+    .welcome-ready { max-width: 560px; margin: 0 auto; padding: 28px 18px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.6; }
+    .welcome-ready h2 { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .welcome-ready h2 svg { color: var(--ok); }
+    .welcome-ready p { color: var(--text-dim); }
+    .welcome-ready .btn { align-self: flex-start; }
+    .welcome-ready kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="welcome-top">
+    <img src="../../icons/icon48.png" alt="">
+    <span id="welcome-title">Deepseek Harness APP</span>
+  </div>
+  <div id="setup-guide" role="region" aria-labelledby="setup-guide-title" hidden></div>
+  <section id="welcome-ready" class="welcome-ready" hidden></section>
+  <script type="module" src="../../src/entries/welcome.js"></script>
+</body>
+</html>

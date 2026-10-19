@@ -9,11 +9,27 @@
 // 拉起动作用户按「测试启动」触发,且带 force 越过 30s 冷却(用户是明确要求
 // "现在就试一次",被冷却挡住会看起来像坏了)。
 //
-// host 没装时不给按钮:点了只会得到 native-messaging-unavailable,而那句是
-// "没装",不是"失败"。
+// host 没装时不给「测试启动」:点了只会得到 host-missing,而那句是"没装",
+// 不是"失败"。改给「安装引导」,打开与侧栏引导同一份内容的欢迎页。
 import { t } from "../../../shared/i18n.js";
 import { section, row, button, statusLine, escapeHtml } from "./settings-ui.js";
 import { ensureServerRunning } from "../../../platform/dsh/native-supervisor.js";
+import { NativeHostIssue } from "../../../platform/dsh/native-host-error.js";
+
+const SETUP_ISSUES = new Set(Object.values(NativeHostIssue));
+
+/// 没装好时给一个去处:在新标签页打开欢迎/安装引导页(与侧栏引导同一份内容)。
+function openSetupGuide() {
+  const runtime = globalThis.chrome?.runtime;
+  const url = runtime?.getURL?.("pages/welcome/index.html");
+  if (url && globalThis.chrome?.tabs?.create) void globalThis.chrome.tabs.create({ url });
+}
+
+/// 宿主失败原因 → 人话。已归类的(没装/没授权/起不来)走引导文案,其余照原文。
+function reasonText(reason) {
+  if (SETUP_ISSUES.has(reason)) return t("setup.toast." + reason);
+  return reason ? String(reason) : t("srv.openFailed");
+}
 
 export function createServerLauncherRow({ showToast, formatErrorDetails, onChange }) {
   let status = null;
@@ -33,7 +49,7 @@ export function createServerLauncherRow({ showToast, formatErrorDetails, onChang
         kind: "plain",
         disabled: busy
       })
-      : "");
+      : button({ id: "srv-launcher-guide", label: t("setup.openGuide"), kind: "plain" }));
     return section({
       header: t("srv.launcher"),
       body: row({
@@ -48,6 +64,7 @@ export function createServerLauncherRow({ showToast, formatErrorDetails, onChang
 
   function bind(host) {
     host.querySelector("#srv-launcher-test")?.addEventListener("click", () => test());
+    host.querySelector("#srv-launcher-guide")?.addEventListener("click", () => openSetupGuide());
   }
 
   /// 测试启动:拉起 dsh web,结果就地显示(成功/已在运行/失败)。
@@ -61,7 +78,7 @@ export function createServerLauncherRow({ showToast, formatErrorDetails, onChang
       if (result?.ok) {
         showToast?.(result.alreadyUp ? t("srv.launcherAlreadyUp") : t("srv.launcherStarted"));
       } else {
-        error = result?.reason ? String(result.reason) : t("srv.openFailed");
+        error = reasonText(result?.reason);
         showToast?.(error);
       }
     } catch (failure) {

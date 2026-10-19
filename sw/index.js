@@ -20,3 +20,4 @@ import "./session-notify.js";
 import "./picker-presence.js";
 import "./server-supervisor.js";
 import "./tab-takeover.js";
+import "./onboarding.js";
