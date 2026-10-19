@@ -229,6 +229,17 @@ test("matchDirectoryPaths:按名字配对、同名各取一次、忽略相对路
   );
 });
 
+test("matchDirectoryPaths:Windows 宿主回的盘符与 UNC 路径照样配对,POSIX 名里的反斜杠不当分隔符", () => {
+  assert.deepEqual(
+    matchDirectoryPaths(
+      ["src", "共享", "a\\b", "x", "D"],
+      ["C:\\Users\\张三\\src\\", "\\\\nas\\files\\共享", "/tmp/a\\b", "relative\\x", "D:\\"]
+    ),
+    { matched: ["C:\\Users\\张三\\src", "\\\\nas\\files\\共享", "/tmp/a\\b"], missing: ["x", "D"] }
+  );
+  assert.equal(formatFolderPath("C:\\My Files\\src"), '"C:\\My Files\\src"');
+});
+
 test("formatFolderPath / insertFolderPaths:空白加引号,前后按需补空格", () => {
   assert.equal(formatFolderPath("/a/b"), "/a/b");
   assert.equal(formatFolderPath("/a/b c"), '"/a/b c"');

@@ -210,7 +210,7 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
     if (hostInfo?.home) {
       rows.push(row({
         label: escapeHtml(t("srv.harnessHome")),
-        control: button({ id: "srv-reveal-home", label: t("srv.revealInFinder"), kind: "plain" })
+        control: button({ id: "srv-reveal-home", label: t(revealLabelKey()), kind: "plain" })
       }));
     }
 
@@ -240,8 +240,19 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   /// 启动器把 dsh web 的 stdout/stderr 都写进 logDir/dsh-web.log(见
   /// native-host 的 startWeb),所以这里按同一个约定拼,而不是另找一个路径。
   function logPath() {
-    const dir = String(launcher?.logDir ?? "").replace(/[/]+$/, "");
-    return dir ? dir + "/dsh-web.log" : "";
+    const raw = String(launcher?.logDir ?? "");
+    // Windows 宿主回的是 "C:\…\chrome-native-host":沿用它自己的分隔符,别拼出半边斜杠。
+    const sep = /^[A-Za-z]:\\|^\\\\/.test(raw) ? "\\" : "/";
+    const dir = raw.replace(/[\\/]+$/, "");
+    return dir ? dir + sep + "dsh-web.log" : "";
+  }
+
+  /// 「查看主目录」按钮跟系统叫法走:macOS 是 Finder,Windows 是资源管理器。
+  function revealLabelKey() {
+    const platform = navigator.userAgentData?.platform || navigator.platform || "";
+    if (/mac/i.test(platform)) return "srv.revealInFinder";
+    if (/win/i.test(platform)) return "srv.revealInExplorer";
+    return "srv.revealInFolder";
   }
 
   /// 重启段。标题 + 说明 + 橙色警告 + 失败就地显示(对齐 Mac 的 restartRow)。

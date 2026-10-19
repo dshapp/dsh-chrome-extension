@@ -5,8 +5,29 @@
 // drag)。这里只做纯函数部分:把 DataTransfer 里的文件夹名与 pasteboard 上的路径
 // 对上号,再格式化成要插进输入框的文本。
 
+/// Windows 绝对路径:盘符 "C:\…" 或 UNC "\\server\share\…"(Windows 宿主读剪贴板
+/// 得到的就是这两种)。只有它们按 "\" 分段 —— POSIX 文件名里 "\" 是合法字符。
+function isWindowsPath(path) {
+  return /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\]/.test(path);
+}
+
+function isAbsolutePath(path) {
+  return typeof path === "string" && (path.startsWith("/") || isWindowsPath(path));
+}
+
+function separators(path) {
+  return isWindowsPath(path) ? /[\\/]+/ : /\/+/;
+}
+
+/// 去掉末尾分隔符;根("/"、"C:\")原样保留。
+function trimTrailingSeparators(path) {
+  if (!isWindowsPath(path)) return path.replace(/\/+$/, "") || "/";
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return /^[A-Za-z]:$/.test(trimmed) ? path.slice(0, 3) : trimmed;
+}
+
 function basename(path) {
-  return String(path).replace(/\/+$/, "").split("/").pop() ?? "";
+  return trimTrailingSeparators(String(path)).split(separators(path)).pop() ?? "";
 }
 
 /// 按名字把文件夹与 pasteboard 路径一一配对。
@@ -15,13 +36,13 @@ function basename(path) {
 /// 对不上的一律算 missing —— 宁可提示拿不到路径,也不能插一个别的文件夹的路径。
 /// 同名多个时按出现顺序各取一个,不重复使用同一条路径。
 export function matchDirectoryPaths(names, paths) {
-  const pool = (paths ?? []).filter((path) => typeof path === "string" && path.startsWith("/"));
+  const pool = (paths ?? []).filter(isAbsolutePath);
   const matched = [];
   const missing = [];
   for (const name of names ?? []) {
     const at = pool.findIndex((path) => basename(path) === name);
     if (at === -1) { missing.push(name); continue; }
-    matched.push(pool.splice(at, 1)[0].replace(/\/+$/, "") || "/");
+    matched.push(trimTrailingSeparators(pool.splice(at, 1)[0]));
   }
   return { matched, missing };
 }
