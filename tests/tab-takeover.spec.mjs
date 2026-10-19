@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { JSDOM } from 'jsdom'
 
-import { createTabTakeover } from '../src/features/tab-takeover/takeover-controller.js'
+import { createTabTakeover, isTakeoverFrame } from '../src/features/tab-takeover/takeover-controller.js'
 import { tabTakeoverPageScript } from '../src/features/tab-takeover/takeover-page-script.js'
 
 function fakeClock() {
@@ -229,6 +229,53 @@ test('画过标记的标签页换页后不信 data: 的 favIconUrl(那是上一�
   assert.equal(hints.at(-1), true, '标签页关掉后 id 被复用:重新信任')
 })
 
+test('取图标期间换了页:旧页面取到的结果作废,不会盖掉换页后的重新取', async () => {
+  const clock = fakeClock()
+  const pending = []
+  const injected = []
+  const takeover = createTabTakeover({
+    inject: async (tabId, command, opts) => { injected.push(opts?.favicon ?? null) },
+    captureFavicon: () => new Promise((r) => pending.push(r)),
+    now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, reinjectDelays: [],
+  })
+  takeover.mark(2)
+  await flush()
+  assert.equal(pending.length, 1, '正在取旧页面的图标')
+  takeover.tabUpdated(2, { url: 'https://new.test/', status: 'loading' })
+  pending[0]('data:old-page-frame')
+  await flush(); await flush()
+  assert.equal(pending.length, 2, '换页后重新取')
+  pending[1]('data:new-page-icon')
+  await flush(); await flush()
+  assert.deepEqual(injected, [null, 'data:new-page-icon'], '旧结果被丢弃,最终用新页面的图标')
+})
+
+test('SW 重启恢复的标签页按"画过标记"处理,不信 data: 的 favIconUrl', async () => {
+  const hints = []
+  const takeover = createTabTakeover({
+    inject: async () => {},
+    captureFavicon: async (_id, h) => { hints.push(h.trustTabFavicon); return null },
+  })
+  takeover.restore([31])
+  await flush()
+  assert.deepEqual(hints, [false])
+})
+
+test('isTakeoverFrame 凭内容认帧:带戳的 PNG / SVG 是,站点图标不是', () => {
+  // 1×1 PNG,手工插入与页面脚本相同的 tEXt 块。
+  const plain = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' +
+    '1f15c4890000000d49444154789c6300010000050001' + '0d0a2db40000000049454e44ae426082', 'hex')
+  const text = Buffer.from('tEXtSoftware\0dsh-takeover', 'latin1')
+  const len = Buffer.alloc(4); len.writeUInt32BE(text.length - 4)
+  const tagged = Buffer.concat([plain.subarray(0, plain.length - 12), len, text, Buffer.alloc(4), plain.subarray(plain.length - 12)])
+  assert.equal(isTakeoverFrame('data:image/png;base64,' + plain.toString('base64')), false)
+  assert.equal(isTakeoverFrame('data:image/png;base64,' + tagged.toString('base64')), true)
+  assert.equal(isTakeoverFrame('data:image/svg+xml,' + encodeURIComponent('<svg data-dsh-takeover="1"/>')), true)
+  assert.equal(isTakeoverFrame('data:image/svg+xml,' + encodeURIComponent('<svg/>')), false)
+  assert.equal(isTakeoverFrame('https://a.test/favicon.ico'), false)
+  assert.equal(isTakeoverFrame(undefined), false)
+})
+
 test('拿不到 Worker 的页面请求脉冲:激活期间定时 tick,结束即停', async () => {
   const clock = fakeClock()
   const ticks = []
@@ -313,6 +360,7 @@ test('页面脚本:idle 静止帧 / active 呼吸帧,停用页面 icon,stop 后�
     assert.doesNotMatch(idleHref, /^data:[^,]*;[a-z-]+=/)
     const state = globalThis.__dshTabTakeover
     assert.equal(state.mode, 'idle')
+    assert.ok(isTakeoverFrame(idleHref), '帧带 dsh-takeover 戳,任何地方都能认出来')
     assert.ok(state.isOwnFrame(idleHref), '能认出自己的帧')
     assert.equal(state.isOwnFrame('https://site.test/a.ico'), false)
     assert.equal(state.timer, 0, '静止时不跑节拍器')

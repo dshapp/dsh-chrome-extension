@@ -18,6 +18,27 @@
  */
 
 /**
+ * 这个 favicon URL 是不是我们自己画的标记帧。
+ *
+ * 页面脚本给每个 PNG 帧插了一个 tEXt 块(Software=dsh-takeover),SVG 兜底帧在根元素
+ * 上带 data-dsh-takeover。凭内容认,而不是凭"我们记得画过":换页、扩展重载、SW 重启后
+ * 内存里的记录都没了,戳还在。
+ */
+export function isTakeoverFrame(url) {
+  if (typeof url !== "string" || !url.startsWith("data:image/")) return false;
+  const comma = url.indexOf(",");
+  if (comma < 0) return false;
+  const meta = url.slice(5, comma);
+  const payload = url.slice(comma + 1);
+  try {
+    const text = meta.endsWith(";base64") ? atob(payload) : decodeURIComponent(payload);
+    return text.includes("dsh-takeover");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {{
  *   inject: (tabId: number, command: "active"|"idle"|"stop", options?: object) => Promise<unknown>,
  *   captureFavicon?: (tabId: number, hints: { trustTabFavicon: boolean }) => Promise<string|null>,
@@ -114,7 +135,11 @@ export function createTabTakeover(deps) {
       if (applied.get(tabId) !== record) return;
       if (record.favicon === undefined) {
         const hints = { trustTabFavicon: !painted.has(tabId) };
-        record.favicon = await captureFavicon(tabId, hints).catch(() => null);
+        const epoch = record.faviconEpoch;
+        const captured = await captureFavicon(tabId, hints).catch(() => null);
+        // 取图标期间页面换了(tabUpdated 把 favicon 作废):这次取到的属于旧页面,
+        // 甚至可能是旧页面上我们的帧,丢掉;换页触发的下一次推送会重新取。
+        if (record.faviconEpoch === epoch) record.favicon = captured;
       }
       if (applied.get(tabId) !== record) return;
       painted.add(tabId);
@@ -144,7 +169,7 @@ export function createTabTakeover(deps) {
     }
     if (record?.mode === mode) return;
     if (!record) {
-      record = { mode, favicon: undefined, refresh: null, pulse: null };
+      record = { mode, favicon: undefined, faviconEpoch: 0, refresh: null, pulse: null };
       applied.set(tabId, record);
     }
     record.mode = mode;
@@ -240,7 +265,12 @@ export function createTabTakeover(deps) {
     },
     /** SW 重启后恢复受控集合(调用方负责过滤掉已不存在的标签页)。 */
     restore(tabIds) {
-      for (const id of tabIds) if (Number.isInteger(id)) controlled.add(id);
+      for (const id of tabIds) {
+        if (!Number.isInteger(id)) continue;
+        controlled.add(id);
+        // 恢复出来的都是之前画过标记的标签页:它们的 favIconUrl 很可能还是我们的帧。
+        painted.add(id);
+      }
       reconcile();
     },
     /**
@@ -266,8 +296,12 @@ export function createTabTakeover(deps) {
     tabUpdated(tabId, changeInfo) {
       const record = applied.get(tabId);
       if (!record || !changeInfo) return;
-      if (changeInfo.url) {
+      const resetFavicon = () => {
         record.favicon = undefined;
+        record.faviconEpoch += 1;
+      };
+      if (changeInfo.url) {
+        resetFavicon();
         // "loading" 阶段新文档的 <head> 往往还没解析完,取到的只能是猜测的
         // /favicon.ico;加载完再取一次页面真正声明的图标。
         record.recaptureOnComplete = true;
@@ -276,12 +310,14 @@ export function createTabTakeover(deps) {
       }
       if (changeInfo.status === "complete" && record.recaptureOnComplete) {
         record.recaptureOnComplete = false;
-        record.favicon = undefined;
+        resetFavicon();
       }
       // 标记期间页面自己的 icon 已被停用,data: 的变化基本都是我们自己的帧,
       // 呼吸时每帧都会触发一次 onUpdated,必须忽略;新文档的真实图标多为
       // http(s) URL,再加上换页的 status 事件兜底,足以重新取到原图标。
-      if (changeInfo.favIconUrl && !changeInfo.favIconUrl.startsWith("data:")) record.favicon = undefined;
+      if (changeInfo.favIconUrl && !changeInfo.favIconUrl.startsWith("data:")) resetFavicon();
+      // 页面自己用 data: 声明的真图标(不是我们的帧)出现了,也要重新取。
+      else if (changeInfo.favIconUrl && !isTakeoverFrame(changeInfo.favIconUrl) && record.favicon == null) resetFavicon();
       if (changeInfo.status === "complete" || changeInfo.status === "loading" || record.favicon === undefined) {
         push(tabId, record);
       }

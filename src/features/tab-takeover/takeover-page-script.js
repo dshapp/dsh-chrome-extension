@@ -60,9 +60,15 @@ export function tabTakeoverPageScript(command, options) {
   const BLUE = "26,115,232";
   // 注意:不能给 data: URL 加 MIME 参数作记号(如 image/png;x=1;base64),
   // Chrome 会静默丢弃这种 favicon。要认出"这是我们的帧",用 isOwnFrame。
+  // 帧上的戳,见 tagPng;SVG 兜底帧则写在根元素属性里。与 takeover-controller.js
+  // 的 isTakeoverFrame 一致。
+  const TAG_KEYWORD = "Software";
+  const TAG_VALUE = "dsh-takeover";
   const svg = (body) =>
     "data:image/svg+xml," +
-    encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' + body + "</svg>");
+    encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" data-' + TAG_VALUE + '="1">' + body + "</svg>",
+    );
   const DOT = '<circle cx="16" cy="16" r="7" fill="rgb(' + BLUE + ')"/>';
   const FALLBACK_IDLE = svg(
     '<circle cx="16" cy="16" r="14.8" fill="none" stroke="rgb(' + BLUE + ')" stroke-width="2"/>' + DOT,
@@ -185,6 +191,45 @@ export function tabTakeoverPageScript(command, options) {
     strokeRing(ctx, RING_WIDTH);
   }
 
+  /**
+   * 给 PNG 帧盖个"这是 DSH 标记帧"的戳:在 IEND 前插一个 tEXt 块
+   * (Software=dsh-takeover)。图像本身不变,Chrome 照常显示;但任何地方 ——
+   * 换了文档、换了隔离世界、SW 重启后 —— 拿到这个 data: URL 都能认出它不是站点
+   * 原图标,不会再把它当原图标画进圈里(圈套圈)。不能用 MIME 参数作记号,
+   * Chrome 会丢弃那种 favicon。
+   */
+  let crcTable = null;
+  function crc32(str) {
+    if (!crcTable) {
+      crcTable = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        crcTable[n] = c >>> 0;
+      }
+    }
+    let crc = 0xffffffff;
+    for (let i = 0; i < str.length; i++) crc = crcTable[(crc ^ str.charCodeAt(i)) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+  function u32(n) {
+    return String.fromCharCode((n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
+  }
+  function tagPng(dataUrl) {
+    const prefix = "data:image/png;base64,";
+    if (!dataUrl.startsWith(prefix)) return dataUrl;
+    try {
+      const bin = atob(dataUrl.slice(prefix.length));
+      const iend = bin.length - 12; // IEND 块固定 12 字节,且总在最后
+      if (bin.slice(iend + 4, iend + 8) !== "IEND") return dataUrl;
+      const body = "tEXt" + TAG_KEYWORD + "\0" + TAG_VALUE;
+      const chunk = u32(body.length - 4) + body + u32(crc32(body));
+      return prefix + btoa(bin.slice(0, iend) + chunk + bin.slice(iend));
+    } catch {
+      return dataUrl;
+    }
+  }
+
   async function render(src) {
     const token = ++state.renderToken;
     state.favicon = src;
@@ -205,10 +250,10 @@ export function tabTakeoverPageScript(command, options) {
     const frames = [];
     try {
       drawIdle(ctx, img);
-      idle = canvas.toDataURL("image/png");
+      idle = tagPng(canvas.toDataURL("image/png"));
       for (let i = 0; i < FRAME_COUNT; i++) {
         drawActive(ctx, img, i);
-        frames.push(canvas.toDataURL("image/png"));
+        frames.push(tagPng(canvas.toDataURL("image/png")));
       }
     } catch {
       // 画布被污染(理论上 data: 源不会),退回不带原图标的版本。

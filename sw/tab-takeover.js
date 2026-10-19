@@ -9,7 +9,7 @@
  * 所以和 __dshBridgeState 一样走 globalThis 挂钩;钩子不存在时桥照常工作。
  */
 
-import { createTabTakeover } from "../src/features/tab-takeover/takeover-controller.js";
+import { createTabTakeover, isTakeoverFrame } from "../src/features/tab-takeover/takeover-controller.js";
 import { tabTakeoverPageScript } from "../src/features/tab-takeover/takeover-page-script.js";
 
 const MAX_FAVICON_BYTES = 256 * 1024;
@@ -26,7 +26,8 @@ function toBase64(buffer) {
 /** 拿一个 URL 的图标内容转成 data: URL(SW 有 host 权限,不受页面 CORS 限制)。 */
 async function fetchAsDataUrl(url) {
   if (!url) return null;
-  if (url.startsWith("data:")) return url;
+  // 我们自己的标记帧(带戳),绝不能当成站点原图标。
+  if (url.startsWith("data:")) return isTakeoverFrame(url) ? null : url;
   if (!/^https?:/i.test(url)) return null;
   const response = await fetch(url, { credentials: "include", cache: "force-cache" });
   if (!response.ok) return null;
@@ -75,7 +76,8 @@ async function captureFavicon(tabId, { trustTabFavicon = true } = {}) {
   } catch {
     // 注入不进去的页面也就画不了动效,无所谓。
   }
-  const suspect = !trustTabFavicon && tab.favIconUrl?.startsWith("data:");
+  // 带戳的一定是我们的帧;画过标记的标签页,不带戳的 data: 也可能是旧版本留下的帧,同样不信。
+  const suspect = isTakeoverFrame(tab.favIconUrl) || (!trustTabFavicon && tab.favIconUrl?.startsWith("data:"));
   if (tab.favIconUrl && !page?.ownFrame && !suspect) candidates.push(tab.favIconUrl);
   if (Array.isArray(page?.candidates)) candidates.push(...page.candidates);
   try {
@@ -129,6 +131,38 @@ async function restoreControlled() {
 }
 
 restoreControlled().catch(() => {});
+
+/**
+ * 拆掉扩展重载/更新前留下的无主标记。
+ *
+ * 重载后旧注入所在的隔离世界失去了执行能力(实测它的定时器不再跑,自毁看门狗也就
+ * 不会触发),而它插的 link 和停用的页面图标还留在 DOM 里;受控记录(storage.session)
+ * 又随重载清空,不会有人再来管它们。于是标签页一直挂着一个圈,还可能被新注入当成
+ * 原图标套出第二个圈。所以安装/更新(含开发时的重载)时,把所有标签页清扫一遍。
+ */
+function sweepOrphanMarksScript() {
+  for (const link of document.querySelectorAll("link[data-dsh-takeover]")) link.remove();
+  for (const link of document.querySelectorAll("link[data-dsh-takeover-rel]")) {
+    link.setAttribute("rel", link.getAttribute("data-dsh-takeover-rel") || "icon");
+    link.removeAttribute("data-dsh-takeover-rel");
+  }
+}
+
+async function sweepOrphanMarks() {
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*", "file://*/*"] });
+  await Promise.all(
+    tabs
+      // 受控的标签页(SW 重启恢复出来的)正由当前注入管理,别动。
+      .filter((tab) => tabTakeover.modeOf(tab.id) == null)
+      .map((tab) =>
+        chrome.scripting.executeScript({ target: { tabId: tab.id }, func: sweepOrphanMarksScript }).catch(() => {}),
+      ),
+  );
+}
+
+chrome.runtime.onInstalled.addListener(({ reason }) => {
+  if (reason === "install" || reason === "update") sweepOrphanMarks().catch(() => {});
+});
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => tabTakeover.tabUpdated(tabId, changeInfo));
 chrome.tabs.onRemoved.addListener((tabId) => tabTakeover.tabRemoved(tabId));
