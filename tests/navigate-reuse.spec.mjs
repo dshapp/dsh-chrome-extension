@@ -43,6 +43,10 @@ function makeChromeMock() {
   const messageListeners = []
   let attachFails = false
   let nextTabId = 900
+  let nextGroupId = 7
+  const liveGroups = new Set()
+  const groupTitles = new Map()
+  const groupUpdates = []
   let tabs = defaultTabs()
   const runTimers = []
 
@@ -108,14 +112,27 @@ function makeChromeMock() {
       },
       async group(opts) {
         groupCalls.push(opts)
-        return 7
+        const groupId = opts.groupId ?? nextGroupId++
+        if (opts.groupId != null && !liveGroups.has(groupId)) throw new Error(`No group with id: ${groupId}`)
+        liveGroups.add(groupId)
+        for (const tab of tabs) if ([].concat(opts.tabIds).includes(tab.id)) tab.groupId = groupId
+        return groupId
       },
       // waitForLoad registers here and re-reads tab.status, which already says
       // complete, so no event ever has to be replayed.
       onUpdated: { addListener() {}, removeListener() {} },
       onRemoved: { addListener(listener) { api.__onRemoved = listener } },
     },
-    tabGroups: { async get() { return { id: 7, title: 'Task' } }, async update() {} },
+    tabGroups: {
+      async get(id) {
+        if (!liveGroups.has(id)) throw new Error(`No group with id: ${id}`)
+        return { id, title: groupTitles.get(id) ?? 'Task', windowId: 1 }
+      },
+      async update(id, props) {
+        groupUpdates.push({ id, ...props })
+        if (props?.title) groupTitles.set(id, props.title)
+      },
+    },
     windows: { async update() { } },
     debugger: {
       async attach() {
@@ -141,6 +158,7 @@ function makeChromeMock() {
     api,
     cdpCalls,
     groupCalls,
+    groupUpdates,
     attachCalls,
     timeline,
     setAttachFails(value) { attachFails = value },
@@ -439,4 +457,107 @@ test('navigate never reuses for about:blank', async () => {
   assert.equal(frame.payload.error, undefined, JSON.stringify(frame.payload))
   assert.equal(frame.payload.data.reused, false)
   assert.equal(createCount(), 1)
+})
+
+// ---------------------------------------------------------------- tab groups
+//
+// A session bound to one tab must not wrap it in a tab group; the group only
+// appears once the session works on a second tab, and then holds all of them.
+
+function resetGroups() {
+  mock.groupCalls.length = 0
+  mock.groupUpdates.length = 0
+}
+
+test('a session on a single opened tab gets no tab group', async () => {
+  mock.setTabs([])
+  resetGroups()
+  const frame = await callTool('g1', 'navigate', { session: 'group-single', url: 'https://one.test/', group_title: 'Solo' })
+  assert.equal(frame.payload.error, undefined, JSON.stringify(frame.payload))
+  assert.equal(mock.groupCalls.length, 0, 'one tab must not found a group')
+  const tab = mock.tabs.find((entry) => entry.id === frame.payload.data.tabId)
+  assert.equal(tab.groupId, -1)
+  // Navigating the same tab elsewhere is still a single-tab task.
+  await callTool('g2', 'navigate', { session: 'group-single', url: 'https://one.test/next' })
+  assert.equal(mock.groupCalls.length, 0)
+})
+
+test('a session on a single borrowed tab gets no tab group', async () => {
+  mock.setTabs([
+    { id: 300, url: 'https://user.test/page', title: 'Page', active: true, groupId: -1, windowId: 1, lastAccessed: 5 },
+  ])
+  resetGroups()
+  await callTool('g3', 'find_tab', { session: 'group-borrow-one', active: true })
+  await callTool('g4', 'navigate', { session: 'group-borrow-one', url: 'https://user.test/page' })
+  assert.equal(mock.groupCalls.length, 0)
+  assert.equal(mock.tabs.find((tab) => tab.id === 300).groupId, -1)
+})
+
+test('a second tab founds the group with both tabs, titled by the first navigate', async () => {
+  mock.setTabs([])
+  resetGroups()
+  const first = await callTool('g5', 'navigate', { session: 'group-two', url: 'https://a.test/', group_title: 'Research' })
+  assert.equal(mock.groupCalls.length, 0)
+  const second = await callTool('g6', 'navigate', { session: 'group-two', url: 'https://b.test/', newTab: true })
+  const ids = [first.payload.data.tabId, second.payload.data.tabId]
+  assert.equal(mock.groupCalls.length, 1, 'exactly one group is founded')
+  assert.deepEqual([...mock.groupCalls[0].tabIds].sort(), [...ids].sort())
+  const groupId = mock.tabs.find((tab) => tab.id === ids[0]).groupId
+  assert.notEqual(groupId, -1)
+  assert.equal(mock.tabs.find((tab) => tab.id === ids[1]).groupId, groupId)
+  assert.ok(mock.groupUpdates.some((u) => u.id === groupId && u.title === 'Research'), 'the remembered title names the group')
+
+  // A third tab joins the same group instead of founding another one.
+  const third = await callTool('g7', 'navigate', { session: 'group-two', url: 'https://c.test/', newTab: true })
+  assert.equal(mock.groupCalls.length, 2)
+  assert.equal(mock.groupCalls[1].groupId, groupId)
+  assert.equal(mock.tabs.find((tab) => tab.id === third.payload.data.tabId).groupId, groupId)
+
+  // list_tabs reports every tab of the task.
+  const listed = await callTool('g8', 'list_tabs', { session: 'group-two' })
+  assert.equal(listed.payload.data.tabs.length, 3)
+
+  resetRemoved()
+  const closed = await callTool('g9', 'close_session', { session: 'group-two' })
+  assert.equal(closed.payload.data.closed, 3)
+})
+
+test('a borrowed first tab joins the group once the task opens a second tab', async () => {
+  mock.setTabs([
+    { id: 310, url: 'https://user.test/doc', title: 'Doc', active: true, groupId: -1, windowId: 1, lastAccessed: 5 },
+  ])
+  resetGroups()
+  await callTool('g10', 'navigate', { session: 'group-borrow', url: 'https://user.test/doc' })
+  assert.equal(mock.groupCalls.length, 0)
+  const opened = await callTool('g11', 'navigate', { session: 'group-borrow', url: 'https://other.test/', newTab: true })
+  assert.equal(mock.groupCalls.length, 1)
+  assert.deepEqual([...mock.groupCalls[0].tabIds].sort(), [310, opened.payload.data.tabId].sort())
+  resetRemoved()
+  const closed = await callTool('g12', 'close_session', { session: 'group-borrow' })
+  assert.equal(closed.payload.data.closed, 1, 'only the opened tab is closed')
+  assert.deepEqual(closed.payload.data.kept, [310], 'the borrowed tab is left open')
+})
+
+test('switching to another tab with find_tab founds the group', async () => {
+  mock.setTabs([
+    { id: 320, url: 'https://user.test/x', title: 'X', active: true, groupId: -1, windowId: 1, lastAccessed: 5 },
+    { id: 321, url: 'https://user.test/y', title: 'Y', active: false, groupId: -1, windowId: 1, lastAccessed: 4 },
+  ])
+  resetGroups()
+  await callTool('g13', 'navigate', { session: 'group-find', url: 'https://user.test/x' })
+  assert.equal(mock.groupCalls.length, 0)
+  await callTool('g14', 'find_tab', { session: 'group-find', url: 'https://user.test/y' })
+  assert.equal(mock.groupCalls.length, 1)
+  assert.deepEqual([...mock.groupCalls[0].tabIds].sort(), [320, 321])
+})
+
+test('a tab the user already grouped is never moved, so no one-tab group appears', async () => {
+  mock.setTabs([
+    { id: 330, url: 'https://user.test/filed', title: 'Filed', active: true, groupId: 55, windowId: 1, lastAccessed: 5 },
+  ])
+  resetGroups()
+  await callTool('g15', 'navigate', { session: 'group-user', url: 'https://user.test/filed' })
+  await callTool('g16', 'navigate', { session: 'group-user', url: 'https://other.test/', newTab: true })
+  assert.equal(mock.groupCalls.length, 0, 'one loose tab is not enough to found a group')
+  assert.equal(mock.tabs.find((tab) => tab.id === 330).groupId, 55)
 })

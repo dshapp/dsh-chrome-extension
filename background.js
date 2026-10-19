@@ -31,15 +31,32 @@ const STORAGE = {
 }
 const CDP_VERSION = '1.3'
 
-/** Tabs this bridge opened, keyed by session name. */
+/** The tab each session is currently acting on, keyed by session name. */
 const sessionTabs = new Map()
+/**
+ * Every tab a session has worked on (opened, adopted, or switched to with
+ * find_tab), keyed by session name, in the order it first touched them.
+ *
+ * sessionTabs only holds the *current* tab, so it cannot tell a one-tab task
+ * from a multi-tab one. This set is what decides when a tab group is due.
+ */
+const sessionTabSets = new Map()
 /**
  * Tab group each session's tabs collect into, keyed by session name.
  *
+ * A group only exists once a session works on more than one tab: a task that
+ * stays on a single tab is left exactly where it is, with no group around it.
  * Remembered so a later navigate({newTab}) joins the same group instead of
  * founding a new one per tab, which scattered one task across many groups.
  */
 const sessionGroups = new Map()
+/**
+ * The group_title a session asked for, keyed by session name.
+ *
+ * The title normally arrives on the first navigate, but the group is only
+ * founded when a second tab shows up, often from a call that omits it.
+ */
+const sessionGroupTitles = new Map()
 /** Tabs currently attached to the debugger. */
 const attached = new Set()
 /**
@@ -284,6 +301,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   for (const [session, id] of sessionTabs) {
     if (id === tabId) sessionTabs.delete(session)
   }
+  for (const ids of sessionTabSets.values()) ids.delete(tabId)
   // A closed tab must not linger in the borrowed ledger, or a later session
   // reusing the same (now recycled) tab id would refuse to close a tab it never
   // borrowed.
@@ -563,25 +581,81 @@ function currentTab(session) {
   return tabId
 }
 
-/** Put a tab into the session's tab group so the user sees one group per task. */
-async function groupTab(session, tabId, groupTitle) {
+/** Bind a tab as the session's current one and record that the task uses it. */
+function bindSessionTab(session, tabId) {
+  sessionTabs.set(session, tabId)
+  let ids = sessionTabSets.get(session)
+  if (!ids) {
+    ids = new Set()
+    sessionTabSets.set(session, ids)
+  }
+  ids.add(tabId)
+}
+
+function isUngrouped(tab) {
+  return tab.groupId == null || tab.groupId === -1
+}
+
+/**
+ * Collect a session's tabs into one tab group — but only once there are two.
+ *
+ * A session that works on a single tab gets no group at all: wrapping the one
+ * page the user is reading in a group is noise. The moment the task touches a
+ * second tab, the group is founded with every tab the session has worked on,
+ * and any later tab joins it. Only ungrouped tabs are moved, so a tab the user
+ * already filed into a group of their own stays where they put it, and only
+ * tabs in the group's window join, so grouping never drags a tab across
+ * windows.
+ */
+async function syncSessionGroup(session, groupTitle) {
+  if (groupTitle) sessionGroupTitles.set(session, groupTitle)
   try {
-    const existing = sessionGroups.get(session)
-    if (existing != null) {
+    const ids = [...(sessionTabSets.get(session) || [])]
+    const tabs = []
+    for (const id of ids) {
       try {
-        // Join the group the session already owns, so a task's tabs stay
-        // together instead of founding one group per tab.
-        await chrome.tabs.group({ tabIds: [tabId], groupId: existing })
-        if (groupTitle) await chrome.tabGroups.update(existing, { title: groupTitle })
-        return
+        tabs.push(await chrome.tabs.get(id))
       } catch {
-        // The user closed that group; fall through and start a fresh one.
+        // Closed in the meantime; onRemoved prunes it from the set.
       }
     }
-    const groupId = await chrome.tabs.group({ tabIds: [tabId] })
+    // A single tab is not a group yet.
+    if (tabs.length < 2) return
+
+    const existing = sessionGroups.get(session)
+    if (existing != null) {
+      let windowId = null
+      try {
+        windowId = (await chrome.tabGroups.get(existing))?.windowId ?? null
+      } catch {
+        // The user closed that group; fall through and found a fresh one.
+        sessionGroups.delete(session)
+      }
+      if (sessionGroups.has(session)) {
+        const joining = tabs.filter(
+          (tab) => isUngrouped(tab) && (windowId == null || tab.windowId === windowId),
+        )
+        if (joining.length) {
+          await chrome.tabs.group({ tabIds: joining.map((tab) => tab.id), groupId: existing })
+        }
+        if (groupTitle) await chrome.tabGroups.update(existing, { title: groupTitle })
+        return
+      }
+    }
+
+    // Found the group in the window of the task's first tab, with every
+    // ungrouped session tab that lives there. Still demand two members: a
+    // "group" of one is exactly what this function exists to avoid.
+    const anchor = tabs[0]
+    const members = tabs.filter((tab) => isUngrouped(tab) && tab.windowId === anchor.windowId)
+    if (members.length < 2) return
+    const groupId = await chrome.tabs.group({
+      tabIds: members.map((tab) => tab.id),
+      ...(anchor.windowId != null ? { createProperties: { windowId: anchor.windowId } } : {}),
+    })
     sessionGroups.set(session, groupId)
     await chrome.tabGroups.update(groupId, {
-      title: groupTitle || session,
+      title: sessionGroupTitles.get(session) || session,
     })
   } catch {
     // Grouping is a convenience; losing it must not fail the tool call.
@@ -765,11 +839,8 @@ async function findReusableTab(url, session) {
  * together without rearranging the user's own tab strip.
  */
 async function adoptTab(session, tab, groupTitle) {
-  sessionTabs.set(session, tab.id)
-  const ungrouped = tab.groupId == null || tab.groupId === -1
-  if (ungrouped && sessionGroups.get(session) != null) {
-    await groupTab(session, tab.id, groupTitle)
-  }
+  bindSessionTab(session, tab.id)
+  await syncSessionGroup(session, groupTitle)
   const debuggable = isDebuggableTarget(tab.url)
   let attachedNow = false
   if (debuggable) {
@@ -1165,10 +1236,27 @@ const tools = {
       // itself and every subresource it triggers. about:blank is deliberate:
       // a tab created with no url lands on chrome://newtab, and the debugger
       // cannot attach to a chrome:// page.
-      const created = await chrome.tabs.create({ url: 'about:blank', active: false })
+      // Open next to the tab the task is already on, so a second tab lands in
+      // the same window and can share its group.
+      let windowId
+      const previousId = sessionTabs.get(session)
+      if (previousId != null) {
+        try {
+          windowId = (await chrome.tabs.get(previousId)).windowId
+        } catch {
+          // The previous tab is gone; Chrome picks the window.
+        }
+      }
+      const created = await chrome.tabs.create({
+        url: 'about:blank',
+        active: false,
+        ...(windowId != null ? { windowId } : {}),
+      })
       tabId = created.id
-      sessionTabs.set(session, tabId)
-      await groupTab(session, tabId, groupTitle)
+      bindSessionTab(session, tabId)
+      // The session's first tab stays ungrouped; a group only appears once the
+      // task has a second tab.
+      await syncSessionGroup(session, groupTitle)
       // about:blank is always debuggable, so this attach cannot fail for a
       // legitimate reason; tolerate it anyway so a privileged target (where the
       // debugger detaches on navigation) still opens.
@@ -1216,10 +1304,12 @@ const tools = {
       // side effects. Binding first left close_session pointing at the user's own
       // tab, so cleaning up a task that never took over that tab closed it.
       await attach(tab.id)
-      sessionTabs.set(session, tab.id)
+      bindSessionTab(session, tab.id)
       // An explicit borrow is still a borrow: a later close_session must not
       // close a tab the user was already looking at.
       await rememberBorrowedTab(session, tab.id)
+      // Switching to another tab makes this a multi-tab task.
+      await syncSessionGroup(session)
       return { success: true, url: tab.url, tabId: tab.id, borrowed: true }
     }
     if (!url) throw new Error('pass url, or active:true to borrow the visible tab')
@@ -1238,8 +1328,9 @@ const tools = {
     // Same ordering rule as the active:true branch above: a refused attach must
     // not leave the session bound to a tab this call never took over.
     await attach(match.id)
-    sessionTabs.set(session, match.id)
+    bindSessionTab(session, match.id)
     await rememberBorrowedTab(session, match.id)
+    await syncSessionGroup(session)
     return { success: true, url: match.url, tabId: match.id, borrowed: false }
   },
 
@@ -1294,6 +1385,7 @@ const tools = {
     await detach(tabId)
     await chrome.tabs.remove(tabId)
     sessionTabs.delete(session)
+    sessionTabSets.get(session)?.delete(tabId)
     await pruneBorrowedTab(tabId)
     return { success: true, closed: true, borrowed: false }
   },
@@ -1302,8 +1394,13 @@ const tools = {
     const tabId = sessionTabs.get(session)
     let groupId = sessionGroups.get(session)
     const borrowed = (await loadBorrowedTabs()).get(session) || []
-    if (tabId == null && groupId == null) return { success: true, closed: 0, kept: [] }
-    let ids = tabId != null ? [tabId] : []
+    const touched = [...(sessionTabSets.get(session) || [])]
+    if (tabId == null && groupId == null && !touched.length) {
+      return { success: true, closed: 0, kept: [] }
+    }
+    // Every tab the task worked on, not just the current one: without a group
+    // (a task whose tabs could not be grouped) the set is the only record.
+    let ids = [...new Set([...(tabId != null ? [tabId] : []), ...touched])]
     try {
       // Only infer a group from the tracked tab when that tab is the task's
       // own. A borrowed tab may sit in a group the user made, and closing that
@@ -1314,7 +1411,7 @@ const tools = {
       }
       if (groupId != null) {
         const grouped = await chrome.tabs.query({ groupId })
-        if (grouped.length) ids = grouped.map((entry) => entry.id)
+        ids = [...new Set([...ids, ...grouped.map((entry) => entry.id)])]
       }
     } catch {
       // Fall back to just the tracked tab.
@@ -1327,7 +1424,9 @@ const tools = {
     for (const id of ids) await detach(id)
     if (close.length) await chrome.tabs.remove(close)
     sessionTabs.delete(session)
+    sessionTabSets.delete(session)
     sessionGroups.delete(session)
+    sessionGroupTitles.delete(session)
     borrowedTabs.delete(session)
     await saveBorrowedTabs()
     return {
@@ -2146,7 +2245,7 @@ async focus({ session, selector }) {
 // ---------------------------------------------------------------- tool helpers
 
 function isSessionTab(session, tabId) {
-  return sessionTabs.get(session) === tabId
+  return sessionTabs.get(session) === tabId || !!sessionTabSets.get(session)?.has(tabId)
 }
 
 function clampQuality(quality) {
