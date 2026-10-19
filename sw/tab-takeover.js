@@ -56,13 +56,15 @@ function readIconCandidatesScript(currentFavicon) {
 }
 
 /**
- * 当前页面的原始图标。优先用 Chrome 已选定的 favIconUrl;它若是(或可能是)我们
- * 自己的帧,退而读页面声明的候选,最后才猜 /favicon.ico。
+ * 当前页面的原始图标。依次尝试:Chrome 选定的 http(s) favIconUrl、页面声明的图标
+ * (含被我们停用的)、/favicon.ico。
  *
- * trustTabFavicon 为 false 表示这个标签页画过标记:此时 data: 的 favIconUrl 一律不信,
- * 它多半是上一个文档留下的我们的帧,当成原图标会画出圈套圈。
+ * data: 的 tab.favIconUrl 一律不信。它几乎总是我们自己画的带圈帧,来源防不胜防:
+ * 换页时 Chrome 继续报上一个文档的帧;Chrome 的 favicon 缓存按页面 URL 记住了以前
+ * 画过的帧(包括加戳以前的旧版本帧),新开同一个页面时直接拿出来用。当原图标用就会
+ * 圈套圈。页面真用 data: 声明的图标,仍能从页面的 link 里取到。
  */
-async function captureFavicon(tabId, { trustTabFavicon = true } = {}) {
+async function captureFavicon(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const candidates = [];
   let page = null;
@@ -76,9 +78,7 @@ async function captureFavicon(tabId, { trustTabFavicon = true } = {}) {
   } catch {
     // 注入不进去的页面也就画不了动效,无所谓。
   }
-  // 带戳的一定是我们的帧;画过标记的标签页,不带戳的 data: 也可能是旧版本留下的帧,同样不信。
-  const suspect = isTakeoverFrame(tab.favIconUrl) || (!trustTabFavicon && tab.favIconUrl?.startsWith("data:"));
-  if (tab.favIconUrl && !page?.ownFrame && !suspect) candidates.push(tab.favIconUrl);
+  if (tab.favIconUrl && !tab.favIconUrl.startsWith("data:")) candidates.push(tab.favIconUrl);
   if (Array.isArray(page?.candidates)) candidates.push(...page.candidates);
   try {
     const origin = new URL(tab.url).origin;

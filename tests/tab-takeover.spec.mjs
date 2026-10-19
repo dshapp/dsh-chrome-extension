@@ -203,30 +203,26 @@ test('换页后重新注入(静止圈也跟着新页面走);动效帧(data:)触�
   assert.deepEqual(log, [], '未受控的标签页不注入')
 })
 
-test('画过标记的标签页换页后不信 data: 的 favIconUrl(那是上一页留下的我们的帧),加载完再取一次', async () => {
+test('换页后先取一次,加载完成时再取一次页面声明的图标;同一页面不重复取', async () => {
   const clock = fakeClock()
-  const hints = []
+  let captures = 0
   const takeover = createTabTakeover({
     inject: async () => {},
-    captureFavicon: async (tabId, h) => { hints.push(h.trustTabFavicon); return 'data:image/x-icon;base64,AA' },
+    captureFavicon: async () => { captures += 1; return 'data:image/x-icon;base64,AA' },
     now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, reinjectDelays: [],
   })
   takeover.mark(3)
   await flush()
-  assert.deepEqual(hints, [true], '第一次:还没画过,favIconUrl 就是页面自己的')
+  assert.equal(captures, 1)
   takeover.tabUpdated(3, { url: 'https://b.test/', status: 'loading' })
   await flush()
-  assert.deepEqual(hints, [true, false], '换页:画过了,不信 data: 的 favIconUrl')
+  assert.equal(captures, 2, '换页:重新取')
   takeover.tabUpdated(3, { status: 'complete' })
   await flush()
-  assert.deepEqual(hints, [true, false, false], '加载完再取一次页面声明的图标')
+  assert.equal(captures, 3, '加载完再取一次')
   takeover.tabUpdated(3, { status: 'complete' })
   await flush()
-  assert.deepEqual(hints, [true, false, false], '同一页面不重复取')
-  takeover.tabRemoved(3)
-  takeover.mark(3)
-  await flush()
-  assert.equal(hints.at(-1), true, '标签页关掉后 id 被复用:重新信任')
+  assert.equal(captures, 3, '同一页面不重复取')
 })
 
 test('取图标期间换了页:旧页面取到的结果作废,不会盖掉换页后的重新取', async () => {
@@ -250,15 +246,29 @@ test('取图标期间换了页:旧页面取到的结果作废,不会盖掉换页
   assert.deepEqual(injected, [null, 'data:new-page-icon'], '旧结果被丢弃,最终用新页面的图标')
 })
 
-test('SW 重启恢复的标签页按"画过标记"处理,不信 data: 的 favIconUrl', async () => {
-  const hints = []
+test('会话两次调用之间(agent 在思考)当前标签页保持呼吸;转去别的标签页或会话结束即停', async () => {
+  const clock = fakeClock()
   const takeover = createTabTakeover({
     inject: async () => {},
-    captureFavicon: async (_id, h) => { hints.push(h.trustTabFavicon); return null },
+    now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer,
+    lingerMs: 1000, sessionLingerMs: 10000, tickMs: 100,
   })
-  takeover.restore([31])
-  await flush()
-  assert.deepEqual(hints, [false])
+  let current = 1
+  takeover.begin(() => current, 's')()
+  await clock.advance(5000)
+  assert.equal(takeover.modeOf(1), 'active', '思考期间仍在呼吸')
+  current = 2
+  takeover.begin(() => current, 's')()
+  await clock.advance(1200)
+  assert.equal(takeover.modeOf(1), 'idle', '会话转去别的标签页:旧的回到静止圈')
+  assert.equal(takeover.modeOf(2), 'active')
+  await clock.advance(9000)
+  assert.equal(takeover.modeOf(2), 'idle', '会话很久没动静:停下')
+  takeover.begin(() => current, 's')()
+  await clock.advance(100)
+  takeover.endSession('s')
+  await clock.advance(1100)
+  assert.equal(takeover.modeOf(2), 'idle', '会话结束立即停下(只剩短余韵)')
 })
 
 test('isTakeoverFrame 凭内容认帧:带戳的 PNG / SVG 是,站点图标不是', () => {

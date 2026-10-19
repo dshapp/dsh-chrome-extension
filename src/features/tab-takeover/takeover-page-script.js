@@ -338,8 +338,12 @@ export function tabTakeoverPageScript(command, options) {
   }
 
   function setMode(next) {
+    const wasActive = state.mode === "active";
     state.mode = next;
     if (next === "active") {
+      // 从最亮的一帧开始:呼吸的暗相几乎透明,从暗处起步的话,刚开始操作时
+      // 圈反而像是消失了。
+      if (!wasActive) state.index = Math.floor(FRAME_COUNT / 2);
       show(state.frames[state.index % state.frames.length]);
       startTicking();
     } else {

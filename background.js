@@ -1434,6 +1434,11 @@ const tools = {
     // Kept tabs go back to the user, so they lose the takeover mark; closed
     // ones drop it on tabs.onRemoved.
     for (const id of keep) reportTabReleased(id)
+    try {
+      globalThis.__dshTabTakeover?.endSession?.(session)
+    } catch {
+      // Cosmetic only.
+    }
     if (close.length) await chrome.tabs.remove(close)
     sessionTabs.delete(session)
     sessionTabSets.delete(session)
@@ -3269,7 +3274,7 @@ function beginTabTakeover(name, args) {
   const session = args?.session
   if (session == null || TAB_MANAGEMENT_TOOLS.has(name)) return null
   try {
-    return globalThis.__dshTabTakeover?.begin(() => sessionTabs.get(session)) ?? null
+    return globalThis.__dshTabTakeover?.begin(() => sessionTabs.get(session), session) ?? null
   } catch {
     return null
   }

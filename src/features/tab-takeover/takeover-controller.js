@@ -41,13 +41,13 @@ export function isTakeoverFrame(url) {
 /**
  * @param {{
  *   inject: (tabId: number, command: "active"|"idle"|"stop", options?: object) => Promise<unknown>,
- *   captureFavicon?: (tabId: number, hints: { trustTabFavicon: boolean }) => Promise<string|null>,
+ *   captureFavicon?: (tabId: number) => Promise<string|null>,
  *   pulse?: (tabId: number) => void,
  *   persist?: (tabIds: number[]) => void,
  *   now?: () => number,
  *   setTimer?: (fn: () => void, ms: number) => unknown,
  *   clearTimer?: (handle: unknown) => void,
- *   lingerMs?: number, tickMs?: number, refreshMs?: number, pageTtlMs?: number,
+ *   lingerMs?: number, sessionLingerMs?: number, tickMs?: number, refreshMs?: number, pageTtlMs?: number,
  *   pulseMs?: number, reinjectDelays?: number[],
  * }} deps
  */
@@ -63,6 +63,7 @@ export function createTabTakeover(deps) {
     setTimer = (fn, ms) => setTimeout(fn, ms),
     clearTimer = (handle) => clearTimeout(handle),
     lingerMs = 2500,
+    sessionLingerMs = 20000,
     tickMs = 400,
     refreshMs = 5000,
     pageTtlMs = 15000,
@@ -70,6 +71,13 @@ export function createTabTakeover(deps) {
 
   /** 进行中的工具调用,各自带一个"会话当前标签页"的 getter。 */
   const calls = new Set();
+  /**
+   * 会话 → { getter, until }:会话最近一次调用结束后的一段时间里,它当前的标签页仍算
+   * "正在操作"。agent 两次工具调用之间要花好几秒到几十秒思考,只按单次调用计算的话,
+   * 呼吸灯只会在零星几秒里亮一下,看上去像没有动效。会话转去别的标签页时,getter
+   * 随之指向新标签页,旧标签页立即只剩短余韵,随后回到静止圈。
+   */
+  const sessions = new Map();
   /** tabId → 余韵截止时间。 */
   const lingerUntil = new Map();
   /** 受控的标签页(静止圈)。 */
@@ -78,13 +86,6 @@ export function createTabTakeover(deps) {
   const applied = new Map();
   /** tabId → 串行化的注入链,保证后发的命令不会被先发的反超。 */
   const queues = new Map();
-  /**
-   * 画过标记的标签页。它们的 tab.favIconUrl 若是 data:,很可能是我们自己的帧 ——
-   * 换页时 Chrome 会把上一个文档最后显示的帧一直报着,直到新页面的图标加载出来;
-   * 而新页面的图标又被我们停用了,于是永远等不到。把这一帧当成"原站图标"画进圈里,
-   * 就成了圈套圈。所以这些标签页只从页面声明的图标里找,不信 tab.favIconUrl 的 data:。
-   */
-  const painted = new Set();
   let wake = null;
 
   function enqueue(tabId, job) {
@@ -118,6 +119,14 @@ export function createTabTakeover(deps) {
       if (until > at) busy.add(id);
       else lingerUntil.delete(id);
     }
+    for (const [key, entry] of sessions) {
+      if (entry.until <= at) {
+        sessions.delete(key);
+        continue;
+      }
+      const id = resolveTab(entry.getter);
+      if (id != null) busy.add(id);
+    }
     return busy;
   }
 
@@ -134,15 +143,13 @@ export function createTabTakeover(deps) {
     return enqueue(tabId, async () => {
       if (applied.get(tabId) !== record) return;
       if (record.favicon === undefined) {
-        const hints = { trustTabFavicon: !painted.has(tabId) };
         const epoch = record.faviconEpoch;
-        const captured = await captureFavicon(tabId, hints).catch(() => null);
+        const captured = await captureFavicon(tabId).catch(() => null);
         // 取图标期间页面换了(tabUpdated 把 favicon 作废):这次取到的属于旧页面,
         // 甚至可能是旧页面上我们的帧,丢掉;换页触发的下一次推送会重新取。
         if (record.faviconEpoch === epoch) record.favicon = captured;
       }
       if (applied.get(tabId) !== record) return;
-      painted.add(tabId);
       await inject(tabId, record.mode, { favicon: record.favicon, ttlMs: pageTtlMs });
     });
   }
@@ -216,6 +223,8 @@ export function createTabTakeover(deps) {
       const left = Math.max(until - at, 0) + 5;
       if (delay == null || left < delay) delay = left;
     }
+    // 会话余韵期间它的 getter 可能改指别的标签页,按 tick 复查;到期也要醒来。
+    if (sessions.size > 0 && (delay == null || delay > tickMs)) delay = tickMs;
     if (delay != null) wake = setTimer(reconcile, delay);
   }
 
@@ -228,11 +237,14 @@ export function createTabTakeover(deps) {
   return {
     /**
      * 一次工具调用开始。getter 返回该调用此刻作用的标签页(可能中途变化)。
+     * sessionKey 标识发起调用的会话:调用结束后 sessionLingerMs 内,该会话当前的
+     * 标签页仍保持呼吸(agent 在两次调用之间思考)。
      * @returns {() => void} 调用结束时调用,标签页进入余韵,之后留在静止圈。
      */
-    begin(getter) {
+    begin(getter, sessionKey) {
       const entry = () => getter();
       calls.add(entry);
+      if (sessionKey != null) sessions.delete(sessionKey);
       reconcile();
       let released = false;
       return () => {
@@ -240,8 +252,14 @@ export function createTabTakeover(deps) {
         released = true;
         calls.delete(entry);
         linger(resolveTab(getter));
+        // agent 正在思考下一步:会话当前的标签页继续呼吸一会儿。
+        if (sessionKey != null) sessions.set(sessionKey, { getter, until: now() + sessionLingerMs });
         reconcile();
       };
+    },
+    /** 会话结束(close_session):不再让它的标签页呼吸。 */
+    endSession(sessionKey) {
+      if (sessions.delete(sessionKey)) reconcile();
     },
     /** 有命令打到了这个标签页(例如每条 CDP 命令)。 */
     touch(tabId) {
@@ -265,12 +283,7 @@ export function createTabTakeover(deps) {
     },
     /** SW 重启后恢复受控集合(调用方负责过滤掉已不存在的标签页)。 */
     restore(tabIds) {
-      for (const id of tabIds) {
-        if (!Number.isInteger(id)) continue;
-        controlled.add(id);
-        // 恢复出来的都是之前画过标记的标签页:它们的 favIconUrl 很可能还是我们的帧。
-        painted.add(id);
-      }
+      for (const id of tabIds) if (Number.isInteger(id)) controlled.add(id);
       reconcile();
     },
     /**
@@ -340,7 +353,6 @@ export function createTabTakeover(deps) {
       applied.delete(tabId);
       lingerUntil.delete(tabId);
       queues.delete(tabId);
-      painted.delete(tabId);
       if (controlled.delete(tabId)) save();
     },
     /** "active" | "idle" | null */
