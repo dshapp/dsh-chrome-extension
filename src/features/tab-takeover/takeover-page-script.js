@@ -338,6 +338,9 @@ export function tabTakeoverPageScript(command, options) {
     }
   }
 
+  // 扩展重载前那份注入(另一个隔离世界,看不到它的状态)可能还留着自己的 link;
+  // 它的帧已经无主,拆掉,免得 Chrome 在两个标记之间挑。
+  for (const link of doc.querySelectorAll("link[" + MARK + "]")) link.remove();
   for (const link of doc.querySelectorAll("link")) if (isPageIcon(link)) suspend(link);
 
   if (typeof MutationObserver === "function") {

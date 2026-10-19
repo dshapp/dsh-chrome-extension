@@ -20,7 +20,7 @@
 /**
  * @param {{
  *   inject: (tabId: number, command: "active"|"idle"|"stop", options?: object) => Promise<unknown>,
- *   captureFavicon?: (tabId: number) => Promise<string|null>,
+ *   captureFavicon?: (tabId: number, hints: { trustTabFavicon: boolean }) => Promise<string|null>,
  *   pulse?: (tabId: number) => void,
  *   persist?: (tabIds: number[]) => void,
  *   now?: () => number,
@@ -57,6 +57,13 @@ export function createTabTakeover(deps) {
   const applied = new Map();
   /** tabId → 串行化的注入链,保证后发的命令不会被先发的反超。 */
   const queues = new Map();
+  /**
+   * 画过标记的标签页。它们的 tab.favIconUrl 若是 data:,很可能是我们自己的帧 ——
+   * 换页时 Chrome 会把上一个文档最后显示的帧一直报着,直到新页面的图标加载出来;
+   * 而新页面的图标又被我们停用了,于是永远等不到。把这一帧当成"原站图标"画进圈里,
+   * 就成了圈套圈。所以这些标签页只从页面声明的图标里找,不信 tab.favIconUrl 的 data:。
+   */
+  const painted = new Set();
   let wake = null;
 
   function enqueue(tabId, job) {
@@ -105,8 +112,12 @@ export function createTabTakeover(deps) {
   function push(tabId, record) {
     return enqueue(tabId, async () => {
       if (applied.get(tabId) !== record) return;
-      if (record.favicon === undefined) record.favicon = await captureFavicon(tabId).catch(() => null);
+      if (record.favicon === undefined) {
+        const hints = { trustTabFavicon: !painted.has(tabId) };
+        record.favicon = await captureFavicon(tabId, hints).catch(() => null);
+      }
       if (applied.get(tabId) !== record) return;
+      painted.add(tabId);
       await inject(tabId, record.mode, { favicon: record.favicon, ttlMs: pageTtlMs });
     });
   }
@@ -257,8 +268,15 @@ export function createTabTakeover(deps) {
       if (!record || !changeInfo) return;
       if (changeInfo.url) {
         record.favicon = undefined;
+        // "loading" 阶段新文档的 <head> 往往还没解析完,取到的只能是猜测的
+        // /favicon.ico;加载完再取一次页面真正声明的图标。
+        record.recaptureOnComplete = true;
         // 新文档也许允许 Worker;需要的话它会自己再来要脉冲。
         stopPulse(record);
+      }
+      if (changeInfo.status === "complete" && record.recaptureOnComplete) {
+        record.recaptureOnComplete = false;
+        record.favicon = undefined;
       }
       // 标记期间页面自己的 icon 已被停用,data: 的变化基本都是我们自己的帧,
       // 呼吸时每帧都会触发一次 onUpdated,必须忽略;新文档的真实图标多为
@@ -286,6 +304,7 @@ export function createTabTakeover(deps) {
       applied.delete(tabId);
       lingerUntil.delete(tabId);
       queues.delete(tabId);
+      painted.delete(tabId);
       if (controlled.delete(tabId)) save();
     },
     /** "active" | "idle" | null */

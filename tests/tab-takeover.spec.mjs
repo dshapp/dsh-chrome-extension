@@ -203,6 +203,32 @@ test('换页后重新注入(静止圈也跟着新页面走);动效帧(data:)触�
   assert.deepEqual(log, [], '未受控的标签页不注入')
 })
 
+test('画过标记的标签页换页后不信 data: 的 favIconUrl(那是上一页留下的我们的帧),加载完再取一次', async () => {
+  const clock = fakeClock()
+  const hints = []
+  const takeover = createTabTakeover({
+    inject: async () => {},
+    captureFavicon: async (tabId, h) => { hints.push(h.trustTabFavicon); return 'data:image/x-icon;base64,AA' },
+    now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, reinjectDelays: [],
+  })
+  takeover.mark(3)
+  await flush()
+  assert.deepEqual(hints, [true], '第一次:还没画过,favIconUrl 就是页面自己的')
+  takeover.tabUpdated(3, { url: 'https://b.test/', status: 'loading' })
+  await flush()
+  assert.deepEqual(hints, [true, false], '换页:画过了,不信 data: 的 favIconUrl')
+  takeover.tabUpdated(3, { status: 'complete' })
+  await flush()
+  assert.deepEqual(hints, [true, false, false], '加载完再取一次页面声明的图标')
+  takeover.tabUpdated(3, { status: 'complete' })
+  await flush()
+  assert.deepEqual(hints, [true, false, false], '同一页面不重复取')
+  takeover.tabRemoved(3)
+  takeover.mark(3)
+  await flush()
+  assert.equal(hints.at(-1), true, '标签页关掉后 id 被复用:重新信任')
+})
+
 test('拿不到 Worker 的页面请求脉冲:激活期间定时 tick,结束即停', async () => {
   const clock = fakeClock()
   const ticks = []
@@ -320,6 +346,14 @@ test('页面脚本:idle 静止帧 / active 呼吸帧,停用页面 icon,stop 后�
     doc.head.appendChild(late)
     await flush()
     assert.equal(late.getAttribute('rel'), 'dsh-takeover-suspended')
+
+    // 扩展重载后的新注入(另一个隔离世界,状态互不可见)会拆掉旧世界留下的标记 link。
+    const stateBefore = globalThis.__dshTabTakeover
+    delete globalThis.__dshTabTakeover
+    run('idle', { ttlMs: 60000 })
+    assert.equal(doc.querySelectorAll('link[data-dsh-takeover]').length, 1, '只剩新的一个标记')
+    assert.notEqual(doc.querySelector('link[data-dsh-takeover]'), ours)
+    stateBefore.stop()
 
     run('stop')
     assert.equal(doc.querySelector('link[data-dsh-takeover]'), null)

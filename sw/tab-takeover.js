@@ -55,10 +55,13 @@ function readIconCandidatesScript(currentFavicon) {
 }
 
 /**
- * 当前页面的原始图标。优先用 Chrome 已选定的 favIconUrl;它若是我们的动效帧
- * (重新注入时常见),退而读页面声明的候选,最后才猜 /favicon.ico。
+ * 当前页面的原始图标。优先用 Chrome 已选定的 favIconUrl;它若是(或可能是)我们
+ * 自己的帧,退而读页面声明的候选,最后才猜 /favicon.ico。
+ *
+ * trustTabFavicon 为 false 表示这个标签页画过标记:此时 data: 的 favIconUrl 一律不信,
+ * 它多半是上一个文档留下的我们的帧,当成原图标会画出圈套圈。
  */
-async function captureFavicon(tabId) {
+async function captureFavicon(tabId, { trustTabFavicon = true } = {}) {
   const tab = await chrome.tabs.get(tabId);
   const candidates = [];
   let page = null;
@@ -72,7 +75,8 @@ async function captureFavicon(tabId) {
   } catch {
     // 注入不进去的页面也就画不了动效,无所谓。
   }
-  if (tab.favIconUrl && !page?.ownFrame) candidates.push(tab.favIconUrl);
+  const suspect = !trustTabFavicon && tab.favIconUrl?.startsWith("data:");
+  if (tab.favIconUrl && !page?.ownFrame && !suspect) candidates.push(tab.favIconUrl);
   if (Array.isArray(page?.candidates)) candidates.push(...page.candidates);
   try {
     const origin = new URL(tab.url).origin;
