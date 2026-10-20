@@ -25,7 +25,7 @@ globalThis.HTMLElement = dom.window.HTMLElement
 
 const { isLocalImagePath, isSafeImageSrc } = await import('../src/shared/image-src.js')
 const { mdToHtml } = await import('../src/shared/md-to-html.js')
-const { hydrateLocalImages, localImageCacheSize, LOCAL_IMAGE_CACHE_LIMIT } =
+const { hydrateLocalImages, localImageCacheSize, LOCAL_IMAGE_CACHE_LIMIT, sniffImageType } =
   await import('../src/features/chat/local-images.js')
 const { renderIncrementalMarkdown } = await import('../src/features/chat/incremental-markdown.js')
 const { createApiClient } = await import('../src/platform/dsh/api-client.js')
@@ -145,6 +145,43 @@ test('读取失败或非图片时换成 alt 文字(alt 为空显示原路径)', 
   assert.equal(root.querySelectorAll('img').length, 0)
   const alts = [...root.querySelectorAll('.md-img-alt')].map((node) => node.textContent)
   assert.deepEqual(alts, ['图注', '/tmp/empty-alt.png', 't'])
+})
+
+test('无扩展名的附件对象(宿主回 octet-stream)按文件头识别成图片,与 web/Mac 一致', async () => {
+  // 回归:![…](</Users/u/.dsh/attachments/v1/objects/80/80523a…>) 在扩展里只剩 alt 文字,
+  // 宿主按扩展名给 MIME,无扩展名 → application/octet-stream。
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46])
+  const created = []
+  const original = URL.createObjectURL
+  URL.createObjectURL = (blob) => { created.push(blob); return original.call(URL, blob) }
+  try {
+    const root = host(mdToHtml(
+      '![Selector](</Users/u/.dsh/attachments/v1/objects/80/80523a84ba40b9b6>)\n\n![bin](/tmp/octet.bin)',
+      { localImages: true }))
+    hydrateLocalImages(root, async (path) => path.endsWith('.bin')
+      ? new Blob(['plain text'], { type: 'application/octet-stream' })
+      : new Blob([jpeg], { type: 'application/octet-stream' }))
+    for (let i = 0; i < 5; i++) { await flush(); await new Promise((r) => setTimeout(r, 0)) }
+    const img = root.querySelector('img')
+    assert.ok(img && img.src.startsWith('blob:'), root.innerHTML)
+    assert.equal(img.alt, 'Selector')
+    assert.equal(created.length, 1)
+    assert.equal(created[0].type, 'image/jpeg')
+    assert.deepEqual([...root.querySelectorAll('.md-img-alt')].map((n) => n.textContent), ['bin'])
+  } finally {
+    URL.createObjectURL = original
+  }
+})
+
+test('sniffImageType 认 WHATWG 位图签名,其余为 null', () => {
+  const b = (...xs) => new Uint8Array(xs)
+  assert.equal(sniffImageType(b(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0)), 'image/png')
+  assert.equal(sniffImageType(b(0xff, 0xd8, 0xff, 0xdb)), 'image/jpeg')
+  assert.equal(sniffImageType(new TextEncoder().encode('GIF89a..')), 'image/gif')
+  assert.equal(sniffImageType(new TextEncoder().encode('RIFF\u0001\u0002\u0003\u0004WEBPVP8 ')), 'image/webp')
+  assert.equal(sniffImageType(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>')), null)
+  assert.equal(sniffImageType(b(0x89, 0x50)), null)
+  assert.equal(sniffImageType(b()), null)
 })
 
 test('缓存有上限,淘汰时 revoke blob URL', async () => {

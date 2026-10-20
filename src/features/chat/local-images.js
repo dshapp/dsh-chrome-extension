@@ -11,6 +11,12 @@
 //
 // 失败(404/403/413/非图片/解码失败)时换成 alt 文字(web MarkdownImage 的
 // imageAlt:alt 为空时显示原路径)。
+//
+// 是不是图片按**字节**判,不只看 Content-Type:宿主 /api/file 按扩展名给 MIME,
+// 无扩展名的文件一律 application/octet-stream —— 截图附件 ~/.dsh/attachments/v1/
+// objects/<sha256> 正是这种(present / read_image 产出的路径)。web 直接
+// <img src=/api/file…> 由浏览器按内容嗅探解码,Mac RemoteMarkdownImageLoader 用
+// NSImage(data:) 也按内容解码,两端都能显示;只认 MIME 的话只有扩展里会退化成 alt。
 
 /// blob: URL 缓存上限。每条都钉着一份图片字节,与 node-views 的附件图片缓存
 /// 同一上限;淘汰时 revoke,已画出的 <img> 不受影响(解码结果留在元素上),
@@ -39,15 +45,56 @@ function trim() {
   }
 }
 
+/// 位图签名,取自 WHATWG MIME Sniffing §6.1 的图片模式表(浏览器 <img> 嗅探
+/// 认的就是这一组)。SVG 不在表里:它是文本,不按内容嗅探,web 端同样不显示。
+const IMAGE_SIGNATURES = [
+  { type: "image/png", bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  { type: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
+  { type: "image/gif", bytes: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] }, // GIF87a
+  { type: "image/gif", bytes: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] }, // GIF89a
+  // RIFF????WEBPVP:中间 4 字节是长度,null 表示任意。
+  { type: "image/webp", bytes: [0x52, 0x49, 0x46, 0x46, null, null, null, null, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50] },
+  { type: "image/bmp", bytes: [0x42, 0x4d] },
+  { type: "image/x-icon", bytes: [0x00, 0x00, 0x01, 0x00] },
+  { type: "image/x-icon", bytes: [0x00, 0x00, 0x02, 0x00] }
+];
+const SNIFF_LENGTH = 14;
+
+/// 按文件头识别位图类型;不是已知位图返回 null。
+export function sniffImageType(bytes) {
+  for (const { type, bytes: pattern } of IMAGE_SIGNATURES) {
+    if (bytes.length < pattern.length) continue;
+    if (pattern.every((b, i) => b === null || bytes[i] === b)) return type;
+  }
+  return null;
+}
+
+/// 读回的 Blob → 可进 <img> 的图片 Blob;不是图片抛错(调用方换成 alt)。
+/// 宿主已给出 image/* 时照用;给的是"类型未知"(octet-stream / 空,即无扩展名)时
+/// 按文件头嗅探并改写类型;明确的非图片类型(text/plain 等)直接拒。
+/// 已知类型同步返回,不为嗅探多付几个微任务。
+const UNKNOWN_TYPES = new Set(["", "application/octet-stream"]);
+function asImageBlob(blob) {
+  if (!blob) throw new Error("not found");
+  const mediaType = String(blob.type).toLowerCase().split(";")[0].trim();
+  if (mediaType.startsWith("image/")) return blob;
+  if (!UNKNOWN_TYPES.has(mediaType)) throw new Error("not an image");
+  return blob.slice(0, SNIFF_LENGTH).arrayBuffer().then((buffer) => {
+    const type = sniffImageType(new Uint8Array(buffer));
+    if (!type) throw new Error("not an image");
+    return blob.slice(0, blob.size, type);
+  });
+}
+
 function entryFor(path, load) {
   const cached = cache.get(path);
   if (cached) { touch(path, cached); return cached; }
   const entry = { url: null, failed: false, pending: null };
   entry.pending = Promise.resolve()
     .then(() => load(path))
+    // 非图片文件不该进 <img>:MIME 不是 image/* 时按文件头再判一次(见文件头注释)。
+    .then(asImageBlob)
     .then((blob) => {
-      // 只认图片 MIME:宿主按扩展名给 Content-Type,非图片文件不该进 <img>。
-      if (!blob || !String(blob.type).startsWith("image/")) throw new Error("not an image");
       entry.url = URL.createObjectURL(blob);
     })
     .catch(() => { entry.failed = true; })
