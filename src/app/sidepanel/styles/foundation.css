@@ -586,7 +586,9 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 #main { flex: 1; display: flex; flex-direction: column; min-height: 0; container: sidepanel / inline-size; }
 #messages {
   flex: 1; overflow-y: auto;
-  padding: 1.5rem 1.5rem 1rem;
+  /* 底部常驻留出运行状态条(#running-status,悬浮在输入框上方,约 1.375rem)的高度:
+     对齐 Mac 的做法 —— 状态条有无运行都占同一高度,出现/消失不会推动记录。 */
+  padding: 1.5rem 1.5rem 2.5rem;
   scrollbar-width: thin;
   overscroll-behavior: contain;
 }

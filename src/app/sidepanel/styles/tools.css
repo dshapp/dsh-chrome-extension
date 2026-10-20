@@ -1,13 +1,16 @@
 /* 工具调用行。外边距清零:间距由 #msg-list 的 rowSpacing(2px)统一供给,
-   一串工具卡/思考行才会像 Mac 端那样紧排。 */
+   一串工具卡/思考行才会像 Mac 端那样紧排。
+   卡片行高对齐 Mac 的 chromeRowHeight(18pt,12pt 字 + 上下各约 2pt):
+   这里正文 13px,取 22px 最小行高、上下 1px 内边距,行距 = 22 + 2 = 24px。
+   原先 2rem + 6px 内边距让每行占 34px,一串卡片明显比 Mac 松。 */
 .tool-row { align-self: flex-start; width: 100%; }
 .tool-header {
   display: flex;
   align-items: center;
   width: 100%;
-  min-block-size: 2rem;
+  min-block-size: 1.375rem;
   gap: 6px;
-  padding: 0.375rem 0;
+  padding: 1px 0;
   border: 0;
   border-radius: 0.5rem;
   background: transparent;
@@ -29,11 +32,23 @@
   flex-shrink: 0;
 }
 .tool-icon svg { width: 14px; height: 14px; }
-.tool-icon.running { animation: tool-icon-pulse 1.4s ease-in-out infinite; }
 .tool-icon.error { color: var(--danger); }
 @keyframes tool-icon-pulse {
   0%, 100% { opacity: .4; }
   50% { opacity: 1; }
+}
+/* 执行中的卡片(运行中的工具行、仍在流式输出的思考行)整行呼吸:
+   图标与摘要一起在亮暗之间缓慢起伏,所有执行中的卡片同一节奏。
+   只动子元素的 opacity,不动行本身,hover 底色因此不跟着闪。 */
+.tool-row.running .tool-header > *,
+.thinking-bubble.running .thinking-header > * {
+  animation: card-breathe 1.6s ease-in-out infinite;
+  /* 相位由 node-views 的 syncBreathePhase 按文档时间轴写入,多张卡片同步 */
+  animation-delay: var(--breathe-delay, 0s);
+}
+@keyframes card-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
 }
 .tool-label {
   font-size: 0.8125rem;
@@ -60,9 +75,9 @@
   display: flex;
   align-items: center;
   width: 100%;
-  min-block-size: 2rem;
+  min-block-size: 1.375rem;
   gap: 8px;
-  padding: 0.375rem 0;
+  padding: 1px 0;
   border: 0;
   border-radius: 0.5rem;
   background: transparent;
@@ -132,9 +147,9 @@
   display: flex;
   align-items: center;
   inline-size: 100%;
-  min-block-size: 2rem;
+  min-block-size: 1.375rem;
   gap: 6px;
-  padding: 0.375rem 0;
+  padding: 1px 0;
   border: 0;
   background: none;
   color: inherit;
@@ -189,8 +204,9 @@
 .turn-end-chip { align-self: center; color: var(--text-faint); font-size: 11px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .typing-dots span, .tool-icon.running, .tool-group[data-state="running"] .tool-group-icon,
-  .tool-group-preview { animation: none; }
+  .typing-dots span, .tool-group[data-state="running"] .tool-group-icon,
+  .tool-group-preview, .tool-row.running .tool-header > *,
+  .thinking-bubble.running .thinking-header > * { animation: none; }
 }
 
 

@@ -463,8 +463,8 @@ span.ref-chip { cursor: default; }
 .chip-row {
   align-self: flex-start; inline-size: 100%;
   display: flex; align-items: center; gap: 6px;
-  min-block-size: 2rem;
-  padding: 0.375rem 0;
+  min-block-size: 1.375rem;
+  padding: 1px 0;
   border: 0;
   border-radius: 0.5rem;
   background: transparent;
@@ -742,16 +742,26 @@ button.turn-tail-stat[aria-expanded="true"] { background: var(--bg-raised); colo
 .diff-ctx { color: var(--text-dim); }
 
 /* Turn process 折叠头(web TurnProcessNodeView / mac TurnProcessRow)。 */
+/* 轮次折叠头(Mac TurnProcessRow):"已完成,用时 35分53秒" + 紧跟其右的 chevron,
+   下方一条整宽分割线(Mac Divider,与标题行间距 8)。
+   字号与正文同档(Mac .transcript(.content)),颜色是卡片标题的次级灰
+   (labelTertiary),可折叠时 hover 提亮一档(labelSecondary);不画 hover 底色。 */
 .turn-process {
-  display: flex; align-items: center; gap: 0.375rem; align-self: flex-start;
-  padding: 0.125rem 0.25rem; border: 0; border-radius: var(--radius);
-  background: none; color: var(--text-faint);
-  font: inherit; font-size: 0.75rem; cursor: pointer;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  align-self: stretch; inline-size: 100%;
+  padding: 0; border: 0; border-radius: 0;
+  background: none; color: var(--text-dim);
+  font: inherit; font-size: 0.875rem; line-height: 1.6; text-align: start;
 }
-.turn-process:hover { color: var(--text); background: var(--bg-raised); }
-.turn-process-chevron { display: inline-flex; align-items: center; transition: transform 120ms ease; }
+button.turn-process { cursor: pointer; }
+button.turn-process:hover { color: var(--text); }
+button.turn-process:focus-visible { outline: 2px solid var(--text-dim); outline-offset: 2px; }
+.turn-process-heading { display: flex; align-items: center; gap: 4px; min-inline-size: 0; }
+.turn-process-label { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-process-chevron { flex: none; display: inline-flex; align-items: center; transition: transform 100ms ease; }
 .turn-process-chevron svg { display: block; }
-.turn-process[data-open="true"] .turn-process-chevron { transform: rotate(90deg); }
+.turn-process[data-open="true"] .turn-process-chevron { transform: rotate(180deg); }
+.turn-process-divider { display: block; block-size: 1px; background: var(--border); }
 /* 折叠的成员保留在 DOM 但不可见:成员类上的 display 会盖过 UA 的 [hidden],这里强制。 */
 #msg-list [hidden] { display: none !important; }
 

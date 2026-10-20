@@ -2,7 +2,7 @@
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
 import { t, getLang } from "../../shared/i18n.js";
-import { createChatRenderer, agentStatusLabel, isThinking, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar } from "../../features/chat/index.js";
+import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
 } from "../../features/interactions/index.js";
@@ -73,6 +73,9 @@ export function createSidepanelApp(root, deps, options = {}) {
   const historyLoadOlder = mountHistoryLoadOlder(elements.msgList, {
     onLoad: () => (state.sessionId ? deps.sessions.loadEarlier(state.sessionId) : null)
   });
+
+  // 运行状态条:悬浮在输入框区域顶部(Mac RunningStatusRow),不进记录流。
+  const runningStatus = mountRunningStatus(elements.runningStatus);
 
   const chatRenderer = createChatRenderer(elements.msgList, {
     onFork: handleFork,
@@ -332,10 +335,12 @@ export function createSidepanelApp(root, deps, options = {}) {
     turnRail.set(turnRailItems, activeTurn, busyTurn);
     // 未加载刻度的分页跳转:锚点行刚渲染出来,在这里落点(见 realizePendingJump)。
     realizePendingJump();
-    const statusLabel = agentStatusLabel(snapshot, { awaitingTurnStart });
+    // 运行中的状态不再作为记录流末尾的一行:对齐 Mac,改由输入框上方的状态条给出
+    // "工作类别 · 用时"。记录区里的等待指示只剩切会话时的"加载中",快照到了就收掉。
+    chatRenderer.setTyping(false);
+    chatRenderer.setThinking(false);
+    runningStatus.set(runningStatusLabel(snapshot, { awaitingTurnStart }), snapshot.runningStartTime);
     // 空会话 + 加载失败:空态提示比一片空白更能说明"这不是在加载"。
-    chatRenderer.setTyping(statusLabel != null, statusLabel, snapshot.runningStartTime);
-    chatRenderer.setThinking(isThinking(snapshot), snapshot.runningStartTime);
     elements.emptyHint.hidden = snapshot.nodes.length > 0 || pendingSteering.length > 0;
 
     renderTakeover(snapshot);
@@ -645,7 +650,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     autoResizeInput();
     updateSendState();
     awaitingTurnStart = true;
-    chatRenderer.setTyping(true, t("statusPreparing"));
+    // 发出即亮状态条(Mac:还没有 live 工具时就是"正在分析请求");用时等 turn/start 到了再出。
+    runningStatus.set(t("activity.thinking"));
     // 发送即锁尾:从这一刻起转录钉在最新内容,直到轮次结束或读者自己上滚。
     tailFollow.didSubmit();
     try {
@@ -676,7 +682,7 @@ export function createSidepanelApp(root, deps, options = {}) {
       awaitingTurnStart = false;
       // 没发出去就没有回答可跟;释放,别让阅读位置被一段不存在的内容钉住。
       tailFollow.release();
-      chatRenderer.setTyping(false);
+      runningStatus.clear();
       showToast(format(error));
       // 回填的是原始草稿(带占位符)+ 原胶囊,不是展开后的文本,
       // 否则失败一次胶囊就退化成裸路径。
@@ -1235,6 +1241,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 用户以为点错了会话。applySnapshot 完成后会用真实状态覆盖这个 typing。
     elements.emptyHint.hidden = true;
     chatRenderer.setTyping(true, t("sessions.loading"));
+    // 上一个会话的运行状态不能挂到新会话上;新会话的快照到了会按真实状态重设。
+    runningStatus.clear();
     historyDrawer?.setActive(sessionId, null);
     subagentCatalog.refresh();
 
@@ -1331,6 +1339,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     elements.composer.hidden = false;
     elements.emptyHint.hidden = true;
     chatRenderer.setTyping(true, t("sessions.loading"));
+    runningStatus.clear();
     historyDrawer?.setActive(childId, null);
     subagentCatalog.refresh();
 

@@ -12,7 +12,7 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   // 引用胶囊镜像层(画在 textarea 底下)
   "input-mirror",
   // 停靠区与 agent 预设
-  "goal-bar-slot", "todo-panel", "stats-btn", "stats-menu", "preset-btn", "preset-label", "preset-menu",
+  "goal-bar-slot", "todo-panel", "running-status", "stats-btn", "stats-menu", "preset-btn", "preset-label", "preset-menu",
   "jobs-btn", "jobs-menu",
   // 子代理目录:header chip + 树形 popover
   "subagent-catalog-btn", "subagent-catalog-menu",
@@ -73,6 +73,7 @@ export function collectElements(root) {
     permConfirm: byId.get("perm-confirm"),
     goalBarSlot: byId.get("goal-bar-slot"),
     todoPanel: byId.get("todo-panel"),
+    runningStatus: byId.get("running-status"),
     statsBtn: byId.get("stats-btn"),
     statsMenu: byId.get("stats-menu"),
     jobsBtn: byId.get("jobs-btn"),

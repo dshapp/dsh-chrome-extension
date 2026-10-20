@@ -545,6 +545,13 @@ export function updateAssistantNode(turn, node, context = {}) {
       parts[i] = part;
     }
     updateBlockPart(part, block, mentions, context);
+    // 仍在流式输出的思考块(运行中 step 的最后一个块)与运行中的工具行同一呼吸态;
+    // 后面一旦出现正文/工具调用,或 step 结算,就停下。
+    if (kind === "reasoning") {
+      const running = node.status === AssistantStatus.running && i === blocks.length - 1;
+      part.el.classList.toggle("running", running);
+      if (running) syncBreathePhase(part.el);
+    }
     ordered.push(part.el);
   }
 
@@ -643,6 +650,17 @@ function updateUnknownBlock(wrap, value) {
   wrap.append(trigger);
 }
 
+/// 呼吸动画的周期,与 tools.css 的 card-breathe(1.6s)一致。
+const BREATHE_PERIOD_MS = 1600;
+
+/// 执行中的卡片按文档时间轴对齐呼吸相位:负的 animation-delay 让动画从
+/// "时间轴此刻应处的位置"开始。这样多张执行中的卡片同起同落,工具行每次
+/// 重建子节点(replaceChildren)也不会让呼吸从头跳回最亮。
+function syncBreathePhase(el) {
+  const now = Number(document.timeline?.currentTime ?? performance.now()) || 0;
+  el.style.setProperty("--breathe-delay", `${-(now % BREATHE_PERIOD_MS)}ms`);
+}
+
 /// 思考块:对齐 Mac 的 ThinkRow —— 图标 + 思考文本的**第一行**作摘要,单行截断;
 /// 完整全文仍只在详情弹窗里(无流式预览,思考就是一张和工具行同构的普通卡行)。
 function createReasoningBlock() {
@@ -701,7 +719,13 @@ export function updateToolNode(row, node, context = {}) {
   }
 
   const icon = el("span", "tool-icon");
-  if (model.state === ToolRowState.running || model.state === "preparing") icon.classList.add("running");
+  const running = model.state === ToolRowState.running || model.state === "preparing";
+  // 运行中整行(图标 + 摘要)呼吸,见 tools.css 的 card-breathe。
+  row.classList.toggle("running", running);
+  if (running) {
+    icon.classList.add("running");
+    syncBreathePhase(row);
+  }
   if (model.state === ToolRowState.error) icon.classList.add("error");
   if (model.state === ToolRowState.stopped) icon.classList.add("stopped");
   icon.innerHTML = getToolIconSvg(getToolPresentation(node.name).iconKey);
@@ -1743,33 +1767,43 @@ function safeJson(value) {
   }
 }
 
-/// Turn process 折叠头:整行可点(button 自带 Enter/Space),chevron + 计数。
+/// Turn process 折叠头(Mac TurnProcessRow):"已完成,用时 1分14秒" + 右侧 chevron,
+/// 下面一条分割线;整行可点(button 自带 Enter/Space)。
 /// 无最终回答或停止/失败时只显示状态,不折叠过程证据。
 export function createTurnProcessNode(node, context = {}) {
   const foldable = node.foldEndSeq != null && (node.memberCount > 0 || node.inlineReasoning);
   const button = el(foldable ? "button" : "div", "turn-process");
   if (foldable) button.type = "button";
   button.dataset.turnProcess = String(node.turn);
-  const labels = [t(`process.${node.outcome ?? "completed"}`)];
-  if (node.durationMs != null) {
-    const seconds = Math.floor(Math.max(0, node.durationMs) / 1000);
-    const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    labels.push(t("process.duration", { duration }));
-  }
-  const label = labels.join(t("process.separator"));
   button.dataset.outcome = node.outcome ?? "completed";
+  const label = turnProcessLabel(node);
   const open = Boolean(context.processOpen);
   button.dataset.open = open ? "true" : "false";
+  // 标题行:文字在前,chevron 紧跟其右(Mac HStack(spacing: 4) { label; chevron.down })。
+  const heading = el("span", "turn-process-heading");
+  heading.append(el("span", "turn-process-label", label));
   if (foldable) {
     button.setAttribute("aria-expanded", String(open));
     button.title = open ? t("process.collapse") : t("process.expand");
     const chevron = el("span", "turn-process-chevron");
-    chevron.append(lucideIcon("chevron-right", { size: 14 }));
-    button.append(chevron);
+    chevron.append(lucideIcon("chevron-down", { size: 12 }));
+    heading.append(chevron);
     button.addEventListener("click", () => context.onToggleProcess?.(node.turn));
   }
-  button.append(el("span", "turn-process-label", label));
+  // 分割线(Mac Divider):把一轮的"过程"与它的最终回答分开。
+  const divider = el("span", "turn-process-divider");
+  divider.setAttribute("aria-hidden", "true");
+  button.append(heading, divider);
   return button;
+}
+
+/// Mac TurnProcessSpec.label:停止 / 失败只说结果;完成且有起止时间时带用时,
+/// 用时按 formatDuration 单元制、下限 1 秒("已完成,用时 35分53秒" / "Completed in 35m 53s")。
+function turnProcessLabel(node) {
+  const outcome = node.outcome ?? "completed";
+  if (outcome !== "completed") return t(`process.${outcome}`);
+  if (node.durationMs == null) return t("process.completed");
+  return t("process.took", { duration: formatRunDuration(Math.max(1000, node.durationMs)) });
 }
 
 // ---------- 分发 ----------

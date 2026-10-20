@@ -66,6 +66,58 @@
 
 /* ── Composer(对齐原 extension 的 codex 覆盖样式) ── */
 #composer-wrap { padding: 0.5rem 1.25rem 1rem; flex-shrink: 0; position: relative; }
+
+/* 运行状态条(Mac RunningStatusRow):"正在运行命令 · 1分5秒"。
+   悬浮在输入框区域的正上方,不是记录流里的一行 —— 记录区底部常驻留出它的高度
+   (#messages 的 padding-bottom),出现/消失都不会推动记录。
+   左右边距与记录列(#messages 的 1.5rem)对齐,文字与卡片标题从同一 x 起排。
+   底色与页面同色,上沿渐隐:滚动中的记录从它下面经过时不会与文字叠在一起。 */
+#running-status {
+  position: absolute;
+  inset-inline: 1.5rem;
+  inset-block-end: 100%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 1.375rem;
+  padding-block: 1px;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+  background: linear-gradient(to bottom, transparent, var(--bg) 6px);
+  pointer-events: none;
+}
+#running-status[hidden] { display: none; }
+#messages.trajectory-open ~ #composer-wrap #running-status { display: none; }
+/* 与卡片图标同一个 16px 方槽:状态条的转圈与上方卡片的图标对齐。
+   Mac 在这里用系统最小号的转圈(ProgressView .mini)。 */
+.running-status-spinner {
+  flex: none;
+  inline-size: 16px;
+  block-size: 16px;
+  display: grid;
+  place-items: center;
+}
+.running-status-spinner::before {
+  content: "";
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--text-faint) 35%, transparent);
+  border-block-start-color: var(--text-dim);
+  animation: running-status-spin 0.8s linear infinite;
+}
+@keyframes running-status-spin { to { rotate: 360deg; } }
+.running-status-label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.running-status-time { flex: none; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  .running-status-spinner::before { animation-duration: 2.4s; }
+}
 #composer {
   min-block-size: 6.75rem;
   padding: 0.875rem 1rem 0.625rem;
