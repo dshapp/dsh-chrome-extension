@@ -154,6 +154,75 @@ export function insertReference(draft, occurrences, span, reference) {
   return { text, caret: span.start + run.length + 1, occurrences: retainPlaced(text, merged) };
 }
 
+// 纯文本里的文件引用:`@path` / `@"带空格的路径"` / 目录的开引号写法 `@"dir/`
+// (即 formatFileMention 的输出)。不带引号的要有 `/` 或 `.`,裸 `@word`
+// 留给子智能体/会话;`@[…](dsh-session:…)` 是会话引用,不算。
+const FILE_MENTION_RE = /(^|\s)(@"[^"\n]+"|@"[^"\n]*?\/(?=\s|$)|@[^\s"]+)/gu;
+const MENTION_TRAILING_RE = /[.,;:!?)，。；：！？）、]+$/u;
+
+/// 扫出 text 里的文件引用:{ start, end, text, path, label }。
+export function scanFileMentions(text) {
+  const found = [];
+  for (const match of String(text ?? "").matchAll(FILE_MENTION_RE)) {
+    const start = match.index + match[1].length;
+    const quoted = match[2].startsWith('@"');
+    const token = quoted ? match[2] : match[2].replace(MENTION_TRAILING_RE, "");
+    const path = quoted ? token.slice(2).replace(/"$/u, "") : token.slice(1);
+    if (token.startsWith("@[") || !/[\p{L}\p{N}]/u.test(path)) continue;
+    if (!quoted && !/[/.]/u.test(path)) continue;
+    const label = path.split("/").filter(Boolean).pop() ?? path;
+    found.push({ start, end: start + token.length, text: token, path, label });
+  }
+  return found;
+}
+
+/// 一枚胶囊的完整文本若是文件引用,返回它指的路径。
+export function fileMentionPath(mention) {
+  const [match] = scanFileMentions(mention);
+  return match && match.start === 0 && match.end === mention.length ? match.path : null;
+}
+
+/// 选区按胶囊对齐:碰到胶囊就把整枚包进来(胶囊是原子的)。
+export function chipAlignedRange(occurrences, start, end) {
+  for (const occurrence of occurrences) {
+    const chipEnd = occurrence.offset + occurrence.length;
+    const touches = start === end
+      ? occurrence.offset < start && start < chipEnd
+      : occurrence.offset < end && chipEnd > start;
+    if (touches) {
+      start = Math.min(start, occurrence.offset);
+      end = Math.max(end, chipEnd);
+    }
+  }
+  return { start, end };
+}
+
+/// 把粘贴的纯文本插进 [start, end),其中的文件引用还原成胶囊。
+export function insertPasted(draft, occurrences, start, end, pasted, mentions) {
+  ({ start, end } = chipAlignedRange(occurrences, start, end));
+  let inserted = "";
+  let cursor = 0;
+  const minted = [];
+  for (const mention of mentions) {
+    inserted += pasted.slice(cursor, mention.start);
+    const run = chipRun(mention.label);
+    minted.push({
+      occurrenceId: nextOccurrenceId++,
+      label: mention.label,
+      text: mention.text,
+      invalid: false,
+      offset: start + inserted.length,
+      length: run.length
+    });
+    inserted += run;
+    cursor = mention.end;
+  }
+  inserted += pasted.slice(cursor);
+  const text = draft.slice(0, start) + inserted + draft.slice(end);
+  const shifted = shiftByEdit(occurrences, { start, end, insertedLength: inserted.length });
+  return { text, caret: start + inserted.length, occurrences: retainPlaced(text, [...shifted, ...minted]) };
+}
+
 /// 镜像层:正文逐段渲染,胶囊字符段包进带底色的 <span>。
 /// 关键:span 的内容就是草稿里那段字符(含两侧 NBSP),不加任何会改宽度的样式。
 export function renderChipMirror(mirror, draft, occurrences) {
@@ -170,6 +239,7 @@ export function renderChipMirror(mirror, draft, occurrences) {
     if (occurrence.offset > cursor) mirror.append(document.createTextNode(draft.slice(cursor, occurrence.offset)));
     const chip = document.createElement("span");
     chip.className = occurrence.invalid ? "composer-chip invalid" : "composer-chip";
+    chip.dataset.occurrenceId = String(occurrence.occurrenceId);
     chip.textContent = draft.slice(occurrence.offset, occurrence.offset + occurrence.length);
     mirror.append(chip);
     cursor = occurrence.offset + occurrence.length;

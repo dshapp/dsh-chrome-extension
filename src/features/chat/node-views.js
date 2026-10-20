@@ -251,7 +251,8 @@ export function createUserNode(node, context = {}) {
   const refs = {
     sessionRefs: node.referenceSessions ?? [],
     slashNames: node.skillNames ?? [],
-    onOpenFile: context.onOpenFile,
+    // 气泡里的路径相对会话目录,宿主按自己的进程目录解析,得先拼成绝对路径。
+    onOpenFile: context.onOpenFile ? (path) => context.onOpenFile(resolveToolPath(path, context.cwd)) : null,
     onOpenSkill: context.onOpenSkill,
     onOpenSession: context.onOpenSession
   };
@@ -935,7 +936,7 @@ function argValue(argsRaw, key) {
 }
 
 /// 相对路径按 cwd 解析(绝对路径、~ 开头原样)。对齐 Mac ToolRow 的 Link 解析。
-function resolveToolPath(path, cwd) {
+export function resolveToolPath(path, cwd) {
   const value = String(path ?? "");
   if (!value) return value;
   if (/^([a-zA-Z]:[\\/]|\/|~)/.test(value) || !cwd) return value;

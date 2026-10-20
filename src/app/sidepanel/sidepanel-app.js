@@ -2,7 +2,7 @@
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
 import { t, getLang } from "../../shared/i18n.js";
-import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer } from "../../features/chat/index.js";
+import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer, resolveToolPath } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
 } from "../../features/interactions/index.js";
@@ -17,7 +17,7 @@ import { createComposerDock, isFullAccessOption } from "./composer-dock.js";
 import { createShortcutDispatcher } from "./shortcut-bindings.js";
 import { formatPageContext } from "../../features/page-context/page-context-format.js";
 import { mountTriggerMenu } from "./trigger-menu.js";
-import { projectDraft, reconcileEdit, reconcileDraft, renderChipMirror, insertReference } from "./composer-chips.js";
+import { projectDraft, reconcileEdit, reconcileDraft, renderChipMirror, insertReference, scanFileMentions, fileMentionPath, chipAlignedRange, insertPasted } from "./composer-chips.js";
 import { collectElements } from "./sidepanel-elements.js";
 import { mountAttachmentControls } from "./composer-attachments.js";
 import { createSessionShortcutController, getSessionShortcutLabels } from "../../features/sessions/session-shortcuts.js";
@@ -1032,6 +1032,65 @@ export function createSidepanelApp(root, deps, options = {}) {
     autoResizeInput();
     updateSendState();
     setDraft(state.sessionId, elements.input.value);
+  });
+
+  // 复制/剪切:胶囊在 textarea 里只是标签字符,剪贴板要放展开后的完整引用文本,
+  // 粘贴回来(或粘到别处)才是 `@path`。
+  function copySelection(event, cutting) {
+    if (!occurrences.length) return;
+    const { selectionStart, selectionEnd } = elements.input;
+    if (selectionStart === selectionEnd) return;
+    const { start, end } = chipAlignedRange(occurrences, selectionStart, selectionEnd);
+    const inside = occurrences
+      .filter((occurrence) => occurrence.offset >= start && occurrence.offset + occurrence.length <= end)
+      .map((occurrence) => ({ ...occurrence, offset: occurrence.offset - start }));
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", projectDraft(lastDraft.slice(start, end), inside));
+    if (!cutting) return;
+    elements.input.setRangeText("", start, end, "start");
+    elements.input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  elements.input.addEventListener("copy", (event) => copySelection(event, false));
+  elements.input.addEventListener("cut", (event) => copySelection(event, true));
+  // 粘贴的纯文本里符合文件引用写法的,还原成胶囊。带文件的剪贴板归附件那条路径。
+  elements.input.addEventListener("paste", (event) => {
+    const data = event.clipboardData;
+    if (!data || [...data.types].includes("Files")) return;
+    const pasted = data.getData("text/plain");
+    const mentions = scanFileMentions(pasted);
+    if (!mentions.length) return;
+    event.preventDefault();
+    const { selectionStart, selectionEnd } = elements.input;
+    const next = insertPasted(lastDraft, occurrences, selectionStart, selectionEnd, pasted, mentions);
+    setInputText(next.text, next.occurrences);
+    elements.input.setSelectionRange(next.caret, next.caret);
+    elements.input.dispatchEvent(new Event("change", { bubbles: true }));
+    triggerMenu.handleInput();
+  });
+
+  // 点击输入框里的文件胶囊:打开它(文件用默认应用,文件夹在访达里打开)。
+  function fileChipPathAt(event) {
+    if (!occurrences.length) return null;
+    for (const node of elements.inputMirror.querySelectorAll(".composer-chip")) {
+      const hit = [...node.getClientRects()].some((rect) =>
+        event.clientX >= rect.left && event.clientX <= rect.right
+        && event.clientY >= rect.top && event.clientY <= rect.bottom);
+      if (!hit) continue;
+      const occurrence = occurrences.find((item) => String(item.occurrenceId) === node.dataset.occurrenceId);
+      return occurrence ? fileMentionPath(occurrence.text) : null;
+    }
+    return null;
+  }
+  elements.input.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || event.shiftKey || event.altKey) return;
+    const path = fileChipPathAt(event);
+    if (!path) return;
+    event.preventDefault();
+    const cwd = pendingWorkspacePath() ?? executionDirectory();
+    void deps.workspaces.openPath(resolveToolPath(path, cwd)).catch((error) => showToast(format(error)));
+  });
+  elements.input.addEventListener("mousemove", (event) => {
+    elements.input.style.cursor = fileChipPathAt(event) ? "pointer" : "";
   });
   elements.input.addEventListener("keydown", (event) => {
     // 触发菜单开启时优先吃掉导航键。
