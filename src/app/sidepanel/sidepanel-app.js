@@ -113,7 +113,9 @@ export function createSidepanelApp(root, deps, options = {}) {
         readAttachment: (attachmentId) => deps.sessions.readAttachment?.(snap?.sessionId, attachmentId) ?? null,
         // 助手正文里的本地绝对路径图片:宿主 GET /api/file?path=…(dsh 0.1.7,
         // web localPathMediaUrl),要鉴权,所以读成 Blob 而不是直接 <img src>。
-        readLocalImage: (path) => deps.connection.getBlob("/api/file", { path })
+        readLocalImage: (path) => deps.connection.getBlob("/api/file", { path }),
+        // 定时任务触发气泡的详情弹窗:按 schedule_id 查任务名称与运行规则(schedule/catalog)。
+        loadScheduleRecords: () => deps.automations?.catalog?.() ?? null
       };
     }
   });

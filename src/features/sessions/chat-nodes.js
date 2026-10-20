@@ -149,6 +149,27 @@ export function turnTriggerDetails(source) {
   }
 }
 
+/// 定时任务触发消息里的 reminders(dsh-schedule 的 [SCHEDULE REMINDER BATCH] 文本,
+/// `reminders_json: [...]` 一行是 JSON 数组)。解析不出任何带 reminder_prompt 的条目时
+/// 返回 null,调用方退回普通通知行。
+export function scheduleReminders(source, content) {
+  if (source?.kind !== "schedule") return null;
+  const text = (content ?? []).filter((block) => block?.type === "text").map((block) => block.text ?? "").join("\n");
+  const match = /^reminders_json:\s*(\[.*\])\s*$/m.exec(text);
+  if (!match) return null;
+  let items;
+  try { items = JSON.parse(match[1]); } catch { return null; }
+  if (!Array.isArray(items)) return null;
+  const reminders = items
+    .filter((item) => typeof item?.reminder_prompt === "string" && item.reminder_prompt.trim())
+    .map((item) => ({
+      scheduleId: typeof item.schedule_id === "string" ? item.schedule_id : "",
+      occurrenceAt: typeof item.occurrence_at === "string" ? item.occurrence_at : "",
+      prompt: item.reminder_prompt
+    }));
+  return reminders.length ? reminders : null;
+}
+
 /// assistant step。blocks 是稀疏槽位数组(索引由 wire 的 chunk.index 指定),
 /// 未开始的槽位为 null——不能压缩,否则后续 delta 的 index 会错位。
 export function assistantNode({ turn, step, startSeq, time }) {

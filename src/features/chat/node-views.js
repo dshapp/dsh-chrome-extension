@@ -5,7 +5,8 @@
 // renderer 靠 nodeId 决定复用还是重建。
 import { t } from "../../shared/i18n.js";
 import { mdToHtml, escapeHtml, readFence, isClosingFence } from "../../shared/md-to-html.js";
-import { NodeKind, AssistantStatus, ToolRowState, turnTriggerDetails } from "../sessions/chat-nodes.js";
+import { NodeKind, AssistantStatus, ToolRowState, turnTriggerDetails, scheduleReminders } from "../sessions/chat-nodes.js";
+import { scheduleSummary, formatInstant } from "../automations/automation-format.js";
 import { toolRowModel, resultText, hasResultText, ToolVariant } from "./tool-row-model.js";
 import { resolveMention, deliverablesBasename } from "../sessions/turn-deliverables.js";
 import { getToolIconSvg, getToolPresentation } from "./tool-presentation.js";
@@ -323,49 +324,108 @@ function contextImageStrip(images, context) {
 }
 
 /// turn-trigger:唤醒本轮的非人类消息(定时任务、后台任务结束、子代理回报、目标续跑、webhook…)。
-/// 对齐 web chat/TurnTriggerNodeView.tsx 与 Mac TurnTriggerRow:独立的一行通知,
-/// 标题/图标按 source.kind 选(turnTriggerDetails),默认收起;展开后行内显示说明与原通知正文。
-/// 正文(可能几百 KB)与图片只在首次展开时构建,收起的通知不挂正文。
+/// 能解析出 reminders 的定时任务直接复用用户气泡(见 createScheduleTriggerNode);其余是
+/// 独立的一行通知,标题/图标按 source.kind 选(turnTriggerDetails)。点击打开详情弹窗看说明与
+/// 原通知正文 —— 不在原地展开,行高不变;正文(可能几百 KB)与图片只在弹窗里惰性构建。
 export function createTurnTriggerNode(node, context = {}) {
   const reply = questionReplyContent(node.source, node.content);
   if (reply) return createQuestionReplyNode(node, reply);
+  const reminders = scheduleReminders(node.source, node.content);
+  if (reminders) return createScheduleTriggerNode(node, reminders, context);
   const details = turnTriggerDetails(node.source);
   const wrap = el("section", "turn-trigger");
   wrap.dataset.turnTrigger = "";
   const header = el("button", "turn-trigger-header");
   header.type = "button";
-  header.setAttribute("aria-expanded", "false");
+  header.setAttribute("aria-haspopup", "dialog");
   const icon = el("span", "turn-trigger-icon");
   icon.append(lucideIcon(details.icon, { size: 14 }));
-  const chevron = el("span", "turn-trigger-chevron");
-  chevron.append(lucideIcon("chevron-down", { size: 12 }));
   header.append(icon, el("span", "turn-trigger-title", t(details.title)),
-    el("span", "turn-trigger-time", fmtTime(node.time)), chevron);
+    el("span", "turn-trigger-time", fmtTime(node.time)));
   wrap.append(header);
 
-  let body = null;
-  let cancel = null;
   header.addEventListener("click", () => {
-    const open = header.getAttribute("aria-expanded") !== "true";
-    header.setAttribute("aria-expanded", String(open));
-    wrap.dataset.open = open ? "true" : "false";
-    if (!body) {
-      body = el("div", "turn-trigger-body");
-      body.append(el("p", "turn-trigger-explanation", t("message.trigger.explanation")));
-      const { images } = splitUserContent(node.content);
-      if (images.length) body.append(contextImageStrip(images, context));
-      const text = contextText(node.content);
-      if (text) {
-        const pre = el("pre", "context-body");
-        cancel = appendChunked(pre, chunkText(text));
-        body.append(pre);
+    const text = contextText(node.content);
+    let cancel = null;
+    const dialog = openCardDetail({
+      title: t(details.title),
+      copyText: text || null,
+      build: () => {
+        const body = el("div", "turn-trigger-detail");
+        body.append(el("p", "turn-trigger-explanation", t("message.trigger.explanation")));
+        const { images } = splitUserContent(node.content);
+        if (images.length) body.append(contextImageStrip(images, context));
+        if (text) {
+          const pre = el("pre", "context-body");
+          cancel = appendChunked(pre, chunkText(text));
+          body.append(pre);
+        }
+        return body;
       }
-      wrap.append(body);
-    }
-    body.hidden = !open;
+    });
+    dialog?.addEventListener("close", () => { cancel?.(); cancel = null; }, { once: true });
   });
-  wrap.dispose = () => { cancel?.(); cancel = null; };
   return wrap;
+}
+
+/// 定时任务触发:和用户自己发的消息同一个气泡(createUserNode),气泡文本是各条
+/// reminder_prompt;气泡上方一行小号来源标签,点开弹窗看任务名称/计划时间/运行规则/内容/ID。
+function createScheduleTriggerNode(node, reminders, context) {
+  const text = reminders.map((reminder) => reminder.prompt).join("\n\n");
+  const turn = createUserNode({ ...node, content: [{ type: "text", text }] }, context);
+  turn.dataset.turnTrigger = "";
+  turn.dataset.scheduleTrigger = "";
+  const label = el("button", "turn-trigger-source");
+  label.type = "button";
+  label.setAttribute("aria-haspopup", "dialog");
+  label.append(lucideIcon("clock", { size: 12 }), el("span", null, t("message.trigger.schedule")));
+  label.addEventListener("click", () => openScheduleTriggerDetail(reminders, text, context));
+  turn.prepend(label);
+  return turn;
+}
+
+function openScheduleTriggerDetail(reminders, text, context) {
+  const rows = [];
+  openCardDetail({
+    title: t("message.trigger.schedule"),
+    copyText: text,
+    build: () => {
+      const body = el("div", "schedule-detail");
+      for (const reminder of reminders) {
+        const list = el("dl", "schedule-detail-rows");
+        const row = (key, value, className) => {
+          const item = el("div", "schedule-detail-row");
+          const dd = el("dd", className, value);
+          item.append(el("dt", null, t(key)), dd);
+          list.append(item);
+          return { item, dd };
+        };
+        const name = row("message.trigger.scheduleName", reminder.scheduleId || "—");
+        if (reminder.occurrenceAt) row("automationsScheduledAt", formatInstant(reminder.occurrenceAt));
+        const rule = row("message.trigger.scheduleRule", "");
+        rule.item.hidden = true;
+        row("message.trigger.schedulePrompt", reminder.prompt, "schedule-detail-prompt");
+        if (reminder.scheduleId) row("automationsTaskId", reminder.scheduleId, "schedule-detail-id");
+        rows.push({ reminder, name, rule });
+        body.append(list);
+      }
+      return body;
+    }
+  });
+  // 名称与运行规则按 schedule_id 去任务目录查;查不到就保持 ID、不显示规则。
+  const ids = rows.map((entry) => entry.reminder.scheduleId).filter(Boolean);
+  if (!ids.length || typeof context.loadScheduleRecords !== "function") return;
+  // catalog 在未连接时会同步抛错,包进 Promise 一并吞掉。
+  void new Promise((resolve) => resolve(context.loadScheduleRecords())).then((records) => {
+    if (!Array.isArray(records)) return;
+    for (const { reminder, name, rule } of rows) {
+      const record = records.find((entry) => entry?.id === reminder.scheduleId);
+      if (!record || !name.dd.isConnected) continue;
+      if (record.title) name.dd.textContent = record.title;
+      const summary = scheduleSummary(record);
+      if (summary) { rule.dd.textContent = summary; rule.item.hidden = false; }
+    }
+  }).catch(() => {});
 }
 
 /// 限时提问的迟到回答(dsh 0.2 source=user-question-reply,web QuestionReplyView / Mac

@@ -169,39 +169,36 @@ function renderTrigger(content, reads = []) {
   )
 }
 
-test('通知行默认收起:只有标题行,正文与图片在首次展开时才构建', async () => {
+const detailBody = () => document.querySelector('dialog.card-detail .card-detail-body')
+
+test('通知行只有标题行:点击打开详情弹窗,正文与图片在弹窗里才构建,行内不展开', async () => {
   const reads = []
   const row = renderTrigger([{ type: 'text', text: 'job 42 finished' }, imageBlock('att-1')], reads)
   const header = row.querySelector('.turn-trigger-header')
   assert.equal(row.querySelector('.turn-trigger-title').textContent, 'Background task updated')
-  assert.equal(header.getAttribute('aria-expanded'), 'false')
-  assert.equal(row.querySelector('.turn-trigger-body'), null, '收起时不挂正文')
-  assert.deepEqual(reads, [], '收起时不读附件')
+  assert.equal(header.getAttribute('aria-haspopup'), 'dialog')
+  assert.equal(row.querySelector('.context-body'), null, '行内不挂正文')
+  assert.deepEqual(reads, [], '未打开时不读附件')
 
   header.click()
   await flush()
-  assert.equal(header.getAttribute('aria-expanded'), 'true')
-  const body = row.querySelector('.turn-trigger-body')
-  assert.equal(body.hidden, false)
-  assert.equal(row.querySelector('.turn-trigger-explanation').textContent, 'This notification triggered this response.')
-  assert.equal(row.querySelector('.context-body').textContent, 'job 42 finished')
-  const images = row.querySelectorAll('img')
+  const body = detailBody()
+  assert.equal(row.querySelector('.context-body'), null, '点击后行内仍不展开')
+  assert.equal(body.querySelector('.turn-trigger-explanation').textContent, 'This notification triggered this response.')
+  assert.equal(body.querySelector('.context-body').textContent, 'job 42 finished')
+  const images = body.querySelectorAll('img')
   assert.equal(images.length, 1)
   assert.equal(images[0].src, 'data:image/png;base64,QUJD')
   assert.deepEqual(reads, ['att-1'])
-
-  header.click()
-  assert.equal(body.hidden, true, '再次点击收起')
-  header.click()
-  assert.equal(row.querySelectorAll('.turn-trigger-body').length, 1, '重复展开复用同一份正文')
 })
 
 test('纯图片通知:正文不出现 [image] 占位符,多图走缩略图网格', async () => {
   const row = renderTrigger([imageBlock('a'), imageBlock('b')])
   row.querySelector('.turn-trigger-header').click()
   await flush()
-  assert.equal(row.querySelector('.context-body'), null)
-  assert.equal(row.querySelectorAll('img').length, 2)
-  assert.ok(row.querySelector('.context-imgs').classList.contains('multi'))
-  assert.ok(!row.textContent.includes('[image]'))
+  const body = detailBody()
+  assert.equal(body.querySelector('.context-body'), null)
+  assert.equal(body.querySelectorAll('img').length, 2)
+  assert.ok(body.querySelector('.context-imgs').classList.contains('multi'))
+  assert.ok(!body.textContent.includes('[image]'))
 })
