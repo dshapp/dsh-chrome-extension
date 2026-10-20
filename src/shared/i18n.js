@@ -61,7 +61,7 @@ const MESSAGES = Object.freeze({
     "process.failed": "Failed",
     // 轮次折叠头(Mac turnProcessTook)。
     "process.took": "Completed in {duration}",
-    "srv.dshChecking": "Checking target…",
+    "srv.dshReleaseNotes": "View release notes",
     "management.plugins": "Plugins",
     "management.automations": "Automations",
     "management.back": "Back to conversation",
@@ -71,12 +71,6 @@ const MESSAGES = Object.freeze({
     "pset.viewYaml": "View YAML",
     "pset.yamlTitle": "Preset YAML",
     "pset.yamlLoadFailed": "Could not read preset",
-    "srv.updateChannelLabel": "Update channel",
-    "srv.updateExactLabel": "Exact version",
-    "srv.updateExactPlaceholder": "e.g. 0.2.1-alpha.2",
-    "srv.updateTargetUnavailable": "Target version is unavailable",
-    "srv.updateProtocolUnsupported": "Update the Chrome daemon to use pre-release channels",
-    "srv.updateDowngrade": "The selected version is older than the installed version",
     "send": "Send",
     "stop": "Stop",
     "queue.send": "Queued",
@@ -945,7 +939,7 @@ const MESSAGES = Object.freeze({
     "srv.dshRestartLog": "Started, but the port did not come up. See {log}",
     "srv.dshUpdate": "Update",
     "srv.dshUpdating": "Updating…",
-    "srv.dshUpdated": "Updated. Restart to apply it.",
+    "srv.dshUpdated": "Updated. Restart the server to apply the new version.",
     "srv.dshNotPnpm": "dsh was not installed with pnpm. Run: pnpm add -g @deepseek-ai/dsh",
 
     // ---- Git entry in the chat header (mirrors Mac WorkspaceGitAction) ----
@@ -1258,7 +1252,7 @@ const MESSAGES = Object.freeze({
     "process.failed": "处理失败",
     // 轮次折叠头(Mac turnProcessTook)。
     "process.took": "已完成，用时 {duration}",
-    "srv.dshChecking": "检查目标…",
+    "srv.dshReleaseNotes": "查看发布日志",
     "management.plugins": "插件",
     "management.automations": "自动化任务",
     "management.back": "返回会话",
@@ -1268,12 +1262,6 @@ const MESSAGES = Object.freeze({
     "pset.viewYaml": "查看 YAML",
     "pset.yamlTitle": "预设 YAML",
     "pset.yamlLoadFailed": "无法读取预设",
-    "srv.updateChannelLabel": "更新渠道",
-    "srv.updateExactLabel": "指定版本",
-    "srv.updateExactPlaceholder": "例如 0.2.1-alpha.2",
-    "srv.updateTargetUnavailable": "目标版本不可用",
-    "srv.updateProtocolUnsupported": "更新 Chrome daemon 后才能使用预发布渠道",
-    "srv.updateDowngrade": "所选版本低于当前安装版本",
     "send": "发送",
     "stop": "停止",
     "queue.send": "排队中",
@@ -2133,7 +2121,7 @@ const MESSAGES = Object.freeze({
     "srv.dshRestartLog": "已拉起,但端口没起来。见 {log}",
     "srv.dshUpdate": "更新",
     "srv.dshUpdating": "正在更新…",
-    "srv.dshUpdated": "已更新,重启后生效。",
+    "srv.dshUpdated": "已更新。重启服务以应用新版本。",
     "srv.dshNotPnpm": "dsh 不是用 pnpm 装的。请执行:pnpm add -g @deepseek-ai/dsh",
 
     // ---- 聊天区右上角的 Git 入口(对齐 Mac WorkspaceGitAction) ----
@@ -2158,7 +2146,7 @@ const MESSAGES = Object.freeze({
     // ---- dsh 运行时各行,文案对齐 Mac 服务端 pane ----
     "srv.dshRestartDescription": "重新启动由 pnpm 管理的那一份 dsh。",
     "srv.dshRestartWarning": "这会断开当前连接,稍后会自行恢复。",
-    "srv.dshUpdateAvailable": "有更新的 dsh 版本",
+    "srv.dshUpdateAvailable": "有新版本的 dsh 可用",
     // 服务端 pane,版式对齐 macOS 的设置面板。
     // srv.state(「连接」)别处还在用;本页这一行按稿叫「状态」。
     "srv.stateLabel": "状态",

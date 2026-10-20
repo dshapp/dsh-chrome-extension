@@ -62,7 +62,7 @@
 - [真实 schema 设置回归](<../tests/settings-alpha2.spec.mjs>)
 - [插件兼容与安装恢复](<../tests/plugin-manager-alpha.spec.mjs>)
 - [自动化协议、草稿与投递历史](<../tests/automations.spec.mjs>)
-- [受限更新渠道](<../tests/host-update-channels.spec.mjs>)
+- [dsh 更新检查(对齐 Mac,无渠道选择)](<../tests/host-update-channels.spec.mjs>)
 
 ## 重跑浏览器写交互
 

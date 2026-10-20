@@ -16,7 +16,6 @@
 // 不是网络主机名,当地址读会错得很隐蔽)。
 //
 // 所以这里显示的就是本扩展自己要连的那个地址,不是宿主自报的事实。
-import { validateUpdateTarget } from "../../../features/host-proxy/version.js";
 import { t } from "../../../shared/i18n.js";
 import { section, row, button, statusLine, escapeHtml } from "./settings-ui.js";
 import { RPC } from "../../../platform/dsh/rpc-methods.js";
@@ -62,10 +61,6 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   let dsh = null;
   let dshUnsupported = false;
   let dshBusy = null;
-  let dshChannel = "latest";
-  let dshExact = "";
-  let dshTargetLoading = false;
-  function selectedTarget() { return dshChannel === "exact" ? dshExact : dshChannel; }
   // 更新与重启的结果就地显示,而不是只弹一次 toast:失败原因要留在按下的
   // 那个控件旁边(对齐 Mac 的 restartError / updateError / updateDone)。
   let dshRestartError = null;
@@ -110,39 +105,47 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
 
   /// 更新横幅。对齐 Mac 的 showsUpdateRow:发现新版前不出现,之后一直保留到
   /// 安装完成或失败,让进度与结果留在动作旁边,而不是弹一个 toast 就消失。
+  ///
+  /// 没有"更新渠道"选择:目标版本由 serverOps.version 按 Mac 的规则自动选出
+  /// (next / alpha 中较高者),用户只需决定"更"还是"不更"。
   function showsUpdateRow() {
-    return Boolean(dsh?.updatable) || (dsh?.updateSupported && dshChannel !== "latest" && dsh?.targetVersion)
-      || dshBusy === "update" || dshUpdateDone || dshUpdateError;
+    return Boolean(dsh?.updatable) || dshBusy === "update" || dshUpdateDone || Boolean(dshUpdateError);
   }
 
   function updateRow() {
     if (!showsUpdateRow()) return "";
+    // 标题即发布日志的链接(对齐 Mac:有发布页时「有新版本」本身可点)。
+    const title = escapeHtml(t("srv.dshUpdateAvailable"));
     const label = dshUpdateDone
       ? '<span class="set-ok">' + escapeHtml(t("srv.dshUpdated")) + '</span>'
-      : '<span class="set-warn">' + escapeHtml(t("srv.dshUpdateAvailable")) + '</span>';
-    // 版本对进 hint 位(标签下方的等宽小字),与稿一致。
-    // 早先它是嵌在 label 里的一个 .set-row-hint <div> —— 一个块级提示套在
-    // 行标签内部,既错位也让 ".set-row-label .set-row-hint" 这种选择器意外命中。
-    const versions = dsh?.current && dsh?.targetVersion
+      : dsh?.releaseUrl
+        ? '<a class="set-link srv-release-notes" href="' + escapeHtml(dsh.releaseUrl) + '" target="_blank"'
+          + ' rel="noreferrer noopener" title="' + escapeHtml(t("srv.dshReleaseNotes")) + '">' + title + '</a>'
+        : '<span class="set-warn">' + title + '</span>';
+    // 版本对进 hint 位(标签下方的等宽小字),与稿一致。装完后不再显示:
+    // 那时这一行只剩"重启以生效"一件事(Mac 同样只留成功文案)。
+    const versions = !dshUpdateDone && dsh?.current && dsh?.targetVersion
       ? '<span class="set-mono">' + escapeHtml(dsh.current) + ' → ' + escapeHtml(dsh.targetVersion) + '</span>'
       : "";
-    const failure = dshUpdateError
+    const failure = dshUpdateError && !dshUpdateDone
       ? '<div class="set-danger">' + escapeHtml(dshUpdateError) + '</div>'
       : "";
-    return section({
-      body: row({
-        label,
-        hint: versions + failure + (dsh?.downgrade ? '<div class="set-warn">' + escapeHtml(t("srv.updateDowngrade")) + "</div>" : ""),
-        control: button({
-          id: "srv-dsh-update",
-          label: dshBusy === "update" ? t("srv.dshUpdating") : t("srv.dshUpdate"),
-          kind: "primary",
-          // 完成后禁用:同一个版本没有再装一次的意义(Mac 同样在 updateDone 后禁用)。
-          disabled: Boolean(dshBusy) || dshTargetLoading || dshUpdateDone || !dsh?.targetVersion
-            || (dshChannel !== "latest" && !dsh?.updateSupported)
-        })
+    // 装完之后按钮换成重启 —— 新版本要重启才生效,而重启正是用户下一步要做的事
+    // (对齐 Mac:updateDone 后更新行的动作变成与下方相同的重启)。
+    const control = dshUpdateDone
+      ? button({
+        id: "srv-dsh-update-restart",
+        label: dshBusy === "restart" ? t("srv.dshRestarting") : t("srv.restartTitle"),
+        kind: "danger",
+        disabled: Boolean(dshBusy)
       })
-    });
+      : button({
+        id: "srv-dsh-update",
+        label: dshBusy === "update" ? t("srv.dshUpdating") : t("srv.dshUpdate"),
+        kind: "primary",
+        disabled: Boolean(dshBusy) || !dsh?.updateTarget
+      });
+    return section({ body: row({ label, hint: versions + failure, control }) });
   }
 
   /// CDP 桥那一行的右侧内容。
@@ -276,39 +279,15 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
     });
   }
 
-  function updateTargetSection() {
-    if (!dsh || dshUnsupported) return "";
-    const disabled = Boolean(dshBusy) || !dsh.updateSupported;
-    const options = ["latest", "next", "alpha", "exact"].map((value) => {
-      const version = dsh.distTags?.[value];
-      const label = value === "exact" ? t("srv.updateExactLabel") : value + (version ? " · " + version : "");
-      return '<option value="' + value + '"' + (dshChannel === value ? " selected" : "") + '>' + escapeHtml(label) + '</option>';
-    }).join("");
-    const control = '<select id="srv-dsh-channel" aria-label="' + escapeHtml(t("srv.updateChannelLabel")) + '"' + (disabled ? " disabled" : "") + '>' + options + '</select>';
-    const exact = dshChannel === "exact" ? row({ label: escapeHtml(t("srv.updateExactLabel")),
-      control: '<input id="srv-dsh-exact" aria-label="' + escapeHtml(t("srv.updateExactLabel")) + '" value="' + escapeHtml(dshExact) + '" placeholder="' + escapeHtml(t("srv.updateExactPlaceholder")) + '"' + (disabled ? " disabled" : "") + '>' }) : "";
-    const hint = !dsh.updateSupported ? t("srv.updateProtocolUnsupported")
-      : dshTargetLoading ? t("srv.dshChecking") : dsh.checkFailed ? t("srv.updateTargetUnavailable") : "";
-    return section({ body: row({ label: escapeHtml(t("srv.updateChannelLabel")), hint: escapeHtml(hint), control }) + exact });
-  }
   function render() {
-    host.innerHTML = updateTargetSection() + updateRow() + infoSection() + launcherRow.render() + restartSection();
+    host.innerHTML = updateRow() + infoSection() + launcherRow.render() + restartSection();
     bind();
   }
 
   function bind() {
-    host.querySelector("#srv-dsh-channel")?.addEventListener("change", (event) => {
-      if (dshBusy || !dsh?.updateSupported) return;
-      dshChannel = event.target.value;
-      changeTarget();
-    });
-    host.querySelector("#srv-dsh-exact")?.addEventListener("change", (event) => {
-      if (dshBusy) return;
-      dshExact = event.target.value;
-      changeTarget();
-    });
     host.querySelector("#srv-dsh-restart")?.addEventListener("click", () => runDshAction("restart"));
     host.querySelector("#srv-dsh-update")?.addEventListener("click", () => runDshAction("update"));
+    host.querySelector("#srv-dsh-update-restart")?.addEventListener("click", () => runDshAction("restart"));
     launcherRow.bind(host);
     host.querySelector("#srv-reveal-home")?.addEventListener("click", () => openPath(hostInfo?.home));
     host.querySelector("#srv-view-log")?.addEventListener("click", () => openPath(logPath()));
@@ -335,9 +314,8 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   /// 更新成功后**不自动重启**:那会打断用户正在进行的会话,所以只提示"需重启
   /// 生效",由用户自己按下重启。
   async function runDshAction(kind) {
-    if (dshBusy || (kind === "update" && (dshTargetLoading || !dsh?.targetVersion || dshUpdateDone))) return;
-    const target = selectedTarget();
-    if (kind === "update" && dshChannel !== "latest" && !dsh?.updateSupported) return;
+    if (dshBusy || (kind === "update" && (!dsh?.updateTarget || dshUpdateDone))) return;
+    const target = dsh?.updateTarget;
     dshBusy = kind;
     if (kind === "restart") dshRestartError = null;
     else { dshUpdateError = null; dshUpdateDone = false; }
@@ -347,16 +325,23 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
         const result = await serverOps.restart();
         // started:false 表示进程起了但端口没就绪 —— 此时日志路径比一句失败有用,
         // 所以它进的是就地显示的错误位,不是一闪而过的 toast。
-        if (result?.started) showToast?.(t("srv.dshRestarted"));
-        else dshRestartError = t("srv.dshRestartLog", { log: result?.log ?? "" });
+        if (result?.started) {
+          showToast?.(t("srv.dshRestarted"));
+          // 重启落地后重新查版本(对齐 Mac 的 .task(id: currentDshVersion)):
+          // 装完再重启的话,这里报的才是真正在跑的那个版本,更新行也随之复位。
+          dshUpdateDone = false;
+          dshUpdateError = null;
+          await loadDsh();
+        } else {
+          dshRestartError = t("srv.dshRestartLog", { log: result?.log ?? "" });
+        }
       } else {
+        // 装的是检查时选定的那个确切版本,不是渠道名 —— 免得检查与安装之间
+        // dist-tag 前进,装上一个用户没看过的版本。
         await serverOps.update(target);
         dshUpdateDone = true;
         showToast?.(t("srv.dshUpdated"));
       }
-      // 重启落地后重新查版本(对齐 Mac 的 onChange(phase) → running):
-      // 装完再重启的话,这里报的才是真正在跑的那个版本。
-      await loadDsh();
     } catch (error) {
       // dsh 不是 pnpm 装的:给出可执行的下一步,而不是一句失败。
       const message = serverOps.isNotPnpmInstall?.(error)
@@ -376,33 +361,22 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
     }
   }
 
-  /// 查一次 dsh 版本。查不到远端版本不算失败(离线是常态)。
-  function changeTarget() {
-    dshUpdateDone = false;
-    dshUpdateError = null;
-    dsh = { ...dsh, targetVersion: null, updatable: false, checkFailed: true };
-    try { validateUpdateTarget(selectedTarget()); }
-    catch (error) { dshLoadGeneration++; dshTargetLoading = false; dshUpdateError = error.message; render(); return; }
-    loadDsh();
-  }
+  /// 查一次 dsh 版本。查不到远端版本不算失败(离线是常态):不显示更新行即可。
   async function loadDsh() {
     if (!serverOps) return;
     const generation = ++dshLoadGeneration;
-    const target = selectedTarget();
-    dshTargetLoading = true;
-    render();
     try {
-      const next = await serverOps.version(target);
+      const next = await serverOps.version();
       if (generation !== dshLoadGeneration) return;
       dsh = next;
       dshUnsupported = false;
-    } catch (error) {
+    } catch {
       if (generation !== dshLoadGeneration) return;
-      if (dsh) { dsh = { ...dsh, targetVersion: null, updatable: false, checkFailed: true }; dshUpdateError = error?.message || String(error); }
-      else dshUnsupported = true;
       // 老 daemon / 没跑 / 不是 pnpm 装的 → 相关行不显示,不打扰用户。
+      // 已查到过的话只丢掉更新目标:留着它就是在用一次失败的检查宣传更新。
+      if (dsh) dsh = { ...dsh, targetVersion: null, updateTarget: null, updatable: false, releaseUrl: null, checkFailed: true };
+      else dshUnsupported = true;
     }
-    dshTargetLoading = false;
     render();
   }
 
