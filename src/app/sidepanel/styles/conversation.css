@@ -1066,3 +1066,105 @@ button.chip-head:hover, .chip-label-button:hover { color: var(--text); }
 }
 #history-load-older button:hover:not(:disabled) { background: var(--bg-raised); color: var(--text); }
 #history-load-older button:disabled { cursor: default; opacity: 0.7; }
+
+/* ── 图片放大查看(image-viewer.js):用户发送的附件图与 agent 回复里的图片 ── */
+.msg-imgs img,
+.context-imgs img,
+img.msg-agent-img,
+.md-body img,
+img.tool-result-img { cursor: zoom-in; }
+.msg-imgs img:is(.img-loading, .img-failed),
+.context-imgs img:is(.img-loading, .img-failed),
+img.msg-agent-img:is(.img-loading, .img-failed) { cursor: default; }
+/* 链接里的图片点击跟随链接,不放大。 */
+.md-body a[href] img { cursor: pointer; }
+
+dialog.image-viewer {
+  position: fixed;
+  inset: 0;
+  inline-size: 100vw;
+  block-size: 100dvh;
+  max-inline-size: none;
+  max-block-size: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.92);
+  color: #fff;
+  overflow: hidden;
+  outline: none;
+}
+dialog.image-viewer::backdrop { background: transparent; }
+dialog.image-viewer[open] { display: block; }
+.image-viewer-stage {
+  position: absolute;
+  inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 3rem 1rem 2.5rem;
+  overflow: hidden;
+  touch-action: none;
+  cursor: zoom-out;
+}
+.image-viewer-img {
+  display: block;
+  max-inline-size: 100%;
+  max-block-size: 100%;
+  object-fit: contain;
+  transform-origin: center center;
+  border-radius: 4px;
+  box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.5);
+  user-select: none;
+  -webkit-user-drag: none;
+  cursor: zoom-in;
+  will-change: transform;
+}
+dialog.image-viewer.zoomed .image-viewer-img { cursor: grab; }
+dialog.image-viewer.panning .image-viewer-img { cursor: grabbing; }
+.image-viewer-bar {
+  position: absolute;
+  inset-block-start: 0.5rem; inset-inline-end: 0.5rem;
+  display: flex; align-items: center; gap: 0.125rem;
+  padding: 0.125rem;
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.5);
+}
+.image-viewer-counter {
+  padding-inline: 0.5rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.8);
+}
+.image-viewer-counter[hidden], .image-viewer-caption[hidden], .image-viewer-nav[hidden] { display: none; }
+.image-viewer-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-inline-size: 1.75rem; block-size: 1.75rem;
+  padding: 0 0.375rem;
+  border: 0; border-radius: 0.375rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font: inherit; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.image-viewer-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.image-viewer-btn:disabled { opacity: 0.35; cursor: default; }
+.image-viewer-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.6); outline-offset: -2px; }
+.image-viewer-zoom-label { min-inline-size: 3rem; }
+.image-viewer-nav {
+  position: absolute;
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+  inline-size: 2.25rem; block-size: 2.25rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.image-viewer-prev { inset-inline-start: 0.5rem; }
+.image-viewer-next { inset-inline-end: 0.5rem; }
+.image-viewer-caption {
+  position: absolute;
+  inset-inline: 1rem; inset-block-end: 0.625rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.75);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  pointer-events: none;
+}

@@ -2,7 +2,7 @@
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
 import { t, getLang } from "../../shared/i18n.js";
-import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel } from "../../features/chat/index.js";
+import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
 } from "../../features/interactions/index.js";
@@ -76,6 +76,10 @@ export function createSidepanelApp(root, deps, options = {}) {
 
   // 运行状态条:悬浮在输入框区域顶部(Mac RunningStatusRow),不进记录流。
   const runningStatus = mountRunningStatus(elements.runningStatus);
+
+  // 记录里的图片(用户发送的附件 / agent 回复的图片)点击放大。挂在 document 上委托:
+  // 卡片详情弹窗(在 body 下,不在消息列表里)里的工具结果图同样可以放大。
+  installImageViewer(document);
 
   const chatRenderer = createChatRenderer(elements.msgList, {
     onFork: handleFork,
