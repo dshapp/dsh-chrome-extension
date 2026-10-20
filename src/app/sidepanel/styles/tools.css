@@ -182,6 +182,12 @@
   font-size: 0.8125rem;
   color: var(--text-dim);
 }
+/* 思考中:摘要还在写,不加省略号,右侧 48px 渐隐(web summary[data-streaming])。
+   标题本身 flex 占满剩余宽度,短文字不受渐隐影响。 */
+.thinking-bubble.running .thinking-title {
+  text-overflow: clip;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent);
+}
 /* 正文只在弹窗里出现,不再自带滚动条(弹窗有统一的那一条) */
 .thinking-body {
   /* 分片渲染要求它是 <pre>(见 openChunkedTextDetail);<pre> 默认等宽字体并带

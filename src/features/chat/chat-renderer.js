@@ -115,8 +115,10 @@ export function createChatRenderer(container, { onFork, getContext } = {}) {
       if (previous) {
         element = previous.element;
         // 引用未变说明这一行的数据没动过,跳过更新(store 每次 rebuild 会重建
-        // 变化节点的对象,未变的节点保持同一引用)。
-        if ((previous.node !== node || tailFlipped) && !updateNodeElement(element, node, nodeCtx)) {
+        // 变化节点的对象,未变的节点保持同一引用)。例外:流式中的 assistant step
+        // 由 live 旁路就地追加 blocks,引用不变,必须每帧对账,否则正文/思考停在首帧。
+        const streaming = node.kind === NodeKind.assistant && isNodeRunning(node);
+        if ((previous.node !== node || tailFlipped || streaming) && !updateNodeElement(element, node, nodeCtx)) {
           const replacement = createNodeElement(node, nodeCtx);
           if (replacement) {
             // 被替换的正好是 cursor 时先把 cursor 让开:replaceWith 会让旧元素

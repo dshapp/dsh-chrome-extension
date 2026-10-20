@@ -544,14 +544,9 @@ export function updateAssistantNode(turn, node, context = {}) {
       part = { kind, el: createBlockPart(kind) };
       parts[i] = part;
     }
-    updateBlockPart(part, block, mentions, context);
-    // 仍在流式输出的思考块(运行中 step 的最后一个块)与运行中的工具行同一呼吸态;
-    // 后面一旦出现正文/工具调用,或 step 结算,就停下。
-    if (kind === "reasoning") {
-      const running = node.status === AssistantStatus.running && i === blocks.length - 1;
-      part.el.classList.toggle("running", running);
-      if (running) syncBreathePhase(part.el);
-    }
+    // 思考中 = 运行中 step 的最后一个块;后面一旦出现正文/工具调用,或 step 结算,就停下。
+    if (kind === "reasoning") updateReasoningBlock(part.el, block.text, node.status === AssistantStatus.running && i === blocks.length - 1);
+    else updateBlockPart(part, block, mentions, context);
     ordered.push(part.el);
   }
 
@@ -617,9 +612,7 @@ function assistantImage(attachment, context = {}) {
 }
 
 function updateBlockPart(part, block, mentions, context = {}) {
-  if (part.kind === "reasoning") {
-    updateReasoningBlock(part.el, block.text);
-  } else if (part.kind === "text") {
+  if (part.kind === "text") {
     updateAgentText(part.el, block.text, mentions,
       typeof context.readLocalImage === "function" ? context.readLocalImage : null);
   } else if (part.kind === "other") {
@@ -678,20 +671,39 @@ function createReasoningBlock() {
   return wrap;
 }
 
-function updateReasoningBlock(wrap, text) {
+/// running:思考中的块与运行中的工具行同一呼吸态,摘要随段落前进、尾部渐隐不加省略号。
+function updateReasoningBlock(wrap, text, running) {
   wrap.__text = text;
-  const summary = thinkingSummary(text);
+  wrap.classList.toggle("running", running);
+  if (running) syncBreathePhase(wrap);
+  const summary = thinkingSummary(text, running);
   wrap.querySelector(".thinking-title").textContent = summary;
   wrap.querySelector(".thinking-header").setAttribute("aria-label", [t("thinking"), summary].filter(Boolean).join(" "));
 }
 
-/// Mac ThinkRow.summary:取第一行非空白内容,trim 后作为行的摘要;
+/// 对齐 web ReasoningRow / Mac ThinkRow.summary:结束后取第一行非空白内容;
+/// 思考中取最新一段已写完的首行,还没有就退回正在写的第一行。
 /// 整段都是空白时返回空串,行退化为只有图标(标签兜底交给 aria)。
-function thinkingSummary(text) {
-  const line = String(text ?? "").split("\n").map((l) => l.trim()).find(Boolean);
+function thinkingSummary(text, running) {
+  const value = String(text ?? "");
+  const line = (running ? latestParagraphLead(value) : null)
+    ?? value.split("\n").map((l) => l.trim()).find(Boolean);
   // 剥掉 markdown 粗体标记(web ReasoningRow 的 replaceAll('**','')):
   // 摘要行不解析 markdown,留着 ** 只会露出标记本身。
   return (line ?? "").replace(/\*\*/g, "");
+}
+
+/// 最新一段的首行,且该行后面已出现换行(web latestCompletedParagraphFirstLine)。
+/// 段落以空白行分隔;最后一片是仍在写的行,不计入。
+function latestParagraphLead(text) {
+  let lead = null;
+  let paragraphStart = true;
+  for (const line of text.split("\n").slice(0, -1)) {
+    const trimmed = line.trim();
+    if (!trimmed) paragraphStart = true;
+    else if (paragraphStart) { lead = trimmed; paragraphStart = false; }
+  }
+  return lead;
 }
 
 // ---------- 工具行 ----------
