@@ -230,8 +230,12 @@ before(async () => {
   await mock.api.storage.local.set({ dsh_chrome_url: `ws://127.0.0.1:${port}/chrome/ws` })
   new Function('chrome', 'WebSocket', 'console', source)(mock.api, WebSocket, console)
   await connected
-  // Drain the hello frame so the first test starts with a clean inbox.
-  await nextFrame()
+  // Drain the hello frame so the first test starts with a clean inbox, and
+  // answer it the way chrome-daemon does: the bridge only counts as connected
+  // (and only sends tool results) once the daemon has acknowledged the hello.
+  const hello = await nextFrame()
+  assert.equal(hello.type, 'hello')
+  socket.send(JSON.stringify({ type: 'hello_ack' }))
 })
 
 after(() => {

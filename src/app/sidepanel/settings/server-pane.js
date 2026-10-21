@@ -150,22 +150,24 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
 
   /// CDP 桥那一行的右侧内容。
   ///
-  /// 两态:连上了(ok)/ 还没连上(busy)。没有 err 档 —— 那一档过去表示
-  /// "用户主动关掉了",而开关已经删掉,现在关不掉了。没连上一律算"正在等",
-  /// 因为桥会一直重试(background 的 RECONCILE_ALARM 每 30s)。
+  /// 三态:
+  ///   - 已连接(ok):握手完成 —— daemon 回了 hello_ack,不只是 socket 打开了;
+  ///   - 无响应(err):端口上有 daemon 接了连接却不应答。光等重试修不好
+  ///     (典型是残留的旧版 chrome-daemon 卡死),所以用红色,并在副标题给出处置;
+  ///   - 未连接(busy):还在等,桥会一直重试(background 的 RECONCILE_ALARM 每 30s)。
   function bridgeControl() {
     if (!bridge?.available) return "";
-    return bridge.connected
-      ? statusLine(t("bridge.connected"), "ok")
-      : statusLine(t("bridge.disconnected"), "busy");
+    if (bridge.status === "connected") return statusLine(t("bridge.connected"), "ok");
+    if (bridge.status === "unresponsive") return statusLine(t("bridge.unresponsive"), "err");
+    return statusLine(t("bridge.disconnected"), "busy");
   }
 
   /// 桥行的副标题:连上了报 daemon 地址,没连上给出排查方向。
   function bridgeHint() {
     if (!bridge?.available) return "";
-    return escapeHtml(bridge.connected
-      ? t("bridge.daemonAt", { url: bridge.url ?? "" })
-      : t("bridge.waiting"));
+    if (bridge.status === "connected") return escapeHtml(t("bridge.daemonAt", { url: bridge.url ?? "" }));
+    if (bridge.status === "unresponsive") return escapeHtml(t("bridge.unresponsiveHint", { url: bridge.url ?? "" }));
+    return escapeHtml(t("bridge.waiting"));
   }
 
   /// 只重画桥那一行,不动整页(与 paintConnection 同样的理由)。

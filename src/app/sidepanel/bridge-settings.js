@@ -5,7 +5,8 @@
 //
 // 这里没有开关:桥常驻、不可关闭。Agent 控制就是本扩展的存在理由,一个能把它
 // 关掉的开关只会制造"装了却不工作"的故障态 —— 用户忘了自己关过,然后来报
-// "Agent 连不上"。所以它退化成一盏纯粹的状态灯:连上了,或者还没连上。
+// "Agent 连不上"。所以它退化成一盏纯粹的状态灯:连上了、还在连,或者连上了
+// 端口却没人应答(daemon 卡死)。
 //
 // 本模块**不碰 DOM**。它以前直接持有 #set-bridge-* 几个节点并往里写文字,那要求
 // 那些节点必须活在服务端 pane 的渲染区之外(否则一次 refresh 就把它们换掉,
@@ -27,11 +28,26 @@ async function requestState() {
   }
 }
 
+const STATUSES = new Set(["connected", "unresponsive", "connecting"]);
+
+/** worker 回来的 status 不认识(或没有)时,按 connected 退回两态。 */
+export function normalizeStatus(status, connected) {
+  if (connected) return "connected";
+  return STATUSES.has(status) && status !== "connected" ? status : "connecting";
+}
+
 /**
  * 轮询桥状态,每次拿到新结果就回调 onChange(state)。
  *
- * state 形状:{ available, connected, url }。available 为 false 表示这个部署里
- * 根本没有桥半部 —— 调用方据此整行不画,而不是画一盏永远不亮的灯。
+ * state 形状:{ available, connected, status, url }。available 为 false 表示这个
+ * 部署里根本没有桥半部 —— 调用方据此整行不画,而不是画一盏永远不亮的灯。
+ *
+ * status 取值见 background.js 的 bridgeStatus():
+ *   "connected"    —— 握手完成(收到 hello_ack),daemon 在应答;
+ *   "unresponsive" —— socket 打开了但 daemon 不应答 hello / 不再发 ping,
+ *                     多半是残留的旧版 chrome-daemon 卡死,光重试修不好;
+ *   "connecting"   —— 还没连上,桥在按 30s 的 alarm 重试。
+ * 老版本 worker 不回 status,按 connected 推断。
  *
  * @param onChange 状态变化时调用(首次 refresh 也会调一次)。
  */
@@ -44,6 +60,7 @@ export function createBridgeStatus({ onChange } = {}) {
     const same = last
       && last.available === next.available
       && last.connected === next.connected
+      && last.status === next.status
       && last.url === next.url;
     last = next;
     if (!same) onChange?.(next);
@@ -51,13 +68,15 @@ export function createBridgeStatus({ onChange } = {}) {
 
   async function refresh() {
     if (!canReachWorker()) {
-      publish({ available: false, connected: false, url: null });
+      publish({ available: false, connected: false, status: "connecting", url: null });
       return;
     }
     const state = await requestState();
+    const connected = Boolean(state?.connected);
     publish({
       available: true,
-      connected: Boolean(state?.connected),
+      connected,
+      status: normalizeStatus(state?.status, connected),
       url: state?.url ?? null
     });
   }

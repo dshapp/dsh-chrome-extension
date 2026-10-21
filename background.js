@@ -3123,8 +3123,37 @@ function keyDescriptor(name) {
 // ---------------------------------------------------------------- socket
 
 let socket = null
+/**
+ * disconnected → connecting (TCP/WS opening) → handshaking (open, hello sent)
+ * → connected (hello_ack received).
+ *
+ * A WebSocket `open` only proves the daemon accepted the socket, not that it
+ * reads from it. A daemon whose read task has died (seen with chrome-daemon
+ * 0.3.12 orphaned from its parent's stdio) accepts the socket, keeps it open
+ * forever and never answers — the bridge used to report that as connected
+ * while every tool call timed out. Only the daemon's `hello_ack` reply proves
+ * a working round trip, so that is what `connected` means now.
+ */
 let state = 'disconnected'
 let currentUrl = ''
+/**
+ * Why the bridge is not connected, kept until a handshake succeeds:
+ *   null           — nothing has gone wrong (or it is merely reconnecting);
+ *   'unreachable'  — the socket never opened (nothing listening);
+ *   'unresponsive' — the socket opened but the daemon never answered the
+ *                    hello, or stopped answering (no frame within the
+ *                    liveness window).
+ */
+let lastFailure = null
+/** Date.now() of the last frame received on the current socket. */
+let lastInboundAt = 0
+/** How long the daemon gets to answer `hello` with `hello_ack`. */
+const HELLO_ACK_TIMEOUT_MS = 10000
+/**
+ * The daemon pings every 30s; two missed pings plus slack means it is no longer
+ * talking to us even though the socket still looks open.
+ */
+const LIVENESS_TIMEOUT_MS = 75000
 
 // 断线期间暂存的可重放帧(工具结果)。连接恢复后按序重放,
 // 避免浏览器工具执行期间断线导致 tool_result 被静默丢弃。
@@ -3135,6 +3164,19 @@ function isConnected() {
   return state === 'connected'
 }
 
+/**
+ * The bridge's user-facing status:
+ *   'connected'    — handshake done, daemon answering;
+ *   'unresponsive' — a daemon is listening but does not answer (a stuck or
+ *                    stale chrome-daemon; retrying alone will not fix it);
+ *   'connecting'   — not connected yet, retrying on the reconcile alarm.
+ */
+function bridgeStatus() {
+  if (state === 'connected') return 'connected'
+  if (lastFailure === 'unresponsive') return 'unresponsive'
+  return 'connecting'
+}
+
 // The autostart shard (sw/server-supervisor.js) runs in this very worker, so it
 // cannot ask over runtime.sendMessage: a context's own onMessage never receives
 // its own message, and no other context answers `get_state`, so the shard would
@@ -3142,6 +3184,7 @@ function isConnected() {
 // same worker, no import, which keeps this file loadable as a bare function.
 globalThis.__dshBridgeState = async () => ({
   connected: isConnected(),
+  status: bridgeStatus(),
   shouldConnect: (await getDesired()).enabled,
 })
 
@@ -3153,7 +3196,7 @@ globalThis.__dshBridgeReconcile = async () => {
 }
 
 function flushPending() {
-  if (socket?.readyState !== WebSocket.OPEN || pending.length === 0) return
+  if (state !== 'connected' || socket?.readyState !== WebSocket.OPEN || pending.length === 0) return
   while (pending.length) {
     const frame = pending.shift()
     socket.send(JSON.stringify(frame))
@@ -3162,8 +3205,11 @@ function flushPending() {
 
 // replayable: 断线时是否入队等待重放。hello/pong 每次连接重发即可,只有
 // 工具结果承载着不可再生的执行产出,值得排队重放。
+//
+// 可重放帧只在握手完成(收到 hello_ack)后才直接发:握手前对端是否真在读还没
+// 证实,一条发进"只收不读"的 socket 的工具结果就永远丢了;入队等握手后重放。
 function send(frame, { replayable = false } = {}) {
-  if (socket?.readyState === WebSocket.OPEN) {
+  if (socket?.readyState === WebSocket.OPEN && (!replayable || state === 'connected')) {
     socket.send(JSON.stringify(frame))
     return
   }
@@ -3187,13 +3233,38 @@ function teardown() {
   state = 'disconnected'
 }
 
+/**
+ * Give up on a socket that opened but does not answer, without waiting for its
+ * close event: a stuck daemon never completes the closing handshake either, so
+ * `close` may only fire much later. Detaching it now lets the next reconcile
+ * open a fresh socket straight away.
+ */
+function abandon(candidate, failure) {
+  if (socket !== candidate) return
+  lastFailure = failure
+  socket = null
+  state = 'disconnected'
+  try {
+    candidate.close()
+  } catch {
+    // Already closing.
+  }
+}
+
+/** A connected socket that has heard nothing for too long is a dead one. */
+function checkLiveness(now = Date.now()) {
+  if (state !== 'connected' || !socket) return
+  if (now - lastInboundAt > LIVENESS_TIMEOUT_MS) abandon(socket, 'unresponsive')
+}
+
 async function reconcile() {
   const desired = await getDesired()
   if (!desired.enabled) {
     if (state !== 'disconnected') teardown()
     return
   }
-  if (state === 'connected' || state === 'connecting') return
+  checkLiveness()
+  if (state !== 'disconnected') return
   connect(desired.url)
 }
 
@@ -3205,12 +3276,16 @@ function connect(url) {
     candidate = new WebSocket(url)
   } catch {
     state = 'disconnected'
+    lastFailure = 'unreachable'
     return
   }
   socket = candidate
+  let opened = false
 
-  const guard = setTimeout(() => {
-    if (socket === candidate && state === 'connecting') candidate.close()
+  // One timer covers both phases: the socket must open, and then the daemon
+  // must answer the hello, each within its own window.
+  let guard = setTimeout(() => {
+    if (socket === candidate && state === 'connecting') abandon(candidate, 'unreachable')
   }, 10000)
 
   candidate.addEventListener('open', () => {
@@ -3218,17 +3293,30 @@ function connect(url) {
       candidate.close()
       return
     }
-    state = 'connected'
+    opened = true
+    state = 'handshaking'
+    lastInboundAt = Date.now()
     clearTimeout(guard)
+    guard = setTimeout(() => {
+      if (socket === candidate && state === 'handshaking') abandon(candidate, 'unresponsive')
+    }, HELLO_ACK_TIMEOUT_MS)
     send({ type: 'hello', payload: { extensionVersion: chrome.runtime.getManifest().version } })
-    flushPending()
   })
 
   candidate.addEventListener('message', (event) => {
+    if (socket !== candidate) return
+    lastInboundAt = Date.now()
     let frame
     try {
       frame = JSON.parse(event.data)
     } catch {
+      return
+    }
+    if (frame?.type === 'hello_ack' && state === 'handshaking') {
+      state = 'connected'
+      lastFailure = null
+      clearTimeout(guard)
+      flushPending()
       return
     }
     handleFrame(frame)
@@ -3239,6 +3327,10 @@ function connect(url) {
     socket = null
     state = 'disconnected'
     clearTimeout(guard)
+    // Never opened: nothing is listening. Opened and later closed: the daemon
+    // went away (restart, upgrade) — an ordinary reconnect, not a fault, so an
+    // earlier failure reason is left as it was.
+    if (!opened) lastFailure = 'unreachable'
   }
   candidate.addEventListener('close', closed)
   candidate.addEventListener('error', closed)
@@ -3361,6 +3453,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
         const desired = await getDesired()
         respond({
           connected: isConnected(),
+          status: bridgeStatus(),
           shouldConnect: desired.enabled,
           url: currentUrl || desired.url,
         })
