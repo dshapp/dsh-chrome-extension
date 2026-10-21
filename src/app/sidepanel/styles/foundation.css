@@ -239,8 +239,9 @@ body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
 
 /* 会话列表入口:顶栏最左那颗。它同时是当前会话的标题,所以内容可长可短 ——
    用 flex:0 1 auto 让它按自然宽度展开、只在放不下时才收缩(超长由内部两段
-   各自省略),右边的 .hdr-spacer 负责把工具按钮推到另一端;若这里是 flex:1,
-   短标题也会把"新建"顶到屏幕中间去。
+   各自省略)。当前会话的动作(子代理 / 后台任务 / Git / 打开目录)紧跟其后,
+   再由 .hdr-spacer 把新建会话推到最右;若这里是 flex:1,会话动作就会被
+   顶离标题、散到屏幕中间去。
    刻意不设 max-width:目录名 + 会话标题本来就长,硬性上限会在右边还空着
    一大片时就把两段都打上省略号。让位顺序由 flex-shrink 决定:右侧那排工具
    钮一概不缩(见下),放不下时只有这里让。 */
@@ -266,9 +267,9 @@ body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
   color: var(--text-dim);
 }
 #hdr-title-wrap:hover .hdr-entry-icon { color: var(--text); }
-/* 入口与新建之后的弹性空白。 */
+/* 会话动作之后、新建会话之前的弹性空白。 */
 .hdr-spacer { flex: 1 1 auto; min-width: 0; }
-/* 顶栏右侧那排工具钮不参与收缩:它们是图标(或已经自带截断上限的 git 入口),
+/* 顶栏的工具钮(会话动作与新建)不参与收缩:它们是图标(或已经自带截断上限的 git 入口),
    缩了只会变糊。宽度不够时让标题入口去省略,那里省略的代价最小。 */
 #header > .hdr-btn, #hdr-status { flex: none; }
 /* 打开工作目录按钮:空间紧张时保持图标不塌缩。 */

@@ -1,5 +1,5 @@
 // 侧栏 DOM 查询:把 index.html 的 id 收敛成一份具名引用表,缺元素立即抛错。
-const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-folder", "hdr-settings",
+const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-folder",
   "workspace-menu", "session-drawer", "session-drawer-scrim", "history-search",
   // 标题里的工作目录前缀("工作目录 / 会话标题"的前半段)
   "hdr-workspace-prefix",

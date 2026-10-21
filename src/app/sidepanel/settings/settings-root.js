@@ -105,7 +105,6 @@ export function createSheet(dialog) {
 /// 提供 —— 新建会话、选中预设、离开设置页这三件事都只有 app 能做。
 export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVisibilityChanged } = {}) {
   const view = document.querySelector("#view-settings");
-  const openButton = document.querySelector("#hdr-settings");
   const backButton = view.querySelector("#settings-back");
   const tabBar = view.querySelector("#settings-tabs");
   for (const tab of TABS) {
@@ -278,7 +277,8 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
     sheet.close();
   }
 
-  openButton.addEventListener("click", open);
+  // 打开入口不在这里绑定:它在会话抽屉底部(#history-settings-btn,由 app 接线)
+  // 与快捷键,两者都走返回值里的 show()。
   backButton.addEventListener("click", close);
   // sheet 的 Esc 由 <dialog> 原生处理,但要把内容清掉,否则下次打开会闪一帧旧内容。
   // Esc 关闭也要让出所有权,否则在途回调仍会认为自己持有这块 dialog。

@@ -19,19 +19,10 @@
 </head>
 <body>
 
-  <!-- ── Header(新建 + 会话列表入口 在最左,其余动作靠右) ── -->
+  <!-- ── Header(会话标题 + 当前会话的动作靠左,新建会话在最右) ──
+       设置入口不在顶栏:它在左侧会话抽屉的底部(#history-settings-btn)。 -->
   <div id="header">
-    <!-- 新建会话:顶栏最左。 -->
-    <button class="hdr-btn" id="hdr-new" aria-label="New Chat" title="新建会话">
-      <!-- lucide: square-plus -->
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect width="18" height="18" x="3" y="3" rx="2"/>
-        <path d="M8 12h8"/>
-        <path d="M12 8v8"/>
-      </svg>
-      <kbd class="shortcut-hint" id="shortcut-new" aria-hidden="true"></kbd>
-    </button>
-    <!-- 会话列表入口:就是原来那颗带标题的按钮,挪到了左侧(紧跟新建),并且现在拉开的是
+    <!-- 会话列表入口:就是原来那颗带标题的按钮,位于顶栏最左,并且现在拉开的是
          左侧抽屉而不是顶部下拉 —— 所以前导图标用 panel-left,不再是向下的 chevron。 -->
     <button id="hdr-title-wrap" type="button" aria-haspopup="dialog" aria-expanded="false"
             aria-controls="session-drawer">
@@ -47,8 +38,8 @@
       <span id="hdr-title">New Chat</span>
       <kbd class="shortcut-hint" id="shortcut-history" aria-hidden="true"></kbd>
     </button>
-    <!-- 入口与新建之后的空白:把余下的工具按钮推到右端。 -->
-    <span class="hdr-spacer" aria-hidden="true"></span>
+    <!-- 当前会话的动作(子代理 / 后台任务 / Git / 打开工作目录)紧跟在标题之后,
+         不再被推到右端 —— 它们说的都是"这个会话",应当和标题挨在一起。 -->
     <!-- 子代理目录入口:对齐 Mac SubagentCatalogAction —— 有子代理后代的会话才显示 -->
     <button class="hdr-btn" id="subagent-catalog-btn" type="button" popovertarget="subagent-catalog-menu" hidden aria-haspopup="dialog">
       <span class="subagent-dot" aria-hidden="true"></span>
@@ -78,16 +69,20 @@
         <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
       </svg>
     </button>
-    <!-- 连接状态点:平时不显示,只有连接中/断开才现身。放在右侧工具簇里,
-         这样它出现与否都不会把最左边的会话列表入口顶开。 -->
+    <!-- 会话动作之后的弹性空白:把连接状态点与新建会话推到最右。 -->
+    <span class="hdr-spacer" aria-hidden="true"></span>
+    <!-- 连接状态点:平时不显示,只有连接中/断开才现身。放在最右侧、
+         新建会话之前,这样它出现与否都不会把标题与会话动作顶开。 -->
     <div id="hdr-status" title=""></div>
-    <button class="hdr-btn" id="hdr-settings" type="button" aria-label="Settings" title="设置">
-      <!-- lucide: ellipsis-vertical -->
+    <!-- 新建会话:顶栏最右(原设置入口的位置)。 -->
+    <button class="hdr-btn" id="hdr-new" aria-label="New Chat" title="新建会话">
+      <!-- lucide: square-plus -->
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="1"/>
-        <circle cx="12" cy="5" r="1"/>
-        <circle cx="12" cy="19" r="1"/>
+        <rect width="18" height="18" x="3" y="3" rx="2"/>
+        <path d="M8 12h8"/>
+        <path d="M12 8v8"/>
       </svg>
+      <kbd class="shortcut-hint" id="shortcut-new" aria-hidden="true"></kbd>
     </button>
   </div>
 

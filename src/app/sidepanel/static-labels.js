@@ -24,8 +24,6 @@ export function applyStaticLabels(root) {
   setAttr(root, "#hdr-new", "aria-label", t("new_session"));
   setAttr(root, "#hdr-open-folder", "aria-label", t("hdr.openFolder"));
   setAttr(root, "#hdr-open-folder", "title", t("hdr.openFolderHint"));
-  setAttr(root, "#hdr-settings", "aria-label", t("settings"));
-  setAttr(root, "#hdr-settings", "title", t("settings"));
   setAttr(root, "#session-drawer", "aria-label", t("history.label"));
   setAttr(root, "#session-drawer-close", "aria-label", t("history.close"));
   setAttr(root, "#session-drawer-close", "title", t("history.close"));
