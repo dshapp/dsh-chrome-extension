@@ -4,10 +4,12 @@
 // 拼装,与「入口何时出现、点了做什么」那些决策分开读更清楚。
 import { lucideIconSvg } from "../../features/chat/file-icons.js";
 
-/// linked worktree 用堆叠图标,普通 checkout 用分支图标 —— 与 Mac 的
+/// linked worktree 用堆叠图标,普通 checkout 用分叉图标 —— 与 Mac 的
 /// `square.stack` / `arrow.triangle.branch` 一一对应,让两种位置一眼可辨。
-export const ICON_WORKTREE = lucideIconSvg("layers", { size: 13 });
-export const ICON_BRANCH = lucideIconSvg("git-branch", { size: 13 });
+/// 选 lucide 里字形最接近的两个:`gallery-vertical-end`(方块上叠两道边)与
+/// `split`(竖干向左上、右上分叉的箭头);`layers` / `git-branch` 与 Mac 对不上。
+export const ICON_WORKTREE = lucideIconSvg("gallery-vertical-end", { size: 13 });
+export const ICON_BRANCH = lucideIconSvg("split", { size: 13 });
 
 export function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (c) => (

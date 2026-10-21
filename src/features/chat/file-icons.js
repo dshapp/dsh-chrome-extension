@@ -192,6 +192,19 @@ const ICONS = Object.freeze({
     ["path", { d: "M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" }],
     ["path", { d: "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" }]
   ],
+  // Git 入口的两种位置:与 Mac SF Symbols `square.stack` / `arrow.triangle.branch`
+  // 最接近的两个 lucide 图标(lucide 自己的 `square-stack` 是斜向叠放,对不上)。
+  "gallery-vertical-end": [
+    ["path", { d: "M7 2h10" }],
+    ["path", { d: "M5 6h14" }],
+    ["rect", { width: 18, height: 12, x: 3, y: 10, rx: 2 }]
+  ],
+  split: [
+    ["path", { d: "M16 3h5v5" }],
+    ["path", { d: "M8 3H3v5" }],
+    ["path", { d: "M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3" }],
+    ["path", { d: "m15 9 6-6" }]
+  ],
   "git-branch": [
     ["path", { d: "M15 6a9 9 0 0 0-9 9V3" }],
     ["circle", { cx: 18, cy: 6, r: 3 }],
