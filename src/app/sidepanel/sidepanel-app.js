@@ -375,6 +375,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     autoScroll();
     scheduleStopConfirm();
     historyDrawer?.setActive(state.sessionId, snapshot.title);
+    // 换了会话:立刻告诉 SW 现在看的是哪条(清它的工具栏未读),不等心跳。
+    deps.presence?.sessionChanged?.();
     updateSendState(snapshot.running);
   }
 
@@ -1605,6 +1607,8 @@ export function createSidepanelApp(root, deps, options = {}) {
   }
   function renameSessionShortcut() {
     if (!state.sessionId) return false;
+    // 与双击顶栏标题同一个行内编辑框;抽屉未挂载时(理论上不会)退回 prompt。
+    if (historyDrawer?.editTitle) return historyDrawer.editTitle();
     const name = window.prompt(t("session.renamePrompt"));
     if (name && name.trim()) {
       void deps.sessions.rename(state.sessionId, name).catch((error) => showToast(format(error)));
@@ -1921,6 +1925,9 @@ export function createSidepanelApp(root, deps, options = {}) {
     deps.pendingSessionOpen?.subscribe?.((sessionId) => {
       openSession(sessionId).catch((error) => showToast(format(error)));
     });
+    // 工具栏圆点:报告「正看着哪条会话」,并把 SW 的未读镜像到会话行上。
+    deps.taskUnreadMirror?.start?.();
+    deps.presence?.start?.();
     setInterval(() => setStreamState(deps.connection.streamState), 500);
     // 断开时点击状态点手动重连。
     elements.hdrStatus.addEventListener("click", () => {

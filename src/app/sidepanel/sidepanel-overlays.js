@@ -15,6 +15,7 @@ import { renderSections, renderResultRows, renderLoading, SECTION_HEAD_ID } from
 import { mountHistoryViewOptions } from "./history-view-options.js";
 import { createRepaintHold } from "../../features/sessions/history-repaint-hold.js";
 import { createHistoryRowActions } from "./history-row-actions.js";
+import { mountHeaderTitleEdit } from "./header-title-edit.js";
 
 export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, {
   // 宿主的 workspace 名单(分组模式按它划分),以及已归档 id(按「筛选会话」取舍)。
@@ -89,9 +90,12 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     if (restoreFocus) entry.focus();
   }
 
-  entry.addEventListener("click", () => {
-    if (isOpen()) hide();
-    else open();
+  // 单击开关抽屉、双击原地改名;两者的判定与编辑框在 header-title-edit.js。
+  const titleEdit = mountHeaderTitleEdit({
+    entry, title, sessionId: () => activeSessionId, showToast,
+    rename: (sessionId, name) => deps.sessions.rename(sessionId, name),
+    toggle: () => (isOpen() ? hide() : open()),
+    beforeEdit: () => hide()
   });
   scrim.addEventListener("click", () => hide({ restoreFocus: true }));
   closeButton?.addEventListener("click", () => hide({ restoreFocus: true }));
@@ -361,6 +365,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       if (isOpen()) paint();
     },
     setActive(sessionId, sessionTitle) {
+      if (sessionId !== activeSessionId) titleEdit.cancel();
       activeSessionId = sessionId;
       title.textContent = sessionTitle || t("new_session");
       // 未读提醒的清除挂在这里,而不是在 openSession 里再调一次:
@@ -371,6 +376,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     },
     // 快捷键(⌘K)复用入口按钮的开关逻辑,保证搜索框聚焦/列表刷新行为一致。
     toggle() { entry.click(); },
+    /// 行内改名当前会话的标题(双击标题与「重命名会话」快捷键共用)。
+    editTitle: () => titleEdit.start(),
     // 抽屉开着时把上下键/回车/Esc 交给列表;返回 true 表示已消费。
     handleKeyDown,
     // 快捷键(⌘K + 数字)按当前渲染序打开会话。

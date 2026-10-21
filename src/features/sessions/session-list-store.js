@@ -46,6 +46,12 @@ export function createSessionListStore() {
   // 这边会凭空弹出一条"后台任务失败:resume failed for session ...",
   // 标题还是那个早就做完的任务名。
   const ranSessionIds = new Set();
+  // persistedUnread:service worker 记的未读(工具栏圆点那一份,见 notifications/task-unread.js),
+  // sessionId → { success, failure }。上面两个集合只活在这个侧栏实例里、只看得到侧栏开着时
+  // 发生的边沿;这一份跨侧栏开关、会过期。行上的点取两者之并,所以:
+  //   - 侧栏关着时跑完的会话,打开侧栏后行上同样亮着(和工具栏上的点对得上);
+  //   - SW 那一份过期 / 被看过撤掉时,本地集合里的同一条也一起撤掉,行上的点不会比图标挂得久。
+  let persistedUnread = new Map();
   // 哪个会话是当前打开的那个。未读提醒只发给**不在眼前**的会话:
   // 用户正看着的那个会话跑完了,他自己就看见了,再点一个绿点是噪声。
   let selectedSessionId = null;
@@ -135,12 +141,23 @@ export function createSessionListStore() {
   /// 单行的状态档位。事实全部取自本 store 已经维护着的那几个集合 ——
   /// 这正是状态排序对**从没打开过**的会话也成立的原因:它们没有 SessionStore,
   /// 但它们的运行位、挂起请求、草稿都在这里。
+  function persistedOf(id) {
+    return id === selectedSessionId ? null : persistedUnread.get(id) ?? null;
+  }
+  function isCompleted(id) {
+    const persisted = persistedOf(id);
+    return completedSessionIds.has(id) || Boolean(persisted?.success || persisted?.failure);
+  }
+  function isErrored(id) {
+    return erroredSessionIds.has(id) || Boolean(persistedOf(id)?.failure);
+  }
+
   function rankOf(summary, subagentRoots) {
     const id = summary.sessionId;
     return rankSession({
       isRunning: Boolean(summary.running) || subagentRoots.has(id),
-      isUnread: completedSessionIds.has(id),
-      didFail: erroredSessionIds.has(id),
+      isUnread: isCompleted(id),
+      didFail: isErrored(id),
       awaiting: awaitingKinds.get(id) ?? null,
       hasDraft: draftSessionIds.has(id)
     });
@@ -255,10 +272,33 @@ export function createSessionListStore() {
       // 于是"打开会话"只清掉未读绿点、把失败红点留在了行上。
       const clearedCompleted = completedSessionIds.delete(sessionId);
       const clearedErrored = erroredSessionIds.delete(sessionId);
-      if (clearedCompleted || clearedErrored) notify();
+      // SW 那一份由侧栏的在场上报去清(看着这条会话即已读);本地先摘掉,行上不用等一个来回。
+      const clearedPersisted = persistedUnread.delete(sessionId);
+      if (clearedCompleted || clearedErrored || clearedPersisted) notify();
     },
-    isCompleted: (sessionId) => completedSessionIds.has(sessionId),
-    isErrored: (sessionId) => erroredSessionIds.has(sessionId),
+    /// 用 SW 的未读(unread-policy.unreadBySession 的形状)整体替换本地镜像。
+    /// 镜像里消失的(过期 / 在别处看过 / 点了通知)同时从本地集合里摘掉。
+    setPersistedUnread(bySession) {
+      const next = new Map();
+      for (const [id, entry] of Object.entries(bySession ?? {})) {
+        if (!id || !entry) continue;
+        next.set(id, { success: Boolean(entry.success), failure: Boolean(entry.failure) });
+      }
+      let changed = next.size !== persistedUnread.size;
+      for (const [id, previous] of persistedUnread) {
+        const current = next.get(id);
+        if (current?.success !== previous.success || current?.failure !== previous.failure) changed = true;
+        if (previous.success && !current?.success && !current?.failure) completedSessionIds.delete(id);
+        if (previous.failure && !current?.failure) {
+          erroredSessionIds.delete(id);
+          completedSessionIds.delete(id);
+        }
+      }
+      persistedUnread = next;
+      if (changed) notify();
+    },
+    isCompleted,
+    isErrored,
     /// 该会话是否有子代理后裔正在跑(自身可能是 idle 的)。
     isRunningSubagentRoot(sessionId) {
       if (runningRootsCacheFor !== summaries) {
@@ -320,6 +360,7 @@ export function createSessionListStore() {
       draftSessionIds.delete(sessionId);
       completedSessionIds.delete(sessionId);
       erroredSessionIds.delete(sessionId);
+      persistedUnread.delete(sessionId);
       previousRunning.delete(sessionId);
       ranSessionIds.delete(sessionId);
       if (existed) revision += 1;

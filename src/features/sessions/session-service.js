@@ -33,7 +33,9 @@ export function locationOf({ workspaceId, cwd } = {}) {
 /// options.onBackgroundTurnFailure(sessionId, message):非当前会话的轮以错误
 /// 结束时回调。丢帧策略下这是失败信息唯一的出口 —— 用户切走后最需要的提醒
 /// (对齐 macOS 丢帧修复特意保留的 liveTurnFailureMessage 例外)。
-export function createSessionService(connection, { onBackgroundTurnFailure } = {}) {
+/// options.onAwaitingChange(sessionId, kind, eventId):某个会话开始 / 不再卡在用户
+/// (授权、提问、计划确认)上。kind 为 null 表示已结算。工具栏黄点由它喂。
+export function createSessionService(connection, { onBackgroundTurnFailure, onAwaitingChange } = {}) {
   const listStore = createSessionListStore();
   // 手动顺序账本(浏览器本地)。listStore 只认得"排序结果",
   // 账本的存取由它自己负责 —— 所以在这里组合,而不是让 listStore 去碰 storage。
@@ -373,14 +375,23 @@ export function createSessionService(connection, { onBackgroundTurnFailure } = {
   function syncAwaitingUser(sessionId) {
     let approval = null;
     let question = null;
-    for (const pending of pendingInteractions.values()) {
+    let eventId = null;
+    for (const [id, pending] of pendingInteractions) {
       if (pending.sessionId !== sessionId) continue;
       if (pending.kind === "approval") approval = pending.value;
       if (pending.kind === "question") question = pending.value;
+      eventId ??= id;
     }
     // 与会话卡实际渲染同一分类器(web visiblePendingKind):plan-review 单独计徽标。
     const status = pendingInteractionStatus({ approval, question });
+    const before = listStore.awaitingUser(sessionId);
     listStore.setAwaitingUser(sessionId, status ? SessionAwaitingKind[status] : null);
+    const after = listStore.awaitingUser(sessionId);
+    if (before !== after) {
+      try {
+        onAwaitingChange?.(sessionId, after, after ? eventId : null);
+      } catch { /* 上报失败只是少一个黄点 */ }
+    }
   }
 
   /// 只有当前会话的帧才进 store;其他会话只更新列表里的运行状态。

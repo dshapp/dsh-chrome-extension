@@ -13,7 +13,8 @@ const RUNNING_KEY = "dsh_running_sessions";
 /// 的静默 catch 把端点拼写或参数信封回归永久藏起来。
 export async function pollSessionStatuses(api, notifier) {
   const value = await api.call(RPC.sessionList, { _request: {} });
-  for (const item of value?.items ?? []) {
+  const items = value?.items ?? [];
+  for (const item of items) {
     // 子代理的 running→idle 是父轮内部的一步,不是"用户的任务跑完了":
     // 会话行上的 origin 是权威判定(与 Mac 的 subject.isSubagent 同源)。
     // 标题也从同一行取,完成通知的标题才能是具体任务内容而非通用文案。
@@ -24,11 +25,30 @@ export async function pollSessionStatuses(api, notifier) {
       item.projections?.values?.title ?? null
     );
   }
+  // 名单里没有的会话(被删掉了)不会再有 running→idle 的边沿:不剪掉就会永远留在
+  // 持久化的运行集合里,每次 worker 重启白读一遍。
+  notifier.pruneMissing?.(items.map((item) => item.sessionId));
+  return items;
 }
 
-export function createBackgroundNotifier({ notifications, settings, storage }) {
+export function createBackgroundNotifier({
+  notifications,
+  settings,
+  storage,
+  /**
+   * 非子代理会话跑完时的钩子(SW 用它记工具栏绿点):({ sessionId, title, since }) =>
+   * Promise<{ reason }>。reason === "failed"(这一轮已报过失败)或 "seen"(用户正看着)时
+   * 不再弹完成通知。
+   */
+  onCompleted = null,
+  /** (sessionId) => boolean:侧栏有焦点且正显示这条会话 —— 用户亲眼看着它跑完,不弹通知。 */
+  isWatching = () => false,
+  now = () => Date.now()
+}) {
   const area = storage ?? (typeof chrome !== "undefined" ? chrome.storage?.local : null);
-  const running = new Set();
+  // sessionId → 首次观察到它在跑的时刻。时刻用来认「同一轮」:这一轮里报过的失败
+  // 不该再跟一个「完成」。
+  const running = new Map();
   // 记住恢复用的 promise 而不是一个 bool。用 bool 的话它必须在 await 之前置位,
   // 于是并发的第二个调用者会在集合还空着的时候就拿到"已加载",把 s1 的
   // running→idle 边沿判成"本来就不在集合里",通知被丢掉;更糟的是 storage 里
@@ -42,8 +62,13 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
       if (!area) return;
       try {
         const value = await area.get([RUNNING_KEY]);
-        const list = value?.[RUNNING_KEY];
-        if (Array.isArray(list)) for (const id of list) running.add(id);
+        const stored = value?.[RUNNING_KEY];
+        // 旧版存的是 id 数组:没有开始时刻,按 0 处理(任何失败都算这一轮的)。
+        if (Array.isArray(stored)) {
+          for (const id of stored) if (typeof id === "string" && !running.has(id)) running.set(id, 0);
+        } else if (stored && typeof stored === "object") {
+          for (const [id, since] of Object.entries(stored)) if (!running.has(id)) running.set(id, Number(since) || 0);
+        }
       } catch { /* 无 storage 时退化为纯内存 */ }
     })();
     return loadPromise;
@@ -51,7 +76,7 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
 
   function persistRunning() {
     if (!area) return;
-    area.set({ [RUNNING_KEY]: [...running] }).catch(() => {});
+    area.set({ [RUNNING_KEY]: Object.fromEntries(running) }).catch(() => {});
   }
 
   // 通知标题的上限:会话标题由模型按首条用户消息生成,偶尔很长,直接塞进
@@ -85,8 +110,34 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
     });
   }
 
+  /// 一轮跑完:先记未读(钩子决定这一轮算完成还是已失败),再决定弹不弹通知。
+  async function completed(sessionId, title, since) {
+    let verdict = null;
+    try {
+      verdict = await onCompleted?.({ sessionId, title, since });
+    } catch { /* 记未读失败不影响通知 */ }
+    if (verdict?.reason === "failed") return;
+    if (verdict?.reason === "seen" || isWatching(sessionId)) return;
+    await notify(sessionId, {
+      title,
+      fallbackKey: "notif.running_title",
+      messageKey: "notif.finished"
+    });
+  }
+
   return {
     loadRunning,
+    /// 只保留名单里还在的会话。
+    pruneMissing(sessionIds) {
+      const keep = new Set(sessionIds ?? []);
+      let changed = false;
+      for (const id of [...running.keys()]) {
+        if (keep.has(id)) continue;
+        running.delete(id);
+        changed = true;
+      }
+      if (changed) persistRunning();
+    },
     // 轮询喂入:running=true 进入运行集合;false 且曾在集合 → 完成通知。
     // 第三个参数 subagent=true 时只清账、不通知:子代理的结束从来不是用户的
     // 任务的结束(对齐 Mac AgentNotificationCenter 的 isSubagent 闸门)。
@@ -99,17 +150,15 @@ export function createBackgroundNotifier({ notifications, settings, storage }) {
       }
       if (isRunning) {
         if (!running.has(sessionId)) {
-          running.add(sessionId);
+          running.set(sessionId, now());
           persistRunning();
         }
-      } else if (running.delete(sessionId)) {
+      } else if (running.has(sessionId)) {
+        const since = running.get(sessionId);
+        running.delete(sessionId);
         persistRunning();
         // 标题取本次名单里的具体任务名;拿不到才退回通用文案。
-        notify(sessionId, {
-          title,
-          fallbackKey: "notif.running_title",
-          messageKey: "notif.finished"
-        });
+        void completed(sessionId, title, since);
       }
     },
     /// 后台会话的轮以错误结束:由侧栏帧偷看驱动(轮询只报"完成",区分不了失败)。

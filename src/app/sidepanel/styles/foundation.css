@@ -260,6 +260,8 @@ body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
   border-radius: 7px;
 }
 #hdr-title-wrap:hover { background: var(--border-soft); }
+/* 行内改名期间整颗入口让位给 #hdr-title-input(上面的 display:flex 会压过 UA 的 [hidden])。 */
+#hdr-title-wrap[hidden] { display: none; }
 /* 前导图标:抽屉从左边来,所以是 panel-left 而不是向下的 chevron。 */
 .hdr-entry-icon {
   width: 15px; height: 15px;
@@ -284,6 +286,23 @@ body:has(#empty-hint:not([hidden])) #hdr-open-folder { display: none; }
   font-size: 13px;
   color: var(--text-dim);
 }
+/* 双击标题进入的行内改名框:编辑期间顶替被隐藏的 #hdr-title-wrap,
+   占同一格的位置,字号与标题一致,免得进出编辑时文字跳动。 */
+#hdr-title-input {
+  flex: 1 1 auto;
+  min-width: 120px;
+  max-width: 420px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+#hdr-title-input:focus { border-color: var(--text-faint); box-shadow: 0 0 0 2px var(--border-soft); }
 .dropdown-chevron { width: 12px; height: 12px; color: var(--text-faint); flex-shrink: 0; }
 /* 图标统一走内联 lucide svg:清掉 inline 基线缝,并在按钮里居中。 */
 button > svg, .act-btn svg, .chip-icon svg, .thinking-icon svg, .goal-glyph svg,

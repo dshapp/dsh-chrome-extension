@@ -5,6 +5,8 @@ import { createSessionService } from "../../features/sessions/session-service.js
 import { createPinnedStore } from "../../features/sessions/pinned-store.js";
 import { createBackgroundNotifier } from "../../features/notifications/background-notifier.js";
 import { createPendingSessionOpen } from "../../features/notifications/notification-click.js";
+import { createPresenceReporter, reportTaskUnread } from "../../features/notifications/panel-presence.js";
+import { createTaskUnreadMirror } from "../../features/notifications/task-unread-mirror.js";
 import { createModelService } from "../../features/models/model-service.js";
 import { createSkillService } from "../../features/skills/skill-service.js";
 import { createCommandService } from "../../features/commands/command-service.js";
@@ -42,8 +44,25 @@ export function createSidepanelDependencies(options = {}) {
     onArchivedChange: (ids) => sessions?.setArchivedSessionIds?.(ids),
     onPinnedChange: (ids) => pinnedStore.applyHost?.(ids)
   });
+  // 工具栏圆点:失败(红)与等你处理(黄)只有侧栏的实时帧看得到,报给 SW 统一记账。
+  const reportUnread = options.reportTaskUnread || reportTaskUnread;
   sessions ||= (lifecycle.sessions = createSessionService(connection, {
-    onBackgroundTurnFailure: (sessionId, message, title) => notifier.reportFailure(sessionId, message, title)
+    onBackgroundTurnFailure: (sessionId, message, title) => {
+      notifier.reportFailure(sessionId, message, title);
+      reportUnread({ sessionId, status: "failure", title: title ?? "" });
+    },
+    onAwaitingChange: (sessionId, kind, eventId) => {
+      if (kind) {
+        reportUnread({
+          sessionId,
+          status: "attention",
+          eventId: eventId ?? null,
+          title: lifecycle.sessions?.listStore?.titleOf?.(sessionId) ?? ""
+        });
+      } else {
+        reportUnread({ sessionId, op: "clear", statuses: ["attention"] });
+      }
+    }
   }));
   lifecycle.sessions ||= sessions;
   lifecycle.automations = options.automations || createAutomationService(connection);
@@ -80,6 +99,13 @@ export function createSidepanelDependencies(options = {}) {
     }),
     // 通知点击的交接:worker 写 pending sessionId,侧栏领取后切会话。
     pendingSessionOpen: options.pendingSessionOpen || createPendingSessionOpen(),
+    // 侧栏在场上报(用户在看哪条会话 → SW 清未读、压通知)与未读镜像(会话行的点)。
+    presence: options.presence || createPresenceReporter({
+      getSessionId: () => sessions.currentSessionId ?? null
+    }),
+    taskUnreadMirror: options.taskUnreadMirror || createTaskUnreadMirror({
+      apply: (bySession) => sessions.listStore?.setPersistedUnread?.(bySession)
+    }),
     DshStreamState,
     formatErrorDetails,
     setLang,

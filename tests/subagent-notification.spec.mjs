@@ -159,7 +159,8 @@ test('notifier:修复前留在 storage 里的子代理 id 会被清掉,不永远
   notifier.observeStatus(CHILD, false, true)
   await flush()
   assert.deepEqual(created, [])
-  assert.deepEqual(stored, [], '旧版写进去的子代理 id 应当被摘掉,实际 ' + JSON.stringify(stored))
+  // 运行集合现在存成 { sessionId: 开始时刻 };旧版的数组照样读得进来,写回时换成新格式。
+  assert.deepEqual(stored, {}, '旧版写进去的子代理 id 应当被摘掉,实际 ' + JSON.stringify(stored))
 })
 
 test('notifier:轮询把 origin 传给 observeStatus —— 子代理行同样被挡', async () => {
