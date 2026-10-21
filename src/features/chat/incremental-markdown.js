@@ -10,7 +10,7 @@ import { mdToHtml, readFence, isClosingFence } from "../../shared/md-to-html.js"
 import { decorateCodeBlocks, mayContainMath } from "./chat-view.js";
 import { highlightCodeBlocks } from "./code-highlight.js";
 import { ensureKatex, isKatexReady } from "./katex-loader.js";
-import { hydrateLocalImages } from "./local-images.js";
+import { hydrateLocalImages, settleFailedImages } from "./local-images.js";
 
 /// 与 web 一致:最后这两个块视为仍在变化,不做冻结。
 export const UNSTABLE_TAIL_BLOCKS = 2;
@@ -69,6 +69,7 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
   state.text = source;
   // "](/" 或 "](</" 是占位图产出的必要条件,没有就不扫 DOM(流式每帧都会走到这里)。
   if (md && (source.includes("](/") || source.includes("](</"))) hydrateLocalImages(host, loadLocalImage);
+  settleFailedImages(host);
 
   decorateCodeBlocks(host);
   void highlightCodeBlocks(host, { streaming });

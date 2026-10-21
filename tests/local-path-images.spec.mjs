@@ -5,7 +5,7 @@
  * assistant-markdown-path-images.client.spec.tsx、Mac 7d3e1cd:
  * - 只放行以 "/" 开头且不是 "//" 的地址;相对路径、file://、Windows 路径保持原样文字。
  * - 只有助手正文(localImages 模式)产出占位图,其余 mdToHtml 调用点行为不变。
- * - 占位图经宿主 GET /api/file?path=… 读成 blob: 挂上;失败换成 alt 文字(alt 空则原路径)。
+ * - 占位图经宿主 GET /api/file?path=… 读成 blob: 挂上;失败换成「图片无法预览 · alt」(alt 空则原路径)。
  * - api-client.getBlob 带 cookie、走 401 重试,path 按 URLSearchParams 编码。
  *
  * 跑法:node --test 'tests/*.spec.mjs'
@@ -134,7 +134,7 @@ test('占位图被读成 blob: 并挂上;同路径命中缓存只读一次', asy
   assert.deepEqual(calls, ['/tmp/hit.png'])
 })
 
-test('读取失败或非图片时换成 alt 文字(alt 为空显示原路径)', async () => {
+test('读取失败或非图片时换成「图片无法预览 · alt」(alt 为空显示原路径)', async () => {
   const root = host(mdToHtml('![图注](/tmp/missing.png)\n\n![](/tmp/empty-alt.png)\n\n![t](/tmp/a.txt)',
     { localImages: true }))
   hydrateLocalImages(root, async (path) => {
@@ -144,7 +144,7 @@ test('读取失败或非图片时换成 alt 文字(alt 为空显示原路径)', 
   await flush()
   assert.equal(root.querySelectorAll('img').length, 0)
   const alts = [...root.querySelectorAll('.md-img-alt')].map((node) => node.textContent)
-  assert.deepEqual(alts, ['图注', '/tmp/empty-alt.png', 't'])
+  assert.deepEqual(alts, ['图片无法预览 · 图注', '图片无法预览 · /tmp/empty-alt.png', '图片无法预览 · t'])
 })
 
 test('无扩展名的附件对象(宿主回 octet-stream)按文件头识别成图片,与 web/Mac 一致', async () => {
@@ -167,7 +167,7 @@ test('无扩展名的附件对象(宿主回 octet-stream)按文件头识别成�
     assert.equal(img.alt, 'Selector')
     assert.equal(created.length, 1)
     assert.equal(created[0].type, 'image/jpeg')
-    assert.deepEqual([...root.querySelectorAll('.md-img-alt')].map((n) => n.textContent), ['bin'])
+    assert.deepEqual([...root.querySelectorAll('.md-img-alt')].map((n) => n.textContent), ['图片无法预览 · bin'])
   } finally {
     URL.createObjectURL = original
   }

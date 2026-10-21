@@ -68,7 +68,8 @@ function renderInlineMarkup(escaped, options) {
     // escapeAttribute 会把 &quot; 二次转义成 &amp;quot;,把正文写坏。
     const altAttr = alt.replace(/'/g, "&#39;");
     if (isSafeImageSrc(src)) {
-      return `<img src="${src}" alt="${altAttr}" loading="lazy" referrerpolicy="no-referrer">`;
+      // md-img:加载失败时换成失败文字(features/chat/local-images.js)。
+      return `<img class="md-img" src="${src}" alt="${altAttr}" loading="lazy" referrerpolicy="no-referrer">`;
     }
     // 占位不带 src:加载前浏览器按 alt 显示文字;失败时调用方换成 alt 文字。
     const localPath = options?.localImages ? localImagePath(src) : null;

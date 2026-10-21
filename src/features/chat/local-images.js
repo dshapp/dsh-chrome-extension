@@ -9,14 +9,17 @@
 // 只对 xmlhttprequest/websocket 摘头。走 connection.getBlob 就复用了 fetch 的
 // 鉴权重试与围栏绕行。
 //
-// 失败(404/403/413/非图片/解码失败)时换成 alt 文字(web MarkdownImage 的
-// imageAlt:alt 为空时显示原路径)。
+// 失败(404/403/413/非图片/解码失败)时换成「图片无法预览 · alt」(web
+// LoadedMarkdownImage 失败分支 `${failed} · ${alt || destination}`,Mac 同款)。
+// 远程图(https/data:)失败走同一段文字,见文件末尾的捕获阶段 error 监听。
 //
 // 是不是图片按**字节**判,不只看 Content-Type:宿主 /api/file 按扩展名给 MIME,
 // 无扩展名的文件一律 application/octet-stream —— 截图附件 ~/.dsh/attachments/v1/
 // objects/<sha256> 正是这种(present / read_image 产出的路径)。web 直接
 // <img src=/api/file…> 由浏览器按内容嗅探解码,Mac RemoteMarkdownImageLoader 用
 // NSImage(data:) 也按内容解码,两端都能显示;只认 MIME 的话只有扩展里会退化成 alt。
+
+import { t } from "../../shared/i18n.js";
 
 /// blob: URL 缓存上限。每条都钉着一份图片字节,与 node-views 的附件图片缓存
 /// 同一上限;淘汰时 revoke,已画出的 <img> 不受影响(解码结果留在元素上),
@@ -61,6 +64,10 @@ const IMAGE_SIGNATURES = [
 const SNIFF_LENGTH = 14;
 
 /// 按文件头识别位图类型;不是已知位图返回 null。
+/// 远程图加载失败过的地址。流式尾部每帧重建 <img>,记住失败才能直接画成失败文字,
+/// 不会每帧重新请求、碎图标闪一下。
+const failedSources = new Set();
+
 export function sniffImageType(bytes) {
   for (const { type, bytes: pattern } of IMAGE_SIGNATURES) {
     if (bytes.length < pattern.length) continue;
@@ -106,19 +113,20 @@ function entryFor(path, load) {
   return entry;
 }
 
-function showAlt(img, path) {
+/// 已解析出地址、却没能显示的图:换成 web .imageAlt 的失败文字,不可点、不重试。
+function showFailed(img, source) {
   const span = document.createElement("span");
   span.className = "md-img-alt";
-  span.textContent = img.alt || path;
+  span.textContent = `${t("image.failed")} · ${img.alt || source}`;
   img.replaceWith(span);
 }
 
 function paint(img, path, entry) {
   if (entry.url) {
-    img.addEventListener("error", () => showAlt(img, path), { once: true });
+    img.addEventListener("error", () => showFailed(img, path), { once: true });
     img.src = entry.url;
   } else {
-    showAlt(img, path);
+    showFailed(img, path);
   }
 }
 
@@ -138,6 +146,26 @@ export function hydrateLocalImages(root, load) {
     if (entry.pending) void entry.pending.then(() => paint(img, path, entry));
     else paint(img, path, entry);
   }
+}
+
+/// 把 root 下已知失败过的远程图直接换成失败文字(流式重建后调用)。
+export function settleFailedImages(root) {
+  if (failedSources.size === 0) return;
+  for (const img of root.querySelectorAll("img.md-img")) {
+    const source = img.getAttribute("src");
+    if (failedSources.has(source)) showFailed(img, source);
+  }
+}
+
+// <img> 的 error 不冒泡,只能在捕获阶段接。只认 md-to-html 产出的远程图。
+if (typeof document !== "undefined") {
+  document.addEventListener("error", (event) => {
+    const img = event.target;
+    if (!img?.classList?.contains?.("md-img")) return;
+    const source = img.getAttribute("src");
+    failedSources.add(source);
+    showFailed(img, source);
+  }, true);
 }
 
 /// 仅供测试观察缓存上限。
