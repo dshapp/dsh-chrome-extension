@@ -72,6 +72,17 @@ export function presentedFiles(seq, data) {
   return files.length ? { turn, files } : null;
 }
 
+/// `exit_plan_mode` 提交的计划(web ui-plan `submittedPlan` / mac SubmittedPlan):
+/// 读参数里的 plan markdown,标题取其首行 `# ` 标题;没有标题的计划不出卡片。
+export function submittedPlan(callId, argsRaw) {
+  let args;
+  try { args = JSON.parse(argsRaw); } catch { return null; }
+  const markdown = args?.plan;
+  if (typeof markdown !== "string") return null;
+  const title = /^#\s+(\S[^\r\n]*)/.exec(markdown.trim())?.[1];
+  return title ? { callId, title, markdown } : null;
+}
+
 /// 行内代码 mention 命名的那一个产出路径:精确路径匹配,或恰好唯一一个路径的 basename
 /// (两个路径共享同一 basename 时返回 null,而非猜测)(web `onlyPathWithBasename`)。
 export function resolveMention(value, paths) {

@@ -20,7 +20,7 @@ import { EVT } from "../../platform/dsh/rpc-methods.js";
 import { t } from "../../shared/i18n.js";
 import { expandAssistantStream } from "./assistant-stream.js";
 import { mergeTurnRailItems, clipTurnPreview, TurnRailPreview } from "./turn-rail.js";
-import { producedPath, presentedFiles } from "./turn-deliverables.js";
+import { producedPath, presentedFiles, submittedPlan } from "./turn-deliverables.js";
 import { changesAnnouncement } from "../changes/turn-changes.js";
 import { buildTurnProcessSpecs } from "./turn-process.js";
 import { projectReferenceLabels, sessionRecallReferences } from "./references.js";
@@ -238,6 +238,8 @@ export function createSessionStore() {
       // 每轮最新一条 `workspace/changes` 公告的 seq(turn → seq)。摘要与逐文件
       // 对比都按这个 seq 去宿主读(见 features/changes),同轮的新公告覆盖旧的。
       changesSeqByTurn: new Map(),
+      // 已关闭轮次里 exit_plan_mode 提交的计划(turn → 计划,按调用顺序;web ui-plan PlanCards)。
+      plansByTurn: new Map(),
       deliverablesRevision: 0,
       // Turn process 折叠规格(turn → spec),渲染层用它判断成员与折叠头文案。
       turnProcessByTurn: new Map(),
@@ -1716,6 +1718,24 @@ export function createSessionStore() {
       state.producedPathsByTurn = nextProduced;
       state.deliverablesRevision += 1;
     }
+    // 计划卡(web ui-plan PlanCards / mac attachSubmittedPlans):含程序内派发的子调用,
+    // 只收该轮已结束的调用 —— 审阅中由审批面板承载,不重复出卡。
+    const planCalls = [...tools.values()]
+      .filter((tool) => tool.name === "exit_plan_mode" && !tool.preparing && turnEndBoundaryAfter(tool.startSeq))
+      .sort((a, b) => a.startSeq - b.startSeq);
+    const nextPlans = new Map();
+    for (const tool of planCalls) {
+      const plan = submittedPlan(tool.callId, tool.argsRaw ?? "");
+      if (!plan) continue;
+      const turn = num(tool.turn) ?? 0;
+      if (!nextPlans.has(turn)) nextPlans.set(turn, []);
+      nextPlans.get(turn).push(plan);
+    }
+    const planIds = (map) => new Map([...map].map(([turn, plans]) => [turn, plans.map((plan) => plan.callId)]));
+    if (!sameProducedMaps(planIds(state.plansByTurn), planIds(nextPlans))) {
+      state.plansByTurn = nextPlans;
+      state.deliverablesRevision += 1;
+    }
 
     // Turn process 折叠头:该轮以最终回答关闭后,把过程行收进一个折叠头(对齐 Mac)。
     // 折叠头自身 anchor = processStartSeq - 0.001,排在它折叠的首行之前。
@@ -1965,6 +1985,7 @@ export function createSessionStore() {
       producedPathsByTurn: state.producedPathsByTurn,
       presentedByTurn: state.presentedByTurn,
       changesSeqByTurn: state.changesSeqByTurn,
+      plansByTurn: state.plansByTurn,
       deliverablesRevision: state.deliverablesRevision,
       turnProcessByTurn: state.turnProcessByTurn
     };

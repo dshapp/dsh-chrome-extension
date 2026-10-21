@@ -671,6 +671,11 @@ button.turn-tail-stat[aria-expanded="true"] { background: var(--bg-raised); colo
   color: var(--text); font: inherit; font-size: 0.75rem; text-align: start; cursor: pointer;
 }
 .turn-present-menu-item:hover { background: var(--bg); color: var(--accent); }
+/* 计划卡(web ui-plan PlanCards):整行的交付卡,多张纵向排列;「打开」独立成整颗药丸。 */
+.turn-plans { display: flex; flex-direction: column; gap: 0.625rem; width: 100%; min-width: 0; }
+.turn-plans .turn-present-card { flex: none; }
+.turn-tail-node:has(.turn-plans) { align-self: stretch; }
+.turn-plan-open { border-radius: 999px; }
 .turn-present-more {
   align-self: center; border: 0; background: none; color: var(--link, var(--accent));
   font: inherit; font-size: 0.6875rem; cursor: pointer;

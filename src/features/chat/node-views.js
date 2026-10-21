@@ -906,10 +906,7 @@ function buildToolBody(node, model, context = {}) {
   if (node.name === "exit_plan_mode") {
     const plan = planText(node);
     if (plan) {
-      const card = el("div", "plan-inline md-body");
-      card.innerHTML = mdToHtml(plan);
-      decorateCodeBlocks(card);
-      wrap.append(card);
+      wrap.append(planDocument(plan));
       return wrap;
     }
   }
@@ -974,6 +971,14 @@ function buildToolBody(node, model, context = {}) {
   }
 
   return wrap.childElementCount ? wrap : null;
+}
+
+/// 计划文档正文:渲染后的 markdown(工具行详情与页脚计划卡共用)。
+function planDocument(markdown) {
+  const card = el("div", "plan-inline md-body");
+  card.innerHTML = mdToHtml(markdown);
+  decorateCodeBlocks(card);
+  return card;
 }
 
 function planText(node) {
@@ -1405,8 +1410,9 @@ function buildTurnStatPill({ className, icon, label, title, headline, build }) {
 /// seq 落点(`data.seq`),而 assistant step 的 seq 落在未闭合的轮次内部,服务端会以
 /// OPEN_TURN 拒绝。所以整个记录里只有这一行能发起分叉。
 export function createTurnTailNode(node, context = {}) {
-  const { onFork, presentedFiles, onOpenPath, onRevealPath } = context;
+  const { onFork, presentedFiles, submittedPlans, onOpenPath, onRevealPath } = context;
   const presented = typeof presentedFiles === "function" ? (presentedFiles(node.turn) ?? []) : [];
+  const plans = typeof submittedPlans === "function" ? (submittedPlans(node.turn) ?? []) : [];
   // 产出/present 的 path 是工作区相对路径;宿主 openWorkspacePath 只按自己的 cwd
   // 解析(实测相对路径会被 open 到宿主 home),所以这里先按会话 cwd 补成绝对路径。
   const openPath = (path) => { if (typeof onOpenPath === "function") onOpenPath(resolveToolPath(path, context.cwd)); };
@@ -1424,12 +1430,13 @@ export function createTurnTailNode(node, context = {}) {
   // (对齐 web selectDeliverables / Mac 的 gate:产出词表不再贡献页脚)。本轮产出的路径
   // 只喂给正文的行内 mention(见 updateAssistantNode),不再有自己的一行。
   const hasActions = node.messageId != null || hasUsage || hasTime;
-  if (!hasActions && !presented.length && changesSeq == null) return null;
+  if (!hasActions && !presented.length && !plans.length && changesSeq == null) return null;
 
   const wrap = el("div", "turn-tail-node");
   // 顺序对齐 web Deliverables.tsx:改动文件卡在最上,其后才是交付卡。
   if (changesSeq != null) wrap.append(buildChangedFiles(changesSeq, context, openPath));
   if (presented.length) wrap.append(buildPresentedFiles(presented, openPath, revealPath));
+  if (plans.length) wrap.append(buildPlanCards(plans));
 
   if (hasActions) {
     // 对齐 Mac 的 TurnTailIconActions:复制 → 分叉 → 用量 → 用时 → 时钟,是**同一行里
@@ -1621,6 +1628,37 @@ function buildPresentedFiles(files, onOpen, onReveal) {
       more.setAttribute("aria-expanded", String(expanded));
     });
     wrap.append(more);
+  }
+  return wrap;
+}
+
+/// 计划卡(web ui-plan PlanCards / mac PlanCard):每次 exit_plan_mode 提交一张,
+/// 沿用交付卡的外观;点卡片或「打开」在详情弹窗里看完整计划。
+function buildPlanCards(plans) {
+  const wrap = el("div", "turn-plans");
+  for (const plan of plans) {
+    const openPlan = () => openCardDetail({ title: plan.title, copyText: plan.markdown, build: () => planDocument(plan.markdown) });
+    const card = el("div", "turn-present-card");
+    card.setAttribute("role", "button");
+    card.tabIndex = 0;
+    card.title = plan.title;
+    card.setAttribute("aria-label", t("plan.openCard", { title: plan.title }));
+    const icon = el("span", "turn-present-icon file-type-markdown");
+    icon.append(lucideIcon(fileTypeIconName("plan.md"), { size: 20 }));
+    const body = el("div", "turn-present-body");
+    body.append(el("span", "turn-present-name", plan.title), el("span", "turn-present-desc", t("plan.cardKind")));
+    const open = el("button", "turn-present-open turn-plan-open", t("turn.open"));
+    open.type = "button";
+    open.tabIndex = -1;
+    open.addEventListener("click", (event) => { event.stopPropagation(); openPlan(); });
+    card.append(icon, body, open);
+    card.addEventListener("click", openPlan);
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openPlan();
+    });
+    wrap.append(card);
   }
   return wrap;
 }

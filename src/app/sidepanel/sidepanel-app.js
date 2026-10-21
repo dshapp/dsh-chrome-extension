@@ -92,6 +92,7 @@ export function createSidepanelApp(root, deps, options = {}) {
         // 与 present 交付清单(web ui-deliverables / mac TurnDeliverables)。
         producedPaths: (turn) => snap?.producedPathsByTurn?.get?.(turn) ?? [],
         presentedFiles: (turn) => snap?.presentedByTurn?.get?.(turn) ?? [],
+        submittedPlans: (turn) => snap?.plansByTurn?.get?.(turn) ?? [],
         deliverablesRevision: snap?.deliverablesRevision ?? null,
         // 本轮改动文件卡(web ChangedFiles / mac ChangedFilesCard):耐久事件只公告
         // turn 与 seq,清单与逐文件 diff 要按 seq 去宿主读;读到的结果由服务缓存,
