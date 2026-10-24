@@ -176,6 +176,39 @@ test("mounted guide polls until the host appears, then hands over exactly once",
   dom.window.close();
 });
 
+test("polling never folds the manual steps the user opened; only the user does", async () => {
+  const dom = new JSDOM('<body><div id="g" hidden></div></body>', { pretendToBeVisual: true });
+  const host = dom.window.document.querySelector("#g");
+  const replies = [
+    { ok: false, reason: NativeHostIssue.MISSING },
+    { ok: false, reason: NativeHostIssue.MISSING },
+    { ok: false, reason: NativeHostIssue.MISSING },
+    { ok: false, reason: NativeHostIssue.MISSING }
+  ];
+  const guide = mountSetupGuide(host, { os: "mac", intervalMs: 0, probe: async () => replies.shift() });
+  await guide.show(NativeHostIssue.MISSING);
+  const manual = () => host.querySelector("details.setup-manual");
+  assert.equal(manual().open, false, "folded by default");
+
+  manual().open = true;
+  const before = manual();
+  assert.equal(await guide.check({ quiet: true }), false);
+  assert.equal(manual(), before, "an unchanged background poll does not re-render");
+  assert.equal(manual().open, true);
+
+  assert.equal(await guide.check(), false, "a manual check re-renders");
+  assert.notEqual(manual(), before);
+  assert.equal(manual().open, true, "and keeps the user's choice");
+  guide.relabel();
+  assert.equal(manual().open, true, "language switch keeps it too");
+
+  manual().open = false;
+  assert.equal(await guide.check(), false);
+  assert.equal(manual().open, false, "folding is the user's choice as well");
+  guide.dispose();
+  dom.window.close();
+});
+
 test("fresh install opens the welcome page only when the host is not usable", async () => {
   const opened = [];
   const tabs = { create: async (options) => { opened.push(options.url); } };

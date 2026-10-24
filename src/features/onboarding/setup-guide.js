@@ -82,7 +82,7 @@ function appCard(links) {
 }
 
 /// 一键脚本卡片:一条命令完成检查与安装,手动步骤折叠在下面备查。
-function scriptCard(links, { alt, os }) {
+function scriptCard(links, { alt, os, manualOpen }) {
   const script = os === "win" ? INSTALL_SCRIPTS.win : INSTALL_SCRIPTS.unix;
   const where = os === "win" ? "setup.scriptWhereWin" : os === "mac" ? "setup.scriptWhereMac" : "setup.scriptWhereUnix";
   return '<section class="setup-card setup-card-script">'
@@ -90,12 +90,13 @@ function scriptCard(links, { alt, os }) {
     + '<span class="setup-note">' + escapeHtml(t(where)) + "</span></div>"
     + commandRow(script.command)
     + '<p class="setup-note">' + escapeHtml(t("setup.scriptBody")) + " " + link(script.url, t("setup.scriptView")) + "</p>"
-    + manualSteps(links)
+    + manualSteps(links, manualOpen)
     + "</section>";
 }
 
-function manualSteps(links) {
-  return '<details class="setup-manual"><summary>' + escapeHtml(t("setup.manual")) + "</summary>"
+/// 默认折叠;展开与否只由用户决定 —— manualOpen 是挂载方记下的用户选择,重绘时原样带回。
+function manualSteps(links, manualOpen = false) {
+  return '<details class="setup-manual"' + (manualOpen ? " open" : "") + "><summary>" + escapeHtml(t("setup.manual")) + "</summary>"
     + '<ol class="setup-steps">'
     + '<li><span class="setup-step-title">' + escapeHtml(t("setup.stepNode")) + " · " + link(links.node, t("setup.stepNodeLink")) + "</span></li>"
     + '<li><span class="setup-step-title">' + escapeHtml(t("setup.stepPnpm")) + "</span>" + commandRow(SETUP_COMMANDS.pnpm)
@@ -141,15 +142,15 @@ export function recommendsMacApp({ os, arch } = {}) {
 /**
  * 纯渲染。issue 取 NativeHostIssue 之一;os / arch 取 chrome.runtime.getPlatformInfo()
  * (os: "mac" | "linux" | "win" | …,arch: "arm64" | "x86-64" | …);
- * phase 为 waiting / checking / detected。
+ * phase 为 waiting / checking / detected;manualOpen 为「手动安装」折叠区是否展开(默认收起)。
  */
-export function renderSetupGuide({ issue = NativeHostIssue.MISSING, os = "unknown", arch = "", detail = "", phase = "waiting", lang } = {}) {
+export function renderSetupGuide({ issue = NativeHostIssue.MISSING, os = "unknown", arch = "", detail = "", phase = "waiting", manualOpen = false, lang } = {}) {
   const kind = KNOWN_ISSUES.has(issue) ? issue : NativeHostIssue.MISSING;
   const links = setupLinks(lang);
   const withApp = kind === NativeHostIssue.MISSING && recommendsMacApp({ os, arch });
   let body = "";
   if (kind === NativeHostIssue.MISSING) {
-    body = (withApp ? appCard(links) : "") + scriptCard(links, { alt: withApp, os });
+    body = (withApp ? appCard(links) : "") + scriptCard(links, { alt: withApp, os, manualOpen });
   } else if (kind === NativeHostIssue.FORBIDDEN || kind === NativeHostIssue.BROKEN) {
     body = repairCard(kind);
   }
@@ -208,10 +209,16 @@ export function mountSetupGuide(host, options) {
   let open = false;
   let timer = null;
   let probing = false;
+  // 「想手动一步步安装?」折叠区的展开状态只跟用户的点击走。render() 会整体替换
+  // innerHTML,不带回这个状态的话,每 3s 一次的轮询都会把用户展开的步骤收起来。
+  let manualOpen = false;
 
   const render = () => {
     if (!open) return;
-    host.innerHTML = renderSetupGuide({ issue, os: platform?.os ?? "unknown", arch: platform?.arch ?? "", detail, phase });
+    // 以 DOM 上的当前状态为准(用户刚点过 summary 也算),替换前先记下来。
+    const manual = host.querySelector("details.setup-manual");
+    if (manual) manualOpen = manual.open;
+    host.innerHTML = renderSetupGuide({ issue, os: platform?.os ?? "unknown", arch: platform?.arch ?? "", detail, phase, manualOpen });
   };
 
   const stopTimer = () => { if (timer) { win.clearInterval(timer); timer = null; } };
@@ -237,13 +244,17 @@ export function mountSetupGuide(host, options) {
     }
     // 状态可能变了(比如从"没装"变成"装了但起不来"),跟着换文案。
     const next = classifyNativeFailure(result?.reason) ?? (KNOWN_ISSUES.has(result?.reason) ? result.reason : null);
-    if (next && next !== issue) { issue = next; detail = result?.detail ?? result?.reason ?? ""; }
+    let changed = phase !== "waiting";
+    if (next && next !== issue) { issue = next; detail = result?.detail ?? result?.reason ?? ""; changed = true; }
     phase = "waiting";
-    render();
+    // 后台轮询结果没变就不重绘:重绘会冲掉滚动位置、选中的文字和「已复制」反馈。
+    if (changed) render();
     return false;
   }
 
   function hide() {
+    const manual = host.querySelector("details.setup-manual");
+    if (manual) manualOpen = manual.open;
     open = false;
     stopTimer();
     host.hidden = true;
