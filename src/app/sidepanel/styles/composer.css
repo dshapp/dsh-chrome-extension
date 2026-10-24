@@ -918,6 +918,11 @@
 
 /* 权限二次确认对话框 */
 #perm-confirm {
+  /* 视口居中:foundation.css 的 `*` 重置把 margin 清成 0,盖掉了 UA 默认的 margin:auto,
+     不显式写回来弹窗就贴在左上角。写法同 #settings-sheet / dialog.card-detail。 */
+  position: fixed;
+  inset: 0;
+  margin: auto;
   border: 1px solid var(--border); border-radius: var(--radius-xl);
   background: var(--bg-input); color: var(--text);
   padding: 1rem; max-inline-size: min(24rem, 90vw);
