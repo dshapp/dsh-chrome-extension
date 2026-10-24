@@ -112,3 +112,30 @@ body.setup-required #turn-rail { display: none !important; }
 
 .setup-detail { margin: 0; font-size: 11px; color: var(--text-faint); word-break: break-word; }
 .setup-links { display: flex; gap: 14px; font-size: 12px; }
+
+/* ── 首次使用 · API Key 弹窗(#key-onboarding,对齐 Mac DeepSeekOnboardingDialog)。
+   居中写法同 #settings-sheet:foundation 的 * 重置清掉了 UA 的 margin:auto。 ── */
+#key-onboarding {
+  position: fixed; inset: 0; margin: auto;
+  width: min(calc(100vw - 32px), 420px); max-width: min(calc(100vw - 32px), 420px);
+  height: fit-content; max-height: 88vh;
+  padding: 0; border: 1px solid var(--border); border-radius: 16px;
+  background: var(--bg); color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+#key-onboarding::backdrop { background: rgb(0 0 0 / 0.45); }
+.key-onb { display: flex; flex-direction: column; gap: 16px; padding: 22px 20px 18px; }
+.key-onb-head { display: flex; flex-direction: column; gap: 8px; }
+.key-onb-head h2 { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.4; }
+.key-onb-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-dim); }
+.key-onb-desc a { color: var(--link); text-decoration: none; }
+.key-onb-desc a:hover { text-decoration: underline; }
+.key-onb-field { display: flex; flex-direction: column; gap: 6px; }
+.key-onb-label { font-size: 12.5px; font-weight: 500; color: var(--text-dim); }
+.key-onb .set-secret .set-input { padding-top: 8px; padding-bottom: 8px; border-radius: 8px; }
+.key-onb .set-input[aria-invalid="true"] { border-color: var(--danger); }
+.key-onb-error { font-size: 12px; line-height: 1.5; color: var(--danger); }
+.key-onb-error:empty { display: none; }
+.key-onb-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.key-onb-actions .set-btn.ghost { border-color: transparent; background: transparent; color: var(--text-dim); padding-left: 0; padding-right: 0; }
+.key-onb-actions .set-btn.ghost:hover:not(:disabled) { background: transparent; color: var(--text); }

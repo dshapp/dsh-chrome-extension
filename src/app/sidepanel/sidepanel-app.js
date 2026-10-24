@@ -39,6 +39,8 @@ import { resolveSubmitMode, isSteerChord, DEFAULT_BUSY_ENTER, steerChordLabel } 
 import { isFirstUse, initializeDefaultWorkspace } from "../../features/workspaces/default-workspace.js";
 import { mountHistoryLoadOlder } from "./history-load-older.js";
 import { mountSetupGuide } from "../../features/onboarding/setup-guide.js";
+import { createApiKeyOnboarding } from "./api-key-onboarding.js";
+import { createSettingsService } from "../../features/settings/settings-service.js";
 import { isNativeHostSetupError } from "../../platform/dsh/native-host-error.js";
 import { probeHost } from "../../platform/dsh/native-supervisor.js";
 
@@ -53,6 +55,7 @@ export function createSidepanelApp(root, deps, options = {}) {
   let settingsView = null;
   let mainSurfaces = null;
   let setupGuide = null;
+  let apiKeyOnboarding = null;
   // 每会话草稿:切走时保存未发送文本,切回时恢复。
   const drafts = new Map();
   /// 草稿的唯一写入口 —— 顺带把「有没有未发送文字」同步给列表 store,
@@ -1798,6 +1801,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     historyDrawer?.relabel?.();
     historyDrawer?.refresh?.();
     setupGuide?.relabel();
+    apiKeyOnboarding?.relabel();
   }
 
   // ---- 首次使用引导 ----
@@ -1893,6 +1897,19 @@ export function createSidepanelApp(root, deps, options = {}) {
         }
       }
     );
+    // 首次使用第二步:连上 dsh 后若没有任何可用的模型提供方,弹 API Key 引导
+    // (Mac DeepSeekOnboardingDialog)。判定在 startConnection 里每次连上后跑一次。
+    apiKeyOnboarding = createApiKeyOnboarding({
+      dialog: document.querySelector("#key-onboarding"),
+      settingsService: createSettingsService(deps.connection),
+      formatError: format,
+      onConfigureOther: () => settingsView?.show("models"),
+      // 存好 key 后模型目录才有内容:刷新全局目录并重画底栏模型菜单,
+      // 用户关掉弹窗就能直接发第一条消息。
+      onSaved: () => {
+        deps.models.refresh().catch(() => {}).finally(() => dock.refreshModelMenu());
+      }
+    });
     mainSurfaces = mountMainSurfaces(document, {
       beforeOpen: () => { historyDrawer?.hide?.(); settingsView?.close(); trajectory.close(); findBar.close(); },
       onClose: ({ restoreFocus }) => { if (restoreFocus) elements.input.focus(); },
@@ -1990,6 +2007,8 @@ export function createSidepanelApp(root, deps, options = {}) {
       deps.models.refresh(),
       loadBusyEnter()
     ]);
+    // 不阻塞会话恢复:判定要读提供方/设置/凭证三份事实,读完才决定弹不弹。
+    void apiKeyOnboarding?.evaluate();
     const listed = deps.sessions.listStore.get();
     // 通知点击把侧栏拉起来的场景:优先打开通知指向的会话,盖过默认恢复。
     // 只认列表里存在的 id —— 会话可能在点击与启动之间被删掉。

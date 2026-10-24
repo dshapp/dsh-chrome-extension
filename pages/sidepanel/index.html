@@ -407,6 +407,10 @@
     <div id="settings-sheet-body"></div>
   </dialog>
 
+  <!-- 首次使用:连上 dsh 但还没有任何可用的模型提供方时,引导填 DeepSeek 官方
+       API Key(对齐 Mac DeepSeekOnboardingDialog)。内容由 api-key-onboarding.js 渲染。 -->
+  <dialog id="key-onboarding" aria-labelledby="key-onb-title"></dialog>
+
   <!-- 拖放落点提示。覆盖整个侧栏,所以挂在 body 层而不是 composer 内。
        pointer-events: none —— 它自己不能吃掉 drop 事件,事件由 body 上的监听接。 -->
   <div id="drop-overlay" hidden aria-hidden="true">
