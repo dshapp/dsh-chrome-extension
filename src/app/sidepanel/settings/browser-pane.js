@@ -1,6 +1,7 @@
 // 浏览器 pane:Agent 浏览器控制(CDP 桥)的状态灯 + 「网页搜索」,对齐 Mac
 // BrowserSettingsSection 的「连接」与「网页搜索」两段。Mac 那页另有插件 / 扩展两行,
-// 那是为了把扩展装上;用户能看到这个侧栏,说明两者都已就绪,所以这里不重复。
+// 那是为了把扩展装上;用户能看到这个侧栏,说明两者都已就绪,所以这里不重复安装入口,
+// 只在 dsh-chrome-control 有新版时于页顶给一行「更新」(对齐 Mac 插件行的更新)。
 //
 // 桥状态只在 service worker 里,由 createBridgeStatus 按秒轮询;变化时只重画那一行,
 // 整页重画会把用户正在操作的开关和下拉换掉。离开这一页要 stop(),轮询会唤醒 worker。
@@ -13,15 +14,28 @@ import {
   WEB_NAMESPACE, WEB_SEARCH_NAMESPACE, WEB_SEARCH_ENGINES,
   readWebSearchSettings, webSearchToggleOps, webSearchEngineOps
 } from "../../../features/settings/web-search-settings.js";
+import { createPluginManagerService } from "../../../features/settings/plugin-manager-service.js";
+import { createPluginUpdate, serverRestarter } from "../../../features/settings/plugin-update.js";
+import { pluginUpdateSection } from "./plugin-update-row.js";
 import { section, row, select, toggle, notice, statusLine, escapeHtml } from "./settings-ui.js";
 
-export function createBrowserPane({ host, deps, settingsService, showToast }) {
+/// 浏览器控制依赖的插件包名(Mac ChromeControlStore.pluginName)。
+export const CHROME_CONTROL_PLUGIN = "dsh-chrome-control";
+
+export function createBrowserPane({ host, deps, settingsService, showToast, serverOps }) {
   let snapshot = { namespaces: new Map(), writable: false };
   // 宿主读失败时的提示;只替换网页搜索那一段,桥那一行照常显示。
   let loadError = null;
   let busy = false;
   let loadGeneration = 0;
   let bridge = null;
+  // 更新那一行有自己的槽位:状态一变只重画它,不碰下面用户正操作的开关和下拉。
+  const pluginUpdate = createPluginUpdate({
+    name: CHROME_CONTROL_PLUGIN,
+    pluginManager: createPluginManagerService(deps.connection),
+    restart: serverRestarter(serverOps),
+    onChange: () => paintUpdate()
+  });
   const bridgeStatus = createBridgeStatus({
     onChange: (next) => {
       // 行在不在取决于 available:它一变就得整页重画;之后的连接态变化只补那一行。
@@ -97,8 +111,29 @@ export function createBrowserPane({ host, deps, settingsService, showToast }) {
     });
   }
 
+  function updateHtml() {
+    return pluginUpdateSection(pluginUpdate, { name: CHROME_CONTROL_PLUGIN, buttonId: "set-browser-plugin-update" });
+  }
+
+  function paintUpdate() {
+    const slot = host.querySelector("#set-browser-update");
+    if (!slot) return;
+    slot.innerHTML = updateHtml();
+    bindUpdate();
+  }
+
+  function bindUpdate() {
+    host.querySelector("#set-browser-plugin-update")?.addEventListener("click", async () => {
+      await pluginUpdate.update();
+      // 新版插件可能带来新的设置项:重读一次网页搜索那一段。
+      await loadSettings();
+    });
+  }
+
   function render() {
-    host.innerHTML = bridgeSection() + webSearchSection();
+    host.innerHTML = '<div id="set-browser-update">' + updateHtml() + "</div>"
+      + bridgeSection() + webSearchSection();
+    bindUpdate();
     host.querySelector("#set-web-search")?.addEventListener("change", (event) => {
       write(WEB_NAMESPACE, webSearchToggleOps(event.target.checked));
     });
@@ -142,6 +177,8 @@ export function createBrowserPane({ host, deps, settingsService, showToast }) {
 
   async function refresh() {
     bridgeStatus.start();
+    // 问 registry 要走网络:每进一次这一页查一次,不进按秒的轮询。
+    pluginUpdate.check();
     await loadSettings();
   }
 

@@ -175,7 +175,7 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
     }),
     // 浏览器:Agent 浏览器控制状态 + 网页搜索开关与引擎,对齐 Mac BrowserSettingsSection。
     browser: createBrowserPane({
-      host: view.querySelector("#settings-pane-browser"), deps, settingsService, showToast
+      host: view.querySelector("#settings-pane-browser"), deps, settingsService, showToast, serverOps
     }),
     // 快捷键页是命令表的纯视图:不读宿主设置,所以不参与 invalidateHostPanes。
     shortcuts: createShortcutsPane({

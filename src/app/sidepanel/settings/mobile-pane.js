@@ -12,9 +12,11 @@
 import { t } from "../../../shared/i18n.js";
 import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import { formatRelativeTime } from "../../../features/sessions/session-row-trailing.js";
-import { createMobileAccess, MobilePhase } from "../../../features/mobile-access/mobile-access.js";
+import { createMobileAccess, MobilePhase, MOBILE_BRIDGE_PLUGIN } from "../../../features/mobile-access/mobile-access.js";
 import { qrSvg } from "../../../features/mobile-access/qr-svg.js";
 import { createPluginManagerService } from "../../../features/settings/plugin-manager-service.js";
+import { createPluginUpdate, serverRestarter } from "../../../features/settings/plugin-update.js";
+import { pluginUpdateSection } from "./plugin-update-row.js";
 import { section, row, button, statusLine, escapeHtml, textInput } from "./settings-ui.js";
 
 /// 手机是在这一页开着的时候扫码的,所以轮询而不是只读一次(与 Mac 同频)。
@@ -42,9 +44,19 @@ export function presenceText(device, now = Date.now()) {
 }
 
 export function createMobilePane({ host, sheet, deps, serverOps }) {
+  const pluginManager = createPluginManagerService(deps.connection);
+  // 装完 / 更新完插件、宿主说要重启时用。返回 false 时界面说"重启后生效"。
+  const restartServer = serverRestarter(serverOps);
   const access = createMobileAccess({
     connection: deps.connection,
-    pluginManager: createPluginManagerService(deps.connection),
+    pluginManager,
+    onChange: () => render()
+  });
+  // 插件有新版时页顶给一行「更新」;更新完要重启服务,和一键安装走同一条重启路。
+  const pluginUpdate = createPluginUpdate({
+    name: MOBILE_BRIDGE_PLUGIN,
+    pluginManager,
+    restart: restartServer,
     onChange: () => render()
   });
   const state = access.state;
@@ -101,6 +113,8 @@ export function createMobilePane({ host, sheet, deps, serverOps }) {
   function codeBlock() {
     // 安装途中服务会重启,状态会短暂报错:整段都只显示进度。
     if (state.installing) return placeholder("loader", t("mob.installing"), "", "");
+    // 更新插件同理:服务在重启,这期间的"未安装 / 出错"都不是真的。
+    if (pluginUpdate.state.updating) return placeholder("loader", t("plug.updating"), "", "");
     switch (state.phase) {
       case MobilePhase.ready: {
         if (state.pairingUrl) {
@@ -146,7 +160,8 @@ export function createMobilePane({ host, sheet, deps, serverOps }) {
   }
 
   function render() {
-    const html = relaySection() + devicesSection()
+    const html = pluginUpdateSection(pluginUpdate, { name: MOBILE_BRIDGE_PLUGIN, buttonId: "mob-plugin-update" })
+      + relaySection() + devicesSection()
       + section({ body: '<div class="mob-pair" id="mob-pair">' + codeBlock() + "</div>" });
     if (html === painted) return;
     painted = html;
@@ -168,6 +183,11 @@ export function createMobilePane({ host, sheet, deps, serverOps }) {
     host.querySelector("#mob-add")?.addEventListener("click", () => run(() => access.pair()));
     host.querySelector("#mob-new-code")?.addEventListener("click", () => run(() => access.pair()));
     host.querySelector("#mob-install")?.addEventListener("click", () => access.install({ restart: restartServer }));
+    host.querySelector("#mob-plugin-update")?.addEventListener("click", async () => {
+      await pluginUpdate.update();
+      // 服务重启过,桥接也换了新代码:重读一次,别等下一拍轮询。
+      await access.refresh();
+    });
     host.querySelector("#mob-copy")?.addEventListener("click", copyPairing);
     for (const link of host.querySelectorAll("[data-mob-rename]")) {
       link.addEventListener("click", () => {
@@ -191,18 +211,6 @@ export function createMobilePane({ host, sheet, deps, serverOps }) {
     render();
     clearTimeout(copiedTimer);
     copiedTimer = setTimeout(() => { copied = false; render(); }, 1500);
-  }
-
-  /// 装完插件、宿主说要重启时用:经 chrome-daemon 重启 dsh web。
-  /// 返回 false = 这台机器上重启不了(daemon 没跑 / 太老),由界面说"重启后生效"。
-  async function restartServer() {
-    if (!serverOps) return false;
-    try {
-      const result = await serverOps.restart();
-      return Boolean(result?.started);
-    } catch {
-      return false;
-    }
   }
 
   /// 改名面板:预填、聚焦全选、回车提交、Esc 取消;失败原地解释,不关面板
@@ -264,6 +272,8 @@ export function createMobilePane({ host, sheet, deps, serverOps }) {
     // 重新进这一页先画一次手头的状态,再去读;轮询只在这一页可见时跑。
     painted = "";
     render();
+    // 问 registry 要走网络:每进一次这一页查一次,不放进 3 秒轮询,也不挡配对码。
+    pluginUpdate.check();
     await access.refresh();
     // 桥接还留着一张有效的码就接着用它:重开这一页不该把上一张作废。
     if (state.phase === MobilePhase.ready && !state.pairingUrl) await access.pair();
