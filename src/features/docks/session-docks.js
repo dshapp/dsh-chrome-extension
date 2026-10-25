@@ -257,11 +257,14 @@ export function formatDuration(ms) {
 }
 
 /// 上下文占用比例(0..1)。projectedTokens 优先——它含尚未计入的预估。
+/// 对齐 Mac SessionStore.contextOccupancy:窗口或已用量任一缺失都算"没有读数"(null),
+/// 不把缺失的已用量当 0 —— 否则刚建的空会话会画出一枚 0% 的圈。
 export function contextRatio(pressure) {
   if (!pressure) return null;
   const window = pressure.contextWindow;
   if (!Number.isFinite(window) || window <= 0) return null;
-  const used = pressure.projectedTokens ?? pressure.pressureTokens ?? 0;
+  const used = pressure.projectedTokens ?? pressure.pressureTokens;
+  if (!Number.isFinite(used)) return null;
   return Math.max(0, Math.min(1, used / window));
 }
 
@@ -422,8 +425,11 @@ export function mountStatsBar(trigger, menu, { onOpenTrajectory } = {}) {
     set({ contextPressure, sessionStats, tokenUsage, contextBreakdown, presetName, trajectoryEntry = false }) {
       const ratio = contextRatio(contextPressure);
       const rows = statsRows(sessionStats, tokenUsage);
-      // 上下文、统计都没有时整颗药丸消失,底栏不留空位;有轨迹入口时它必须留下。
-      trigger.hidden = ratio == null && rows.length === 0 && !(trajectoryEntry && onOpenTrajectory);
+      // 对齐 Mac ComposerDock.ContextMeter:只有拿到上下文占用读数才画这枚圈。
+      // 新建会话页(会话已建、还没跑过一轮)没有读数,圈不出现 —— 以前只要有
+      // 会话就为了轨迹入口留着一枚 0% 的空圈。统计行与轨迹入口都折叠在浮层里,
+      // 随圈一起出现。
+      trigger.hidden = ratio == null;
       if (trigger.hidden) {
         menu.replaceChildren();
         menu.hidePopover?.();
@@ -431,65 +437,57 @@ export function mountStatsBar(trigger, menu, { onOpenTrajectory } = {}) {
       }
 
       // ── 触发钮:只剩一枚圆环,读数全部移进详情浮层 ──
-      const pct = ratio == null ? null : Math.round(ratio * 100);
-      trigger.classList.toggle("warn", ratio != null && ratio >= 0.75 && ratio < 0.9);
-      trigger.classList.toggle("critical", ratio != null && ratio >= 0.9);
-      if (ring) {
-        // 环常驻:没有上下文读数时(只有统计行)画一圈空槽,
-        // 否则按钮会变成一颗没有任何内容的空药丸。
-        ring.style.setProperty("--stats-pct", `${pct ?? 0}%`);
-      }
+      const pct = Math.round(ratio * 100);
+      trigger.classList.toggle("warn", ratio >= 0.75 && ratio < 0.9);
+      trigger.classList.toggle("critical", ratio >= 0.9);
+      if (ring) ring.style.setProperty("--stats-pct", `${pct}%`);
       // 不挂 title:hover 气泡与点开的浮层内容重复。读数只留给浮层,
       // aria-label 仍带上摘要,读屏用户不点开也知道当前占用。
       const summary = statsText(sessionStats, tokenUsage);
-      const label = [pct != null ? t("context.used", { percent: String(pct) }) : null, summary]
+      const label = [t("context.used", { percent: String(pct) }), summary]
         .filter(Boolean).join("  ·  ");
-      trigger.setAttribute("aria-label", label || t("stats.title"));
+      trigger.setAttribute("aria-label", label);
 
       // ── 详情浮层 ──
       menu.replaceChildren();
-      if (ratio != null) {
-        const wrap = el("div", "context-meter");
-        if (ratio >= 0.9) wrap.classList.add("critical");
-        else if (ratio >= 0.75) wrap.classList.add("warn");
-        const head = el("div", "stats-menu-head");
-        head.append(el("span", "stats-menu-title", t("context.used", { percent: String(pct) })));
-        head.append(el("span", "stats-menu-sub", t("context.detail", {
-          used: formatBreakdownTokens(contextPressure.projectedTokens ?? contextPressure.pressureTokens ?? 0),
-          total: formatBreakdownTokens(contextPressure.contextWindow)
-        })));
-        wrap.append(head);
-        // 当前 agent 预设名(原来挂在输入卡下方的统计行,那行已撤掉)。
-        if (presetName) wrap.append(el("div", "stats-menu-preset", presetName));
-        // 分段条:按 system/tools/messages 的比例分色(对齐 Mac 的三色段)。
-        const bar = el("div", "context-meter-bar");
-        for (const part of contextSegments(ratio, contextBreakdown)) {
-          const seg = el("div", `context-seg context-seg-${part.kind}`);
-          seg.style.inlineSize = `${part.fraction * 100}%`;
-          bar.append(seg);
-        }
-        wrap.append(bar);
-        // 图例:三行"色块 + 名称 + 估算 token 数"。
-        if (contextBreakdown) {
-          const legend = el("div", "context-legend");
-          const rows = [
-            ["system", t("context.system"), contextBreakdown.systemTokens],
-            ["tools", t("context.tools"), contextBreakdown.toolsTokens],
-            ["messages", t("context.messages"), contextBreakdown.messageTokens]
-          ];
-          for (const [kind, name, tokens] of rows) {
-            const row = el("div", "context-legend-row");
-            row.append(el("span", `context-dot context-seg-${kind}`));
-            row.append(el("span", "context-legend-label", name));
-            row.append(el("span", "context-legend-value", `~${formatBreakdownTokens(Number(tokens) || 0)}`));
-            legend.append(row);
-          }
-          wrap.append(legend);
-        }
-        menu.append(wrap);
+      const wrap = el("div", "context-meter");
+      if (ratio >= 0.9) wrap.classList.add("critical");
+      else if (ratio >= 0.75) wrap.classList.add("warn");
+      const head = el("div", "stats-menu-head");
+      head.append(el("span", "stats-menu-title", t("context.used", { percent: String(pct) })));
+      head.append(el("span", "stats-menu-sub", t("context.detail", {
+        used: formatBreakdownTokens(contextPressure.projectedTokens ?? contextPressure.pressureTokens ?? 0),
+        total: formatBreakdownTokens(contextPressure.contextWindow)
+      })));
+      wrap.append(head);
+      // 当前 agent 预设名(原来挂在输入卡下方的统计行,那行已撤掉)。
+      if (presetName) wrap.append(el("div", "stats-menu-preset", presetName));
+      // 分段条:按 system/tools/messages 的比例分色(对齐 Mac 的三色段)。
+      const bar = el("div", "context-meter-bar");
+      for (const part of contextSegments(ratio, contextBreakdown)) {
+        const seg = el("div", `context-seg context-seg-${part.kind}`);
+        seg.style.inlineSize = `${part.fraction * 100}%`;
+        bar.append(seg);
       }
-      // 没有上下文读数时上面那段不会渲染,预设名在这里补一个落点。
-      if (ratio == null && presetName) menu.append(el("div", "stats-menu-preset", presetName));
+      wrap.append(bar);
+      // 图例:三行"色块 + 名称 + 估算 token 数"。
+      if (contextBreakdown) {
+        const legend = el("div", "context-legend");
+        const rows = [
+          ["system", t("context.system"), contextBreakdown.systemTokens],
+          ["tools", t("context.tools"), contextBreakdown.toolsTokens],
+          ["messages", t("context.messages"), contextBreakdown.messageTokens]
+        ];
+        for (const [kind, name, tokens] of rows) {
+          const row = el("div", "context-legend-row");
+          row.append(el("span", `context-dot context-seg-${kind}`));
+          row.append(el("span", "context-legend-label", name));
+          row.append(el("span", "context-legend-value", `~${formatBreakdownTokens(Number(tokens) || 0)}`));
+          legend.append(row);
+        }
+        wrap.append(legend);
+      }
+      menu.append(wrap);
       if (rows.length) {
         const list = el("dl", "stats-rows");
         for (const row of rows) {
