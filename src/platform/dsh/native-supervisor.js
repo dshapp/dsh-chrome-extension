@@ -74,6 +74,31 @@ export async function ensureServerRunning(target, options = {}) {
 }
 
 /**
+ * Ask the native host to restart dsh web: stop whatever dsh web listens on the
+ * configured address, then start a fresh one there (the settings page's
+ * "Restart server", the Mac app's restart).
+ *
+ * No cooldown: this only ever runs because the user pressed a button. An older
+ * host answers { ok:false, reason:"unknown-cmd" }; callers fall back to the
+ * chrome-daemon's restart in that case.
+ */
+export async function restartServer(target = "web", options = {}) {
+  if (!canCallNative()) return { ok: false, reason: "native-messaging-unavailable" };
+  if (target !== "web") return { ok: false, reason: "unknown-target" };
+  const message = { cmd: "restart", target };
+  const url = options.backendUrl || (await createSettings().getBackendUrl());
+  const { host, port } = parseHostPort(url);
+  if (host) message.host = host;
+  if (port) message.port = port;
+  try {
+    const reply = await chrome.runtime.sendNativeMessage(HOST_NAME, message);
+    return reply || { ok: false, reason: "empty-reply" };
+  } catch (error) {
+    return nativeFailure(error);
+  }
+}
+
+/**
  * Probe the installed host without starting anything. Used by the settings
  * page to show whether the launcher is installed and resolvable.
  */

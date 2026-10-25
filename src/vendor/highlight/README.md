@@ -24,11 +24,18 @@ npx esbuild REBUILD-entry.mjs --bundle --format=esm --minify --outfile=highlight
 
 ## 收录的语言
 
-javascript、typescript、json、bash、python、go、rust、java、sql、yaml、xml(含 HTML)、
-css、markdown、diff。
+当前产物基于 highlight.js 11.12.0,共 42 种:
+
+javascript、typescript、json、bash、shell、python、go、rust、java、kotlin、scala、groovy、
+c、cpp、csharp、objectivec、swift、dart、php、ruby、perl、lua、r、haskell、elixir、
+sql、graphql、protobuf、yaml、ini(含 toml)、xml(含 HTML/SVG/Vue)、css、scss、less、
+markdown、diff、dockerfile、makefile、powershell、nginx、http、plaintext。
+
+对齐 web 端代码块(Shiki 按需加载约 60 种语言)的常见覆盖面;整包仍按需懒加载,
+不挡侧栏首帧。
 
 未收录的语言不会报错,只是不着色 —— 见 `features/chat/code-highlight.js` 的降级处理。
-需要新增语言时,在 `REBUILD-entry.mjs` 里加一行 import 与一行 `registerLanguage`,
+需要新增语言时,在 `REBUILD-entry.mjs` 里加一行 import 并把它放进 `registerLanguage` 的表,
 然后重跑上面的命令。
 
 ## 许可

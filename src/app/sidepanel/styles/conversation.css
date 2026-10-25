@@ -184,6 +184,12 @@ span.ref-chip { cursor: default; }
 .md-body li.task-list-item { list-style: none; margin-inline-start: -18px; }
 .md-body li.task-list-item input[type="checkbox"] { margin-inline-end: 0.375rem; }
 .md-body a { text-decoration: underline; color: var(--link); }
+/* 正文里的文件链接([a.tsx:12](<src/a.tsx#L12>)):对齐 web MarkdownText fileLink ——
+   文件类型字形 + 标签,点了交宿主打开(features/chat/link-actions.js)。 */
+.md-body a.md-file-link { text-decoration: none; cursor: pointer; overflow-wrap: anywhere; }
+.md-body a.md-file-link:hover, .md-body a.md-file-link:focus-visible { text-decoration: underline; }
+.md-file-link-icon { display: inline-flex; vertical-align: -0.125em; margin-inline-end: 0.1875rem; }
+.md-file-link-icon svg { display: block; }
 .md-body blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--border); color: var(--text-dim); }
 .md-body hr { margin-block: 1rem; border: 0; border-block-start: 1px solid var(--border); }
 .md-body .md-table {

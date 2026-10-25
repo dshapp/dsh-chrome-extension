@@ -2,11 +2,13 @@
 // 一组服务信息(状态 / 版本 / 地址 / 主目录 / 日志)+ 末尾的重启。
 //
 // 与 Mac 的差别只在能做到的范围:那边能重启 App 本体,扩展不能起进程,
-// 所以末段只重启 dsh web,文案也如实写成「重启服务」。
+// 所以末段只重启 dsh web,文案也如实写成「重启服务」。重启本身由本地启动器
+// (Native Messaging)执行,做法同 Mac:按端口找到 dsh web,停掉,再在同一地址
+// 起新的;启动器太老时退回 chrome-daemon。重启完立刻重连,不等退避。
 //
 // 这一页刻意**不**提供后端地址输入框与宿主代理开关:版式以视觉稿为准。
-// 本地启动器则补了一行 —— 装了但没跑起来时,用户需要有个地方能让它再试一次,
-// 而启动器只在 dsh 启动时由插件注册,管不了"现在没起来"。
+// 本地启动器则补了一行,只展示它注册好了没有:dsh web 没起来由后台自动拉起,
+// 要换新服务用末段的「重启服务」,这一行不再放启动按钮。
 //
 // 「服务地址」是只读的一行,这一点不只是版式取舍 —— 它的权威方向常被记反:
 // 地址的源头是**扩展**(settings.getBackendUrl,默认 127.0.0.1:3080),
@@ -35,7 +37,7 @@ function connectionView(streamState, DshStreamState) {
   return { kind: "err", text: t("srv.disconnected") };
 }
 
-export function createServerPane({ host, deps, showToast, serverOps }) {
+export function createServerPane({ host, deps, showToast, serverOps, probe = probeHost }) {
   let hostInfo = null;
   let timer = null;
   // CDP 桥的状态。由 createBridgeStatus 轮询,变化时只重画那一行 ——
@@ -66,11 +68,7 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
   let dshRestartError = null;
   let dshUpdateError = null;
   let dshUpdateDone = false;
-  const launcherRow = createServerLauncherRow({
-    showToast,
-    formatErrorDetails: (error) => deps.formatErrorDetails?.(error) ?? String(error),
-    onChange: () => render()
-  });
+  const launcherRow = createServerLauncherRow();
   let refreshGeneration = 0;
   let dshLoadGeneration = 0;
 
@@ -260,10 +258,16 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
     return "srv.revealInFolder";
   }
 
+  /// 本地启动器自己就能重启(新版宿主在 status 里声明 restart 命令)。
+  /// 这时重启不依赖 chrome-daemon,daemon 缺席或太老也照样给这一段。
+  function launcherCanRestart() {
+    return launcher?.ok === true && Array.isArray(launcher.commands) && launcher.commands.includes("restart");
+  }
+
   /// 重启段。标题 + 说明 + 橙色警告 + 失败就地显示(对齐 Mac 的 restartRow)。
   /// 警告不能只放在 toast 里 —— 用户是在按下之前需要知道"这会中断会话"。
   function restartSection() {
-    if (!serverOps || dshUnsupported) return "";
+    if (!serverOps || (dshUnsupported && !launcherCanRestart())) return "";
     const hint = escapeHtml(t("srv.restartDesc"))
       + '<div class="set-warn">' + escapeHtml(t("srv.restartWarn")) + '</div>'
       + (dshRestartError ? '<div class="set-danger">' + escapeHtml(dshRestartError) + '</div>' : "");
@@ -328,7 +332,10 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
         // started:false 表示进程起了但端口没就绪 —— 此时日志路径比一句失败有用,
         // 所以它进的是就地显示的错误位,不是一闪而过的 toast。
         if (result?.started) {
-          showToast?.(t("srv.dshRestarted"));
+          showToast?.(t("srv.dshRestarted"), "success");
+          // 新服务已经在听了:立刻重连,而不是等下行流的退避计时器(对齐 Mac
+          // 重启后马上重新接上)。旧连接的会话状态由重连后的快照纠正。
+          deps.connection.restart?.();
           // 重启落地后重新查版本(对齐 Mac 的 .task(id: currentDshVersion)):
           // 装完再重启的话,这里报的才是真正在跑的那个版本,更新行也随之复位。
           dshUpdateDone = false;
@@ -342,7 +349,7 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
         // dist-tag 前进,装上一个用户没看过的版本。
         await serverOps.update(target);
         dshUpdateDone = true;
-        showToast?.(t("srv.dshUpdated"));
+        showToast?.(t("srv.dshUpdated"), "success");
       }
     } catch (error) {
       // dsh 不是 pnpm 装的:给出可执行的下一步,而不是一句失败。
@@ -392,7 +399,7 @@ export function createServerPane({ host, deps, showToast, serverOps }) {
       nextHostInfo = null;
     }
     // 只 probe 状态,不拉起进程 —— 打开设置页不该有副作用。
-    const nextLauncher = await probeHost().catch(() => null);
+    const nextLauncher = await probe().catch(() => null);
     if (generation !== refreshGeneration) return;
     hostInfo = nextHostInfo;
     launcher = nextLauncher;

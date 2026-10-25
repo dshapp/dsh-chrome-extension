@@ -4,6 +4,7 @@
 import { autoLinkUrls } from "./auto-link.js";
 import { isLocalImagePath, isSafeImageSrc } from "./image-src.js";
 import { splitMathSegments, renderMath } from "./math-render.js";
+import { externalHref, fileLinkTarget, webUrl } from "./link-targets.js";
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
 
@@ -29,6 +30,52 @@ const IMAGE_SYNTAX = new RegExp(
 );
 
 const HTML_UNESCAPES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+
+function unescapeHtml(text) {
+  return String(text ?? "").replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => HTML_UNESCAPES[e]);
+}
+
+// 行内链接 [label](dest "title")。dest 与图片同样两种写法:裸地址,或 &lt;…&gt;
+//(可含空格 —— 模型给带空格/中文的本地路径时常这么写,如
+// [a.tsx:12](<packages/app/a.tsx#L12>))。在转义态上匹配。
+// 前导 (?<!!):图片规则不认的 ![alt](dest) 按字面留在正文,不能再被当成链接吃掉。
+const LINK_SYNTAX = new RegExp(
+  "(?<!!)\\[([^\\]]+)\\]\\(" +
+  "(?:&lt;((?:(?!&lt;|&gt;)[^\\n])*)&gt;|([^)\\s]+))" +
+  "(?:[ \\t]+(?:&quot;(?:(?!&quot;)[^\\n])*&quot;|'[^'\\n]*'))?" +
+  "[ \\t]*\\)",
+  "g"
+);
+
+const LINK_SLOT = "\u0000link:";
+const LINK_SLOT_END = "\u0000";
+
+function applyEmphasis(html) {
+  return html
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+}
+
+/// 一个链接的 HTML。label 已是转义态并已做过强调。
+/// - http(s)/mailto → 新标签页打开的 <a>;
+/// - 文件目标且调用方开了 fileLinks → <a class="md-file-link" data-path>,
+///   点击由聊天视图接管(走宿主打开文件,features/chat/link-actions.js);
+/// - 其余(不认的协议、未开 fileLinks 的文件目标)→ 只留标签文字,对齐 web
+///   在没有 openFile 时只渲染 children 的做法 —— 好过把整段 markdown 原文露出来。
+function renderLink(label, escapedDest, options) {
+  const dest = unescapeHtml(escapedDest);
+  const href = externalHref(dest);
+  if (href !== null) {
+    return `<a class="md-link" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  }
+  const file = options?.fileLinks ? fileLinkTarget(dest) : null;
+  if (file) {
+    const line = file.line === undefined ? "" : ` data-line="${file.line}"`;
+    const title = file.line === undefined ? file.path : `${file.path}:${file.line}`;
+    return `<a class="md-file-link" href="#" role="button" data-path="${escapeAttribute(file.path)}"${line} title="${escapeAttribute(title)}">${label}</a>`;
+  }
+  return label;
+}
 
 /// 转义态的 dest → 宿主 /api/file 要的文件路径;不是本地绝对路径返回 null。
 /// 逐字对齐 web localPathMediaUrl(去掉 ?/# 之后 decodeURIComponent,畸形转义
@@ -80,10 +127,15 @@ function renderInlineMarkup(escaped, options) {
     // 而一个空 src 的 <img> 只会留下碎图标,把问题藏起来。
     return match;
   });
-  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  out = out.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // 链接先于强调:dest 里的 * / ** (如 src/**/*.js)不能被当成强调切碎。
+  // 产出的 <a> 先挖成占位符,强调规则就碰不到它的属性;标签自己单独做强调。
+  const links = [];
+  out = out.replace(LINK_SYNTAX, (_, label, angled, bare) => {
+    links.push(renderLink(applyEmphasis(label), angled ?? bare, options));
+    return LINK_SLOT + (links.length - 1) + LINK_SLOT_END;
+  });
+  out = applyEmphasis(out);
+  if (links.length) out = out.replace(/\u0000link:(\d+)\u0000/g, (_, i) => links[Number(i)] ?? "");
   // 裸 URL 兜底:必须放在最后,此时 <code> 与显式链接都已成标签,可被安全跳过。
   out = autoLinkUrls(out);
   return out;
@@ -105,6 +157,14 @@ const MATH_SLOT_END = "\u0000";
 const CODE_SLOT = "\u0000code:";
 const CODE_SLOT_END = "\u0000";
 
+/// 行内 code 的内容(转义态)。整段恰好是一个 http(s) 网址时套成链接
+///(web inlineCodeUrl):`https://x.y` 这种写法在回复里很常见,不该点不动。
+function inlineCode(body) {
+  const href = webUrl(unescapeHtml(body));
+  return href === null ? body
+    : `<a class="md-link" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">${body}</a>`;
+}
+
 function renderInline(text, options) {
   const escaped = escapeHtml(text);
 
@@ -116,7 +176,7 @@ function renderInline(text, options) {
   });
 
   const restoreCode = (html) => (codes.length
-    ? html.replace(/\u0000code:(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)] ?? ""}</code>`)
+    ? html.replace(/\u0000code:(\d+)\u0000/g, (_, i) => `<code>${inlineCode(codes[Number(i)] ?? "")}</code>`)
     : html);
 
   const segments = splitMathSegments(withoutCode);

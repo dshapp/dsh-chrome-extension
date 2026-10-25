@@ -122,7 +122,8 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
   const sheet = createSheet(dialog);
   // 已经加载过的 pane 不再重复拉取 —— 切回来时保留上次的内容与草稿。
   const loaded = new Set();
-  const showToast = (message) => deps.showToast?.(message);
+  // type 原样转交(error 默认 / success / info):成功提示不该顶着报错的红色图标。
+  const showToast = (message, type) => deps.showToast?.(message, type);
 
   // 宿主代理栈:插件页的装/更/删与服务端页的 dsh 重启/更新都经它执行。
   // Git 不在这里 —— 它的入口在聊天区右上角(对齐 Mac),自带一份客户端。

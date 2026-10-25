@@ -7,18 +7,40 @@
 // ("0.10.0" < "0.9.0" 会让每次跨 x.9 的发布都被判成没有新版)。
 import { isUpgrade, compareVersions, isExactVersion, validateUpdateTarget, UPDATE_CHANNELS } from "./version.js";
 import { HostProxyReason } from "../../platform/dsh/host-proxy-client.js";
+import { restartServer } from "../../platform/dsh/native-supervisor.js";
+import { NativeHostIssue } from "../../platform/dsh/native-host-error.js";
+import { t } from "../../shared/i18n.js";
 
 /// 更新检查跟随的 dist-tag,与 Mac 的 DshUpdateChecker.distTags 一致。
 export const UPDATE_DIST_TAGS = Object.freeze(["next", "alpha"]);
 /// 目标版本的 GitHub 发布页,发布日志在那里(同 Mac 的 latestReleaseURL)。
 const RELEASE_URL = "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v";
 
+/// 本地启动器做不了重启的回包原因:老宿主(没有 restart 命令)、不支持的平台、
+/// 没装/没授权/起不来。这些都换 chrome-daemon 再试一次,而不是报错。
+const NATIVE_RESTART_FALLBACK = new Set([
+  "unknown-cmd", "unsupported-platform", "empty-reply", ...Object.values(NativeHostIssue)
+]);
+
+/// 宿主拒绝重启的原因 → 人话。认不出的照原文。
+function nativeRestartError(reply) {
+  const key = {
+    "not-dsh-web": "srv.restartErrNotDsh",
+    "still-running": "srv.restartErrStillRunning",
+    "listener-unknown": "srv.restartErrUnknownListener"
+  }[reply?.reason];
+  const error = new Error(key ? t(key, { port: reply?.port ?? "", pid: reply?.pid ?? "" }) : String(reply?.reason || "restart failed"));
+  error.name = "ServerRestartError";
+  error.reason = reply?.reason ?? null;
+  return error;
+}
+
 function newestOf(versions) {
   return versions.filter(isExactVersion)
     .reduce((best, v) => (best === null || compareVersions(best, v) === -1 ? v : best), null);
 }
 
-export function createServerOps({ client }) {
+export function createServerOps({ client, nativeRestart = restartServer }) {
   const ops = {
     /// 当前版本 + 更新目标 + 是否可升级。
     ///
@@ -51,9 +73,22 @@ export function createServerOps({ client }) {
 
     /// 重启 dsh web。返回 { stopped, started, pid, log }。
     ///
+    /// 先走本地启动器(Native Messaging,对齐 Mac 的做法:按端口找到正在跑的
+    /// dsh web,SIGTERM → 必要时 SIGKILL,再用**正在跑的那份** dsh 在同一地址
+    /// 起一个新的)—— 它不挑安装方式,npm / pnpm 装的都行。启动器太老或这台
+    /// 机器上用不了时,才退回 chrome-daemon 的重启(那条路只认 pnpm 装的 dsh)。
+    ///
     /// started 为 false 时不抛错:进程确实被拉起了但端口没就绪,调用方需要
     /// 把日志路径显示给用户,这比一个异常更有用。
     async restart() {
+      const reply = nativeRestart ? await nativeRestart("web") : null;
+      if (reply && !NATIVE_RESTART_FALLBACK.has(reply.reason)) {
+        if (reply.ok || reply.reason === "port-stayed-down") {
+          return { stopped: Boolean(reply.stopped), started: Boolean(reply.ok), pid: reply.pid ?? null,
+            log: reply.log ?? null, via: "native" };
+        }
+        throw nativeRestartError(reply);
+      }
       return await client.serverRestart();
     },
 

@@ -968,9 +968,6 @@ const MESSAGES = Object.freeze({
     "srv.launcherUnknown": "Checking…",
     "srv.launcherInstalled": "Installed",
     "srv.launcherMissing": "Not installed",
-    "srv.launcherTest": "Test start",
-    "srv.launcherAlreadyUp": "dsh web is already running",
-    "srv.launcherStarted": "Started dsh web",
 
     // ---- dsh itself: version, restart, update (runs through chrome-daemon) ----
     "srv.dshTitle": "DSH runtime",
@@ -1028,8 +1025,11 @@ const MESSAGES = Object.freeze({
     "srv.viewLog": "View log",
     "srv.openFailed": "Could not open that path",
     "srv.restartTitle": "Restart the server",
-    "srv.restartDesc": "Stops the current server, then starts a new one; it may pick another port.",
+    "srv.restartDesc": "Stops the running dsh web, then starts a fresh one at the same address.",
     "srv.restartWarn": "Restarting interrupts running sessions and agent tasks.",
+    "srv.restartErrNotDsh": "Port {port} is held by a process that is not dsh web (pid {pid}); left it alone.",
+    "srv.restartErrStillRunning": "dsh web (pid {pid}) did not exit, so no new server was started.",
+    "srv.restartErrUnknownListener": "Something is listening on port {port}, but its process could not be identified; left it alone.",
     // ---- host proxy (chrome-daemon /host/*) ----
     "host.controls": "Host proxy",
     "host.disable": "Disable host proxy",
@@ -2202,9 +2202,6 @@ const MESSAGES = Object.freeze({
     "srv.launcherUnknown": "检测中…",
     "srv.launcherInstalled": "已安装",
     "srv.launcherMissing": "未安装",
-    "srv.launcherTest": "测试启动",
-    "srv.launcherAlreadyUp": "dsh web 已在运行",
-    "srv.launcherStarted": "已启动 dsh web",
 
     // ---- dsh 本体:版本 / 重启 / 更新(经 chrome-daemon 执行) ----
     "srv.dshTitle": "DSH 运行时",
@@ -2261,8 +2258,11 @@ const MESSAGES = Object.freeze({
     "srv.viewLog": "查看日志",
     "srv.openFailed": "打开该路径失败",
     "srv.restartTitle": "重启服务",
-    "srv.restartDesc": "停止当前服务,然后重新启动新服务;新服务可能使用其他端口。",
+    "srv.restartDesc": "停止正在运行的 dsh web,然后在同一地址重新启动一个新的。",
     "srv.restartWarn": "重启会中断进行中的会话与智能体任务。",
+    "srv.restartErrNotDsh": "端口 {port} 被一个不是 dsh web 的进程占用(pid {pid}),未作处理。",
+    "srv.restartErrStillRunning": "dsh web(pid {pid})没有退出,未启动新服务。",
+    "srv.restartErrUnknownListener": "端口 {port} 上有程序在监听,但无法确认是哪个进程,未作处理。",
     // ---- 宿主代理(chrome-daemon 的 /host/*) ----
     "host.controls": "宿主代理",
     "host.disable": "关闭宿主代理",

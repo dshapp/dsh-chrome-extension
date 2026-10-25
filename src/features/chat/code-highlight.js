@@ -21,7 +21,7 @@
 
 let hljsPromise = null;
 
-/// 按需加载 hljs。与 KaTeX 同样的理由:76KB 不该挡住侧栏首帧,
+/// 按需加载 hljs。与 KaTeX 同样的理由:~170KB(42 种语言)不该挡住侧栏首帧,
 /// 而多数消息里没有代码块。
 async function loadHljs() {
   if (!hljsPromise) {
@@ -39,7 +39,15 @@ const LANGUAGE_ALIASES = Object.freeze({
   js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
   ts: "typescript", tsx: "typescript",
   yml: "yaml", html: "xml", htm: "xml", py: "python",
-  golang: "go", rs: "rust", patch: "diff", md: "markdown"
+  golang: "go", rs: "rust", patch: "diff", md: "markdown",
+  jsonc: "json", json5: "json", vue: "xml", svelte: "xml", svg: "xml",
+  "c++": "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", h: "c",
+  cs: "csharp", "c#": "csharp", kt: "kotlin", kts: "kotlin", rb: "ruby",
+  ps1: "powershell", pwsh: "powershell", toml: "ini", conf: "ini",
+  docker: "dockerfile", make: "makefile", mk: "makefile",
+  objc: "objectivec", "objective-c": "objectivec", proto: "protobuf",
+  gql: "graphql", hs: "haskell", ex: "elixir", exs: "elixir", pl: "perl",
+  gradle: "groovy", txt: "plaintext"
 });
 
 function resolveLanguage(hljs, raw) {

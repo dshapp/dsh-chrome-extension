@@ -45,9 +45,13 @@ export function stableCut(markdown, unstableBlocks = UNSTABLE_TAIL_BLOCKS) {
 /// 渲染/更新一个"增量 markdown"宿主元素(内部自建 .md-head + .md-tail)。
 /// loadLocalImage:给了就开 md-to-html 的 localImages,把本地路径占位图经它读成
 /// blob:(local-images.js,对齐 web AssistantMarkdown pathImages);只有助手正文传。
-export function renderIncrementalMarkdown(host, text, { streaming = false, force = false, loadLocalImage = null } = {}) {
+/// fileLinks:把 [label](path#L12) 这类文件目标渲染成可点的 .md-file-link,
+/// 点击由 link-actions.js 接管;同样只有助手正文传。
+export function renderIncrementalMarkdown(host, text, { streaming = false, force = false, loadLocalImage = null, fileLinks = false } = {}) {
   const source = String(text ?? "");
-  const md = loadLocalImage ? { localImages: true } : undefined;
+  const md = (loadLocalImage || fileLinks)
+    ? { ...(loadLocalImage ? { localImages: true } : {}), ...(fileLinks ? { fileLinks: true } : {}) }
+    : undefined;
   let state = host.__inc;
   if (!state) {
     state = host.__inc = { text: null, cut: undefined, head: null, tail: null };
@@ -68,7 +72,7 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
   }
   state.text = source;
   // "](/" 或 "](</" 是占位图产出的必要条件,没有就不扫 DOM(流式每帧都会走到这里)。
-  if (md && (source.includes("](/") || source.includes("](</"))) hydrateLocalImages(host, loadLocalImage);
+  if (loadLocalImage && (source.includes("](/") || source.includes("](</"))) hydrateLocalImages(host, loadLocalImage);
   settleFailedImages(host);
 
   decorateCodeBlocks(host);
@@ -80,7 +84,7 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
       if (!ready || !host.isConnected) return;
       state.cut = undefined;
       state.text = null;
-      renderIncrementalMarkdown(host, source, { streaming, force: true, loadLocalImage });
+      renderIncrementalMarkdown(host, source, { streaming, force: true, loadLocalImage, fileLinks });
     });
   }
 }

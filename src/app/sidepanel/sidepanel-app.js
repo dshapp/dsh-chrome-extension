@@ -2,7 +2,7 @@
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
 import { t, getLang } from "../../shared/i18n.js";
-import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer, resolveToolPath } from "../../features/chat/index.js";
+import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer, resolveToolPath, openUrlInNewTab } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
 } from "../../features/interactions/index.js";
@@ -110,6 +110,8 @@ export function createSidepanelApp(root, deps, options = {}) {
         // 用户看到 toast 才知道"点了没反应"是路径问题而不是按钮坏了。
         onOpenPath: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
         onOpenFile: (path) => { void deps.workspaces.openPath(path).catch((error) => showToast(format(error))); },
+        // 正文里的网页链接:在当前窗口开新标签页(web openExternalLink;这里浏览器本身就是 Chrome)。
+        onOpenUrl: (url) => openUrlInNewTab(url),
         // 气泡里的会话引用胶囊:点了就切到被引用的那个会话(可跨工作区)。
         onOpenSession: (sessionId) => { void openSession(sessionId).catch((error) => showToast(format(error))); },
         onRevealPath: (path) => { void deps.workspaces.revealPath(path).catch((error) => showToast(format(error))); },

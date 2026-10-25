@@ -12,6 +12,7 @@ import { resolveMention, deliverablesBasename } from "../sessions/turn-deliverab
 import { getToolIconSvg, getToolPresentation } from "./tool-presentation.js";
 import { decorateCodeBlocks, fmtTime } from "./chat-view.js";
 import { renderIncrementalMarkdown } from "./incremental-markdown.js";
+import { bindLinkActions, decorateFileLinks } from "./link-actions.js";
 import { openCardDetail } from "./card-detail.js";
 import { splitUserContent, projectUserText, referenceSummary, fileExtension, fileSizeText } from "./user-content.js";
 import { parseXMLMessageCards } from "./user-xml-cards.js";
@@ -472,12 +473,17 @@ export function createAssistantNode(node, context = {}) {
 ///
 /// loadLocalImage(context.readLocalImage):正文里的本地绝对路径图片经宿主 /api/file
 /// 读回(web AssistantMarkdown pathImages),没有就保持原样文字。
-function updateAgentText(body, text, mentions = null, loadLocalImage = null) {
+///
+/// links:正文里的文件链接 / 网页链接点击出口(link-actions.js,对齐 web
+/// MarkdownText 的 openFile / openExternalLink)。
+function updateAgentText(body, text, mentions = null, loadLocalImage = null, links = null) {
   const fold = foldMessageText(text, AGENT_FOLD_LIMIT);
   // 截断处可能落在未闭合的代码围栏里,原样渲染会把后面的正文吞进代码块。
   // 补一行收尾围栏,让这一段仍是合法 markdown。
   const preview = fold.folded ? closeOpenFence(fold.preview) : text;
-  renderIncrementalMarkdown(body, preview, { loadLocalImage });
+  renderIncrementalMarkdown(body, preview, { loadLocalImage, fileLinks: Boolean(links?.openFile) });
+  decorateFileLinks(body);
+  bindLinkActions(body, links ?? {});
   decorateMentions(body, mentions);
 
   let more = body.querySelector(":scope > .msg-user-more");
@@ -543,6 +549,7 @@ function decorateMentions(body, mentions) {
   }
   for (const code of body.querySelectorAll("code")) {
     if (code.closest("pre")) continue;         // fenced code 不是 mention
+    if (code.closest("a")) continue;           // 已在链接里(文件链接标签 / 网址 code)
     const value = code.textContent ?? "";
     const path = resolveMention(value, mentions.paths);
     if (!path) continue;
@@ -638,6 +645,18 @@ export function updateAssistantNode(turn, node, context = {}) {
   // "卡片底下也有 msg-turn" 的来源。
 }
 
+/// 正文链接的点击出口。文件路径按会话 cwd 解析(相对路径是模型最常给的写法,
+/// 如 [a.tsx:12](<src/a.tsx#L12>)),再交宿主打开;没有 onOpenPath 时不出文件链接,
+/// 标签按普通文字显示。
+function agentLinkHandlers(context = {}) {
+  const open = typeof context.onOpenFile === "function" ? context.onOpenFile
+    : typeof context.onOpenPath === "function" ? context.onOpenPath : null;
+  return {
+    openFile: open ? (path, options) => open(resolveToolPath(path, context.cwd), options) : null,
+    openUrl: typeof context.onOpenUrl === "function" ? context.onOpenUrl : null
+  };
+}
+
 // ---- assistant block 对账 ----
 
 function blockVisible(block) {
@@ -675,7 +694,8 @@ function assistantImage(attachment, context = {}) {
 function updateBlockPart(part, block, mentions, context = {}) {
   if (part.kind === "text") {
     updateAgentText(part.el, block.text, mentions,
-      typeof context.readLocalImage === "function" ? context.readLocalImage : null);
+      typeof context.readLocalImage === "function" ? context.readLocalImage : null,
+      agentLinkHandlers(context));
   } else if (part.kind === "other") {
     updateUnknownBlock(part.el, block.value);
   } else if (part.kind === "imageGroup") {
