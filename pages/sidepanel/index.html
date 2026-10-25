@@ -367,6 +367,8 @@
               data-tab="presets" aria-controls="settings-pane-presets" aria-selected="false"><span class="settings-tab-label">Agent 预设</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-plugins"
               data-tab="plugins" aria-controls="settings-pane-plugins" aria-selected="false"><span class="settings-tab-label">内置插件</span></button>
+      <button class="settings-tab" type="button" role="tab" id="settings-tab-mobile"
+              data-tab="mobile" aria-controls="settings-pane-mobile" aria-selected="false"><span class="settings-tab-label">移动端访问</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-server"
               data-tab="server" aria-controls="settings-pane-server" aria-selected="false"><span class="settings-tab-label">DSH Server</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-shortcuts"
@@ -387,6 +389,9 @@
                aria-labelledby="settings-tab-presets" hidden></section>
       <section class="settings-pane" id="settings-pane-plugins" role="tabpanel"
                aria-labelledby="settings-tab-plugins" hidden></section>
+      <!-- 移动端访问:中转状态 / 已配对的手机 / 配对二维码,整段由 JS 渲染(mobile-pane.js)。 -->
+      <section class="settings-pane" id="settings-pane-mobile" role="tabpanel"
+               aria-labelledby="settings-tab-mobile" hidden></section>
       <!-- 快捷键:命令表的只读视图,不碰宿主设置,整段由 JS 渲染。 -->
       <section class="settings-pane" id="settings-pane-shortcuts" role="tabpanel"
                aria-labelledby="settings-tab-shortcuts" hidden></section>

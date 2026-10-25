@@ -1460,6 +1460,43 @@
 .set-strong { font-weight: 600; }
 .set-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-faint); }
 
+/* 移动端访问(mobile-pane.js)。对齐 Mac MobileAccessSection:状态在右、动作落在它下面;
+   「添加设备」跟着分组标题走;二维码居中,下面是复制、说明与这台电脑的名字。 */
+.mob-relay-control { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.mob-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mob-section-head .set-btn {
+  padding: 2px 9px; font-size: 11.5px; font-weight: 500;
+  text-transform: none; letter-spacing: normal;
+}
+.mob-device .set-row-control { gap: 10px; }
+.mob-device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.mob-device .set-link { align-self: center; font-size: 12px; }
+.mob-device .set-link.mob-revoke { color: var(--danger); }
+.mob-pair {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 16px 12px 14px; text-align: center;
+}
+/* 码永远白底黑块:深色主题下反色的码多数扫码器认不出来。 */
+.mob-qr { width: 200px; height: 200px; padding: 6px; border-radius: 10px; background: #fff; box-sizing: border-box; }
+.mob-qr-svg { display: block; width: 100%; height: 100%; }
+.mob-hint { font-size: 12px; color: var(--text-dim); line-height: 1.5; max-width: 300px; }
+.mob-caption { font-size: 11.5px; color: var(--text-faint); line-height: 1.45; max-width: 300px; }
+.mob-caption.faint { opacity: 0.8; }
+.mob-placeholder {
+  min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; max-width: 300px;
+}
+.mob-placeholder-icon { color: var(--text-faint); line-height: 0; }
+.mob-placeholder-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.mob-placeholder-text { font-size: 12px; color: var(--text-dim); line-height: 1.5; overflow-wrap: anywhere; }
+.mob-placeholder-actions { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 4px; }
+.mob-error {
+  font-size: 11.5px; line-height: 1.45; max-height: 7.5em; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; text-align: left;
+}
+.mob-rename-error { font-size: 12px; margin-top: 6px; min-height: 1em; }
+#settings-sheet #mob-rename-input { width: 100%; box-sizing: border-box; }
+
 /* 服务地址按链接色渲染(仍是纯文本:扩展页打不开 http 之外的东西,
    做成可点的 <a> 只会给出一个哪儿都到不了的手势)。 */
 .srv-url { color: var(--link); }

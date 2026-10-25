@@ -110,7 +110,15 @@ export const RPC = Object.freeze({
   pluginManagerRegistries: "pluginManager/registries",
   pluginRegistryProbeFastest: "pluginRegistryProbe/fastest",
   // 0.2:continued(已超时、agent 已继续)的限时提问迟到回答 {agentId, callId, answer} → boolean。
-  userQuestionsAnswer: "userQuestions/answer"
+  userQuestionsAnswer: "userQuestions/answer",
+  // ---- 移动端访问:dsh-mobile-bridge 插件挂在 /api/mobileBridge/* 的控制面,信封与普通 RPC 相同。
+  // 插件没装时这几条路由不存在(对齐 Mac MobileAccessSupervisor / 桥接 README 的 Control API)。 ----
+  mobileBridgeStatus: "mobileBridge/status",
+  mobileBridgePair: "mobileBridge/pair",
+  mobileBridgeRevoke: "mobileBridge/revoke",
+  mobileBridgeRename: "mobileBridge/rename",
+  mobileBridgeDisconnect: "mobileBridge/disconnect",
+  mobileBridgeConnect: "mobileBridge/connect"
 });
 
 export const STREAM = Object.freeze({

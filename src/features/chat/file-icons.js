@@ -410,6 +410,10 @@ const ICONS = Object.freeze({
     ["path", { d: "M6 7h.01" }],
     ["path", { d: "M6 17h.01" }]
   ],
+  smartphone: [
+    ["rect", { width: 14, height: 20, x: 5, y: 2, rx: 2, ry: 2 }],
+    ["path", { d: "M12 18h.01" }]
+  ],
   keyboard: [
     ["path", { d: "M10 8h.01" }],
     ["path", { d: "M12 12h.01" }],
