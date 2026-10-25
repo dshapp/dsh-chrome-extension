@@ -12,6 +12,7 @@ import { createPluginsPane } from "./plugins-pane.js";
 import { createBuiltinPluginsPane } from "./builtin-plugins-pane.js";
 import { createServerPane } from "./server-pane.js";
 import { createMobilePane } from "./mobile-pane.js";
+import { createBrowserPane } from "./browser-pane.js";
 import { createHostProxyClient } from "../../../platform/dsh/host-proxy-client.js";
 import { createServerOps } from "../../../features/host-proxy/server-ops.js";
 import { createShortcutsPane } from "./shortcuts-pane.js";
@@ -19,9 +20,11 @@ import { escapeHtml } from "./settings-ui.js";
 
 // 与 Mac SettingsRoot.swift 的差异(刻意保留,不是没做完):
 //   - Mac 有 8 个 tab(general/models/presets/plugins/mobile/browser/computerUse/server),
-//     这里做其中 6 个 —— 不加 Browser 设置、Computer Use 两页(用户决定)。
-//     移动端访问(mobile)后来补上了:它只是 dsh-mobile-bridge 插件控制面的一层视图,
+//     这里做其中 7 个 —— 不加 Computer Use 页(用户决定)。
+//     移动端访问(mobile)只是 dsh-mobile-bridge 插件控制面的一层视图,
 //     不依赖任何 macOS 原生能力,扩展能做得和 Mac 一样。
+//     浏览器(browser)是 Agent 浏览器控制的状态灯 + 「网页搜索」:Mac 那页的插件/扩展
+//     两行是为了装上扩展,在扩展里看这一页时两者必然已就绪。
 //   - Mac 的"快捷键"是独立的 ShortcutsWindow(⌘/ 打开);侧边栏是单窗口,
 //     索性把它做成第 6 个 tab,内容与 Mac 那张表同源(shortcutReference)。
 //   - Mac 通用页多一行"在编辑器中打开工作区"(靠 LaunchServices 枚举已装编辑器),
@@ -29,9 +32,9 @@ import { escapeHtml } from "./settings-ui.js";
 //   - Mac 通知行在权限被拒时给"前往系统设置"深链(macOS 专属),这里只显示一行说明。
 //   - Mac 服务端页的 pid/Node/pnpm/全局前缀几行依赖原生 supervisor,这里不提供;
 //     相应地也没有"停止并退出" —— 侧边栏不该替用户杀掉 dsh web。
-const TABS = ["general", "models", "plugins", "presets", "mobile", "server", "shortcuts"];
+const TABS = ["general", "models", "plugins", "presets", "mobile", "browser", "server", "shortcuts"];
 /// 按秒/按几秒自刷的页:每次切进来都重拉并开表,切走就停表。
-const LIVE_TABS = new Set(["mobile", "server"]);
+const LIVE_TABS = new Set(["mobile", "browser", "server"]);
 
 /// 页签图标:与 Mac 的 SettingsSection 一一对应(通用/模型/预设/插件/服务端/快捷键)。
 /// 名字取自 file-icons.js 的 lucide 集;缺一个就整体退化成"只有文字",
@@ -42,6 +45,7 @@ const TAB_ICONS = {
   presets: "layers",
   plugins: "puzzle",
   mobile: "smartphone",
+  browser: "globe",
   server: "server",
   shortcuts: "keyboard"
 };
@@ -156,8 +160,6 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
       host: view.querySelector("#settings-pane-plugins"), deps, settingsService
     }),
     server: createServerPane({
-      // 渲染进 pane 内的专属容器,而不是整个 pane —— CDP 桥是同一页里的静态 DOM,
-      // 每次 refresh 重写整页会把它绑好的监听器一起冲掉。
       host: view.querySelector("#set-server-host"), deps, showToast, serverOps
       // 服务端 pane 不再带后端地址输入框(版式以视觉稿为准),所以不再传
       // onBackendChanged —— 那个回调唯一的触发点就是那个输入框的保存按钮。
@@ -170,6 +172,10 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
     // 装完插件要重启服务时借用服务端页同一份 serverOps(经 chrome-daemon 重启 dsh web)。
     mobile: createMobilePane({
       host: view.querySelector("#settings-pane-mobile"), sheet, deps, serverOps
+    }),
+    // 浏览器:Agent 浏览器控制状态 + 网页搜索开关与引擎,对齐 Mac BrowserSettingsSection。
+    browser: createBrowserPane({
+      host: view.querySelector("#settings-pane-browser"), deps, settingsService, showToast
     }),
     // 快捷键页是命令表的纯视图:不读宿主设置,所以不参与 invalidateHostPanes。
     shortcuts: createShortcutsPane({
@@ -208,7 +214,7 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
     // 否则每次 relabel 都要重建图标(语言切换与打开设置页都会走到这里)。
     const labels = {
       general: "set.tab.general", models: "set.tab.models", presets: "set.tab.presets",
-      plugins: "set.tab.plugins", mobile: "set.tab.mobile", server: "set.tab.server",
+      plugins: "set.tab.plugins", mobile: "set.tab.mobile", browser: "set.tab.browser", server: "set.tab.server",
       shortcuts: "set.tab.shortcuts"
     };
     for (const [tab, key] of Object.entries(labels)) {
@@ -242,11 +248,11 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
     paintTabs();
     // 页签条在窄侧栏里横向滚动:选中的那颗要滚进视野,别半截露在边上。
     tabBar.querySelector(`[data-tab="${activeTab}"]`)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-    // 服务端页的连接状态点、以及桥那一行,都按秒自刷 —— 只在这一页可见时才跑。
-    // 桥的轮询现在归服务端 pane 管(它自己 render 那一行),所以这里只需要
-    // 在离开时停掉整个 pane,不再单独持有一个 bridge 句柄。
+    // 服务端页的连接状态点、浏览器页的桥那一行、移动端页的配对状态都按秒自刷 ——
+    // 只在各自那一页可见时才跑,离开就停掉整个 pane。
     if (activeTab !== "server") panes.server.stop();
     if (activeTab !== "mobile") panes.mobile.stop();
+    if (activeTab !== "browser") panes.browser.stop();
     panes.plugins.setVisible?.(activeTab === "plugins" && view.classList.contains("open"));
     if (force || LIVE_TABS.has(activeTab) || !loaded.has(activeTab)) {
       loaded.add(activeTab);
@@ -288,9 +294,10 @@ export function mountSettings(deps, { onModelsChanged, onStartCreatorDraft, onVi
     panes.plugins.setVisible?.(false);
     if (wasOpen) onVisibilityChanged?.(false);
     // 关页面要停掉所有按秒跑的表,否则设置页关了还在每秒唤醒 service worker。
-    // panes.server.stop() 一并停掉桥那一行的轮询。
+    // panes.browser.stop() 一并停掉桥那一行的轮询。
     panes.server.stop();
     panes.mobile.stop();
+    panes.browser.stop();
     sheet.close();
   }
 

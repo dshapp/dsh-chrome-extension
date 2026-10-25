@@ -22,7 +22,6 @@ import { t } from "../../../shared/i18n.js";
 import { section, row, button, statusLine, escapeHtml } from "./settings-ui.js";
 import { RPC } from "../../../platform/dsh/rpc-methods.js";
 import { probeHost } from "../../../platform/dsh/native-supervisor.js";
-import { createBridgeStatus } from "../bridge-settings.js";
 import { createServerLauncherRow } from "./server-launcher-row.js";
 
 /// 每秒复查一次连接状态。与 header 状态点同频:重连是后台发生的,
@@ -40,19 +39,6 @@ function connectionView(streamState, DshStreamState) {
 export function createServerPane({ host, deps, showToast, serverOps, probe = probeHost }) {
   let hostInfo = null;
   let timer = null;
-  // CDP 桥的状态。由 createBridgeStatus 轮询,变化时只重画那一行 ——
-  // 整页重画会把用户正按着的按钮换掉。
-  let bridge = null;
-  const bridgeStatus = createBridgeStatus({
-    onChange: (next) => {
-      // 行在不在,取决于 available;它一变就得整页重画,因为要新增/移除一整行。
-      // 之后的连接态变化只补那一行 —— 整页重画会把用户正按着的按钮换掉。
-      const appeared = Boolean(next?.available) !== Boolean(bridge?.available);
-      bridge = next;
-      if (appeared) render();
-      else paintBridge();
-    }
-  });
   // 启动器自报的 logDir / dsh 路径。只 probe(cmd:"status"),不会拉起任何进程。
   let launcher = null;
   // dsh 本体的版本 / 重启 / 更新。经 chrome-daemon 执行 —— 扩展起不了进程,
@@ -146,38 +132,8 @@ export function createServerPane({ host, deps, showToast, serverOps, probe = pro
     return section({ body: row({ label, hint: versions + failure, control }) });
   }
 
-  /// CDP 桥那一行的右侧内容。
-  ///
-  /// 三态:
-  ///   - 已连接(ok):握手完成 —— daemon 回了 hello_ack,不只是 socket 打开了;
-  ///   - 无响应(err):端口上有 daemon 接了连接却不应答。光等重试修不好
-  ///     (典型是残留的旧版 chrome-daemon 卡死),所以用红色,并在副标题给出处置;
-  ///   - 未连接(busy):还在等,桥会一直重试(background 的 RECONCILE_ALARM 每 30s)。
-  function bridgeControl() {
-    if (!bridge?.available) return "";
-    if (bridge.status === "connected") return statusLine(t("bridge.connected"), "ok");
-    if (bridge.status === "unresponsive") return statusLine(t("bridge.unresponsive"), "err");
-    return statusLine(t("bridge.disconnected"), "busy");
-  }
-
-  /// 桥行的副标题:连上了报 daemon 地址,没连上给出排查方向。
-  function bridgeHint() {
-    if (!bridge?.available) return "";
-    if (bridge.status === "connected") return escapeHtml(t("bridge.daemonAt", { url: bridge.url ?? "" }));
-    if (bridge.status === "unresponsive") return escapeHtml(t("bridge.unresponsiveHint", { url: bridge.url ?? "" }));
-    return escapeHtml(t("bridge.waiting"));
-  }
-
-  /// 只重画桥那一行,不动整页(与 paintConnection 同样的理由)。
-  function paintBridge() {
-    const slot = host.querySelector("#set-bridge-state");
-    if (!slot) return;
-    slot.innerHTML = bridgeControl();
-    const hint = host.querySelector("#set-bridge-detail");
-    if (hint) hint.innerHTML = bridgeHint();
-  }
-
-  /// 服务信息组:状态 / 服务版本 / 服务地址 / Harness 主目录 / 日志 / Agent 浏览器控制。
+  /// 服务信息组:状态 / DSH 包 / 服务地址 / Harness 主目录 / 日志。
+  /// Agent 浏览器控制(CDP 桥)的状态灯在浏览器页(browser-pane.js)。
   ///
   /// 每一行的数据都可能缺席(没连上、daemon 太老、启动器没装),缺的那行整行
   /// 不画 —— 画一个空值行只是在问用户"这里本来该有什么"。
@@ -224,16 +180,6 @@ export function createServerPane({ host, deps, showToast, serverOps, probe = pro
         label: escapeHtml(t("srv.logs")),
         hint: '<span class="set-mono">' + escapeHtml(logPath()) + '</span>',
         control: button({ id: "srv-view-log", label: t("srv.viewLog"), kind: "plain" })
-      }));
-    }
-
-    // Agent 浏览器控制:并进这张卡的最后一行,而不是自己单独占一张只有一行的卡。
-    // 这个部署里没有桥半部时整行不画 —— 画一盏永远不亮的灯只会让人以为坏了。
-    if (bridge?.available) {
-      rows.push(row({
-        label: escapeHtml(t("settings.bridge")),
-        hint: '<span id="set-bridge-detail">' + bridgeHint() + '</span>',
-        control: '<span id="set-bridge-state">' + bridgeControl() + '</span>'
       }));
     }
 
@@ -406,8 +352,6 @@ export function createServerPane({ host, deps, showToast, serverOps, probe = pro
     launcherRow.setStatus(nextLauncher);
     render();
     if (!timer) timer = setInterval(paintConnection, POLL_INTERVAL_MS);
-    // 桥自己按秒轮询 service worker;首次结果回来时 onChange 会触发一次重画。
-    bridgeStatus.start();
     // 版本查询要跑子进程(dsh --version + pnpm view),比较慢,所以不阻塞首屏。
     loadDsh();
   }
@@ -415,13 +359,11 @@ export function createServerPane({ host, deps, showToast, serverOps, probe = pro
   return {
     refresh,
     /// 离开服务端页时停表:状态点不可见就不该继续跑。
-    /// 桥的轮询会唤醒 service worker,更不能留着。
     stop() {
       refreshGeneration += 1;
       dshLoadGeneration += 1;
       if (timer) clearInterval(timer);
       timer = null;
-      bridgeStatus.stop();
     }
   };
 }

@@ -369,6 +369,8 @@
               data-tab="plugins" aria-controls="settings-pane-plugins" aria-selected="false"><span class="settings-tab-label">内置插件</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-mobile"
               data-tab="mobile" aria-controls="settings-pane-mobile" aria-selected="false"><span class="settings-tab-label">移动端访问</span></button>
+      <button class="settings-tab" type="button" role="tab" id="settings-tab-browser"
+              data-tab="browser" aria-controls="settings-pane-browser" aria-selected="false"><span class="settings-tab-label">浏览器</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-server"
               data-tab="server" aria-controls="settings-pane-server" aria-selected="false"><span class="settings-tab-label">DSH Server</span></button>
       <button class="settings-tab" type="button" role="tab" id="settings-tab-shortcuts"
@@ -376,8 +378,8 @@
     </div>
     <div id="settings-body">
       <!-- 通用:照搬 Mac 通用 pane 的行序,整段由 JS 渲染。
-           后端地址与 CDP 桥都不在这里 —— 它们讲的是"连到哪台宿主 / 谁能控制这个
-           浏览器",都属于服务端页。 -->
+           后端地址与 CDP 桥都不在这里:后端地址在服务端页,CDP 桥(谁能控制这个
+           浏览器)在浏览器页。 -->
       <section class="settings-pane" id="settings-pane-general" role="tabpanel"
                aria-labelledby="settings-tab-general">
         <!-- 由 JS 渲染:Agent 预设 / 权限 / 语言 / 外观 / 通知 / Enter 行为 / 配置文件 -->
@@ -392,16 +394,15 @@
       <!-- 移动端访问:中转状态 / 已配对的手机 / 配对二维码,整段由 JS 渲染(mobile-pane.js)。 -->
       <section class="settings-pane" id="settings-pane-mobile" role="tabpanel"
                aria-labelledby="settings-tab-mobile" hidden></section>
+      <!-- 浏览器:Agent 浏览器控制(CDP 桥)状态 + 网页搜索开关与搜索引擎,整段由 JS 渲染(browser-pane.js)。 -->
+      <section class="settings-pane" id="settings-pane-browser" role="tabpanel"
+               aria-labelledby="settings-tab-browser" hidden></section>
       <!-- 快捷键:命令表的只读视图,不碰宿主设置,整段由 JS 渲染。 -->
       <section class="settings-pane" id="settings-pane-shortcuts" role="tabpanel"
                aria-labelledby="settings-tab-shortcuts" hidden></section>
       <section class="settings-pane" id="settings-pane-server" role="tabpanel"
                aria-labelledby="settings-tab-server" hidden>
-        <!-- 整页由 JS 渲染,含 CDP 桥那一行(见 server-pane.js 的 bridgeRow)。
-             桥曾经是这里的一块静态 DOM,因为那时它自带 change 监听器,写进
-             pane 的渲染区会被每次 refresh 冲掉。开关删掉之后它只剩"往节点里
-             写文字",于是改由 pane 一起渲染 —— 这样它才能作为一行并进上面那张
-             卡片,而不是单独占一张只有一行的卡。 -->
+        <!-- 整页由 JS 渲染(server-pane.js)。 -->
         <div id="set-server-host"></div>
       </section>
     </div>
