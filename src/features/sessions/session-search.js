@@ -1,6 +1,7 @@
 // 侧栏会话搜索的纯派生,逐条对齐 web deriveSearchResults
 // (deepseek-harness packages/client/ui-workspace/src/client/tree.ts)。
 import { ArchivedFilter, archivedVisible } from "./sidebar-sections.js";
+import { workspaceDisplayName, DEFAULT_HOME_LABEL } from "../../shared/workspace-path.js";
 
 /// session/search 响应的条数上限(web SESSION_SEARCH_RESULT_LIMIT)。
 export const SEARCH_RESULT_LIMIT = 20;
@@ -37,23 +38,27 @@ export function normalizeSearchQuery(value) {
  * @param {string} [options.archivedFilter] ArchivedFilter 之一,默认隐藏归档。
  * @param {string} options.query normalizeSearchQuery 之后的非空查询。
  * @param {{items: Array, hasMore: boolean}} options.remote 当前查询的宿主结果页。
+ * @param {string|null} [options.home] 宿主报的用户 home;落在 home 的会话按 homeLabel 命中。
+ * @param {string} [options.homeLabel] home 目录的显示名。
  * @returns {{items: Array, hasMore: boolean}}
  */
 export function deriveSearchResults({
-  sessions, workspaces, archivedIds, archivedFilter = ArchivedFilter.hide, query, remote, limit = SEARCH_RESULT_LIMIT
+  sessions, workspaces, archivedIds, archivedFilter = ArchivedFilter.hide, query, remote, limit = SEARCH_RESULT_LIMIT,
+  home = null, homeLabel = DEFAULT_HOME_LABEL
 }) {
   const q = query.toLowerCase();
   const archived = new Set(archivedIds ?? []);
   const workspaceBySession = new Map();
   for (const workspace of workspaces ?? []) {
-    const label = workspace.title || basename(workspace.path);
+    const label = workspaceDisplayName(workspace, { home, homeLabel });
     for (const id of workspace.sessionIds ?? []) {
       if (!workspaceBySession.has(id)) workspaceBySession.set(id, label);
     }
   }
   const visible = (item) => item && !item.blank && item.origin !== "subagent"
     && archivedVisible(archived.has(item.sessionId), archivedFilter);
-  const label = (item) => workspaceBySession.get(item.sessionId) ?? basename(item.cwd);
+  // 临时会话的 cwd 是用户 home:按 Home 匹配,而不是用户名 / 整条 Windows 路径。
+  const label = (item) => workspaceBySession.get(item.sessionId) ?? workspaceDisplayName({ path: item.cwd }, { home, homeLabel });
 
   const byId = new Map();
   const local = [];
@@ -85,9 +90,4 @@ export function deriveSearchResults({
 export function sessionTitle(item) {
   const title = item?.projections?.values?.title;
   return typeof title === "string" ? title.trim() : "";
-}
-
-function basename(path) {
-  const text = String(path || "");
-  return text.replace(/\/+$/, "").split("/").pop() || text;
 }

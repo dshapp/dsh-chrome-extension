@@ -168,7 +168,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       archivedIds: archivedIds() ?? [],
       archivedFilter: viewOptions?.archivedFilter?.(),
       query,
-      remote
+      remote,
+      ...homeOptions()
     });
     sections = [];
     clampSelection(results.items.length, resetSelection);
@@ -228,8 +229,14 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       activeSessionId,
       sortRows: listStore?.sortBy ? (rows, orderBy, ids) => listStore.sortBy(rows, orderBy, ids) : null,
       // 子代理在跑的父会话同运行中行一样不占折叠名额(web runningSubagentCount > 0)。
-      isRunningSubagentRoot: listStore?.isRunningSubagentRoot ? (id) => listStore.isRunningSubagentRoot(id) : null
+      isRunningSubagentRoot: listStore?.isRunningSubagentRoot ? (id) => listStore.isRunningSubagentRoot(id) : null,
+      ...homeOptions()
     });
+  }
+
+  /// 落在用户 home 的目录(临时会话的 cwd)在组标题/搜索里简称 Home。
+  function homeOptions() {
+    return { home: deps.sessions?.hostHome ?? null, homeLabel: t("workspace.home") };
   }
 
   async function refresh({ resetSelection = false, showLoading = false } = {}) {

@@ -1845,6 +1845,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     workspaceMenu = mountWorkspaceMenu(elements, deps, {
       showToast,
       hostCwd: () => state.hostCwd,
+      // 临时会话落在用户 home:工作目录标签显示 Home,而不是用户名或整条 C:\Users\<name>。
+      hostHome: () => state.hostHome ?? deps.sessions?.hostHome ?? null,
       // 换工作目录:历史列表换过滤范围;新建会话页上它还决定"下一条消息发去哪",
       // 所以 Git 入口也要跟着重判 —— 否则头部会一边写着新目录名,一边显示上一个
       // 仓库的分支。

@@ -152,6 +152,7 @@ const MESSAGES = Object.freeze({
     // 用"临时目录"而不是"无"——用户拿到的确实是一个可用目录,这么说更具体。
     "workspace.temporary": "Temporary directory",
     "workspace.temporaryHint": "Host-assigned working directory",
+    "workspace.home": "Home",
     "workspace.add": "Add folder…",
     "workspace.addFailed": "Could not add that folder",
     // 首次使用的默认工作区(web ui-workspace locales defaultWorkspace.*):标题同时是目录名。
@@ -1358,6 +1359,7 @@ const MESSAGES = Object.freeze({
     "workspace.all": "全部",
     "workspace.temporary": "临时目录",
     "workspace.temporaryHint": "由宿主分配的工作目录",
+    "workspace.home": "Home",
     "workspace.add": "添加目录…",
     "workspace.addFailed": "添加目录失败",
     "workspace.defaultTitle": "默认工作区",

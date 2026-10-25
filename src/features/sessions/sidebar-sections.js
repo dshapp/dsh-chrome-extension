@@ -20,6 +20,11 @@
 //    用浏览器本地账本。
 //
 // 分组本身不参与排序档:orderBy 只决定**组内**的行怎么排(Mac 的取舍)。
+//
+// 组标题:落在用户 home 的工作区显示为 homeLabel(默认 "Home"),而不是用户名或
+// 整条 C:\Users\<name>;文案由调用方传入,这一层仍不碰 i18n。
+
+import { workspaceDisplayName, DEFAULT_HOME_LABEL } from "../../shared/workspace-path.js";
 
 /// 折叠状态下每个分组最多画几个闲置行(Mac SessionQuickSwitch.collapsedGroupRowLimit)。
 export const COLLAPSED_GROUP_ROW_LIMIT = 5;
@@ -128,6 +133,8 @@ function defaultSort(rows) {
  * @param {(sessionId: string) => boolean} [options.isRunningSubagentRoot]
  *        该会话是否有子代理后裔在跑,通常注入 listStore.isRunningSubagentRoot。
  * @param {number} [options.rowLimit] 折叠时每组画几个闲置行(测试可调)。
+ * @param {string|null} [options.home] 宿主报的用户 home;为空时按平台目录形状判断。
+ * @param {string} [options.homeLabel] home 工作区的组标题。
  * @returns {{sections: Array, renderedIds: Array<string>, activeGroupId: string|null}}
  */
 export function buildSidebarSections({
@@ -143,7 +150,9 @@ export function buildSidebarSections({
   activeSessionId = null,
   sortRows = null,
   isRunningSubagentRoot = null,
-  rowLimit = COLLAPSED_GROUP_ROW_LIMIT
+  rowLimit = COLLAPSED_GROUP_ROW_LIMIT,
+  home = null,
+  homeLabel = DEFAULT_HOME_LABEL
 } = {}) {
   const isLive = typeof isRunningSubagentRoot === "function"
     ? (item) => isRunningSubagentRoot(item.sessionId)
@@ -203,7 +212,7 @@ export function buildSidebarSections({
         kind: "workspace",
         id: groupId,
         workspaceId: groupId,
-        title: workspace.title || basename(workspace.path),
+        title: workspaceDisplayName(workspace, { home, homeLabel }),
         hint: workspace.path ?? null,
         rows: sort(rows, orderBy, memberIds),
         collapsed: collapsed.has(groupId),
@@ -269,8 +278,4 @@ function section({ kind, id, workspaceId = null, title, hint = null, rows, colla
 function activeGroupOf(sections, activeSessionId) {
   if (!activeSessionId) return null;
   return sections.find((item) => item.allIds.includes(activeSessionId))?.id ?? null;
-}
-
-function basename(path) {
-  return String(path || "").replace(/\/+$/, "").split("/").pop() || String(path || "");
 }

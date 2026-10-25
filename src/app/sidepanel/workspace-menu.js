@@ -3,6 +3,7 @@
 // 过滤历史 + 决定下一个新会话建在哪,绝不改动已有会话。
 import { renderMenuItems } from "./sidepanel-overlays.js";
 import { t } from "../../shared/i18n.js";
+import { workspaceDisplayName } from "../../shared/workspace-path.js";
 
 const STORAGE_KEY = "dsh_workspace_id";
 const ALL_ID = "__all__";
@@ -31,13 +32,17 @@ async function writeStoredId(workspaceId) {
   }
 }
 
-function basename(path) {
-  return String(path || "").replace(/\/+$/, "").split("/").pop() || path || "";
-}
-
 /// @param hostCwd 读取宿主自身 cwd 的函数（来自 `$events` ready.host.home）。未选工作目录
 ///        的会话都落在这里,所以它就是「临时目录」这一项的过滤路径。
-export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCwd } = {}) {
+/// @param hostHome 读取宿主报的用户 home(`$events` ready.host.home)。落在 home 的
+///        目录(临时会话的 cwd)显示为「Home」,而不是用户名或整条 C:\Users\<name>。
+export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCwd, hostHome } = {}) {
+  /// 目录的显示名:home 简称 Home;其余用标题或目录名(Windows 反斜杠路径同样取末段)。
+  const displayName = (path, title = null) => workspaceDisplayName(
+    { title, path },
+    { home: hostHome?.() ?? null, homeLabel: t("workspace.home") }
+  );
+
   let workspaces = [];
   // null = 「全部」(不过滤);否则为选中的 workspaceId。
   let selectedId = null;
@@ -56,9 +61,9 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
 
   function label() {
     const current = selected();
-    if (current) return current.title || basename(current.path);
+    if (current) return displayName(current.path, current.title);
     if (tempSelected) return t("workspace.temporary");
-    if (orphanCwd) return basename(orphanCwd);
+    if (orphanCwd) return displayName(orphanCwd);
     return t("workspace.all");
   }
 
@@ -67,9 +72,9 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
   /// 写成两个函数,免得一句"全部"被读成"新会话要建在所有目录里"。
   function heroLabel() {
     const current = selected();
-    if (current) return current.title || basename(current.path);
+    if (current) return displayName(current.path, current.title);
     // hero 上「全部」和「临时目录」是同一件事:都不带归属参数创建。
-    if (orphanCwd && !tempSelected) return basename(orphanCwd);
+    if (orphanCwd && !tempSelected) return displayName(orphanCwd);
     return t("workspace.temporary");
   }
 
@@ -77,8 +82,8 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
   /// 所以未选具体目录时说「临时目录」(会话真正会落在宿主 cwd),而不是「全部」。
   function badgeLabel() {
     const current = selected();
-    if (current) return current.title || basename(current.path);
-    if (orphanCwd) return basename(orphanCwd);
+    if (current) return displayName(current.path, current.title);
+    if (orphanCwd) return displayName(orphanCwd);
     return t("workspace.temporary");
   }
 
@@ -120,7 +125,7 @@ export function mountWorkspaceMenu(elements, deps, { onChange, showToast, hostCw
         : []),
       ...workspaces.map((item) => ({
         id: item.workspaceId,
-        label: item.title || basename(item.path),
+        label: displayName(item.path, item.title),
         hint: item.path,
         // 只有真实工作目录可拖:「全部」/「临时目录」/「添加目录…」是功能项,
         // 不属于这份可排序的名单。
