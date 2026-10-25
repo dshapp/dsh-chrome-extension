@@ -8,6 +8,12 @@
 //
 // 更新走宿主 installBundle(name@latest),保留原来的启停;已加载的包换代码只能重启,
 // 宿主因此答 restart-required,交给调用方的 restart。
+//
+// 宿主开着 HMR 时(dsh web 默认)不许原地换版本、答 already-installed,它给的路是先
+// removeBundle 再装(web 插件页的「更新」也是这么做的),两步都当场生效、不必重启;
+// 新版装不上时把原版本装回去。卸载前宿主会先停用它:要是停不下来(bundle-in-use /
+// stop-profile —— 典型是宿主启动后 profile 的依赖又被改过,只能重启才能换代码),
+// 宿主会把它留在停用状态,这里把开关拨回去,并改成「重启服务并更新」:重启后再走一遍。
 import { isExactVersion, isUpgrade } from "../host-proxy/version.js";
 import { OFFICIAL_NPM_REGISTRY, NPMMIRROR_REGISTRY } from "./plugin-registry.js";
 
@@ -48,6 +54,19 @@ export async function fetchLatestVersion(name, {
   return null;
 }
 
+/// 宿主的变更没有落地(失败或被取消)。
+function failed(result) {
+  return result?.application === "failed" || result?.application === "cancelled";
+}
+
+/// 卸载时这几种拒绝说明插件此刻停不下来,重启宿主后就能卸。
+const BLOCKED_WHILE_RUNNING = new Set(["bundle-in-use", "stop-profile"]);
+
+/// 失败的说法:宿主 / pnpm 的原话优先,最后才是错误码。
+function reason(result) {
+  return result.error?.diagnostic || result.packageResult?.output || result.error?.code || result.application;
+}
+
 /// 更新 / 安装后宿主要重启时用:经 serverOps 重启 dsh web(与服务端页的「重启服务」同一条路)。
 /// 返回 false = 这台机器上重启不了(daemon 没跑 / 太老),由界面说"重启后生效"。
 export function serverRestarter(serverOps) {
@@ -77,6 +96,10 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     updated: null,
     /// 装好了但重启不了:新版要等服务重启才加载。
     restartRequired: false,
+    /// 插件正在运行、换不了:得先重启服务,下一次「更新」会先重启再装。
+    restartFirst: false,
+    /// 要先重启,可这台机器上重启不了:只能请用户手动重启。
+    restartFailed: false,
     error: ""
   };
   // 进页面的检查与更新后的检查可能交错;只认最后一次。
@@ -98,6 +121,8 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     if (seq !== checkSeq) return;
     state.updated = null;
     state.restartRequired = false;
+    state.restartFirst = false;
+    state.restartFailed = false;
     state.error = "";
     if (!bundle?.installed || !installedFromRegistry(bundle) || !isExactVersion(bundle.version)) {
       state.installed = null;
@@ -115,20 +140,57 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
 
   async function update() {
     if (state.updating || !available()) return;
-    const target = state.latest;
     checkSeq += 1;
     state.updating = true;
     state.error = "";
     state.updated = null;
     state.restartRequired = false;
     emit();
+    if (state.restartFirst) {
+      const restarted = restart ? await restart() : false;
+      state.updating = false;
+      if (!restarted) {
+        state.restartFailed = true;
+        emit();
+        return;
+      }
+      // 重启后的宿主才是真的:重读一遍再装(它可能已经是新版了)。
+      await check();
+      if (!available()) { emit(); return; }
+    }
+    await install();
+  }
+
+  async function install() {
+    const target = state.latest;
+    const previous = state.installed;
+    state.updating = true;
+    state.restartFirst = false;
+    state.restartFailed = false;
+    emit();
+    const add = (version) => pluginManager.installBundle(`${name}@${version}`, {
+      requestId: "plugin-update-" + Date.now().toString(36),
+      enabled: state.enabled
+    });
     try {
-      const result = await pluginManager.installBundle(`${name}@${target}`, {
-        requestId: "plugin-update-" + Date.now().toString(36),
-        enabled: state.enabled
-      });
-      if (result?.application === "failed" || result?.application === "cancelled") {
-        state.error = result.error?.diagnostic || result.packageResult?.output || result.error?.code || result.application;
+      let result = await add(target);
+      if (failed(result) && result.error?.code === "already-installed") {
+        const removed = await pluginManager.removeBundle(name).catch((error) => ({ application: "failed", thrown: error }));
+        if (failed(removed)) {
+          // 宿主卸载前先停用了它:卸不掉就把开关拨回去,别让插件就此被关掉。
+          if (state.enabled) await pluginManager.setBundleEnabled(name, true).catch(() => undefined);
+          if (removed.thrown) throw removed.thrown;
+          if (BLOCKED_WHILE_RUNNING.has(removed.error?.code)) state.restartFirst = true;
+          else state.error = reason(removed);
+          return;
+        }
+        // 旧版已经卸掉了:新版装不上就把原来的装回去,别让插件就此没了。
+        const restore = () => add(previous).catch(() => undefined);
+        result = await add(target).catch(async (error) => { await restore(); throw error; });
+        if (failed(result)) await restore();
+      }
+      if (failed(result)) {
+        state.error = reason(result);
         return;
       }
       // pnpm 已经把新版放进 profile;重读清单要等重启后的宿主,这里直接记下。

@@ -143,6 +143,119 @@ test("update:装 name@latest 并保留启停;restart-required 时重启,重启�
   assert.equal(live.state.updated, "0.3.14");
 });
 
+test("update 遇到 HMR 宿主答 already-installed:先卸再装,当场生效不重启;新版装不上就把原版本装回去", async () => {
+  const name = "dsh-chrome-control";
+  const calls = [];
+  let restarts = 0;
+  const hmr = (installs) => ({
+    async pluginBundles() { return [bundle(name)]; },
+    async installBundle(spec, options) { calls.push(["install", spec, options.enabled]); return installs.shift(); },
+    async removeBundle(target) { calls.push(["remove", target]); return { application: "applied" }; }
+  });
+  const update = createPluginUpdate({
+    name, fetchLatest: async () => "0.3.15", restart: async () => { restarts += 1; return true; },
+    pluginManager: hmr([{ application: "failed", error: { code: "already-installed" } }, { application: "applied" }])
+  });
+  await update.check();
+  await update.update();
+  assert.deepEqual(calls, [
+    ["install", "dsh-chrome-control@0.3.15", true],
+    ["remove", "dsh-chrome-control"],
+    ["install", "dsh-chrome-control@0.3.15", true]
+  ]);
+  assert.equal(restarts, 0);
+  assert.equal(update.state.updated, "0.3.15");
+  assert.equal(update.state.error, "");
+
+  calls.length = 0;
+  const broken = createPluginUpdate({
+    name, fetchLatest: async () => "0.3.15",
+    pluginManager: hmr([
+      { application: "failed", error: { code: "already-installed" } },
+      { application: "failed", error: { code: "incompatible-version", diagnostic: "needs dsh 0.3" } },
+      { application: "applied" }
+    ])
+  });
+  await broken.check();
+  await broken.update();
+  assert.deepEqual(calls.map((call) => call.slice(0, 2)), [
+    ["install", "dsh-chrome-control@0.3.15"],
+    ["remove", "dsh-chrome-control"],
+    ["install", "dsh-chrome-control@0.3.15"],
+    ["install", "dsh-chrome-control@0.3.13"]
+  ]);
+  assert.equal(broken.state.error, "needs dsh 0.3");
+  assert.equal(broken.state.updated, null);
+
+  // 卸不掉的别的原因:原样报出来,停用的开关拨回去。
+  calls.length = 0;
+  const refused = createPluginUpdate({
+    name, fetchLatest: async () => "0.3.15",
+    pluginManager: { ...hmr([{ application: "failed", error: { code: "already-installed" } }]),
+      async removeBundle(target) { calls.push(["remove", target]); return { application: "failed", error: { code: "not-removable" } }; },
+      async setBundleEnabled(target, enabled) { calls.push(["enable", target, enabled]); return { application: "applied" }; } }
+  });
+  await refused.check();
+  await refused.update();
+  assert.deepEqual(calls.at(-1), ["enable", "dsh-chrome-control", true]);
+  assert.equal(refused.state.error, "not-removable");
+  assert.equal(refused.state.restartFirst, false);
+});
+
+test("插件正在运行卸不掉(bundle-in-use):开关拨回去,改成「重启服务并更新」,重启后重读再先卸再装", async () => {
+  const name = "dsh-chrome-control";
+  const calls = [];
+  let hostRestarted = false;
+  let restartWorks = false;
+  const manager = {
+    async pluginBundles() { return [bundle(name, { version: "0.3.13" })]; },
+    async installBundle(spec) {
+      calls.push(["install", spec]);
+      return calls.filter((c) => c[0] === "install").length === 1 || !hostRestarted
+        ? { application: "failed", error: { code: "already-installed" } }
+        : { application: "applied" };
+    },
+    async removeBundle(target) {
+      calls.push(["remove", target]);
+      return hostRestarted ? { application: "applied" } : { application: "failed", error: { code: "bundle-in-use" } };
+    },
+    async setBundleEnabled(target, enabled) { calls.push(["enable", target, enabled]); return { application: "restart-required" }; }
+  };
+  const update = createPluginUpdate({
+    name, pluginManager: manager, fetchLatest: async () => "0.3.15",
+    restart: async () => { calls.push(["restart"]); if (restartWorks) hostRestarted = true; return restartWorks; }
+  });
+  await update.check();
+  await update.update();
+  assert.deepEqual(calls, [["install", "dsh-chrome-control@0.3.15"], ["remove", "dsh-chrome-control"], ["enable", "dsh-chrome-control", true]]);
+  assert.equal(update.state.restartFirst, true);
+  assert.equal(update.state.error, "");
+  let html = pluginUpdateSection(update, { name, buttonId: "u" });
+  assert.match(html, /无法在线替换/);
+  assert.match(html, /重启服务并更新/);
+
+  // 这台机器上重启不了:请用户手动重启,按钮还在。
+  calls.length = 0;
+  await update.update();
+  assert.deepEqual(calls, [["restart"]]);
+  assert.equal(update.state.restartFailed, true);
+  html = pluginUpdateSection(update, { name, buttonId: "u" });
+  assert.match(html, /请手动重启/);
+  assert.match(html, /id="u"/);
+
+  calls.length = 0;
+  restartWorks = true;
+  await update.update();
+  assert.deepEqual(calls, [
+    ["restart"],
+    ["install", "dsh-chrome-control@0.3.15"],
+    ["remove", "dsh-chrome-control"],
+    ["install", "dsh-chrome-control@0.3.15"]
+  ]);
+  assert.equal(update.state.updated, "0.3.15");
+  assert.equal(update.state.restartFirst, false);
+});
+
 test("update 失败:原样保留宿主 / pnpm 的说法,按钮还在可以再试", async () => {
   const name = "dsh-chrome-control";
   const failed = createPluginUpdate({

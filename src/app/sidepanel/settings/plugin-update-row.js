@@ -24,9 +24,11 @@ export function pluginUpdateSection(update, { name, buttonId }) {
   const versions = state.installed && state.latest
     ? escapeHtml(t("plugUpd.versions", { current: state.installed, latest: state.latest }))
     : "";
-  const error = state.error
-    ? '<div class="set-row-note err">' + lucideIconSvg("triangle-alert", { size: 12 })
-      + "<span>" + escapeHtml(state.error) + "</span></div>"
+  const note = (kind, text) => '<div class="set-row-note ' + kind + '">' + lucideIconSvg("triangle-alert", { size: 12 })
+    + "<span>" + escapeHtml(text) + "</span></div>";
+  const error = state.error ? note("err", state.error)
+    : state.restartFailed ? note("err", t("plugUpd.restartFailed"))
+    : state.restartFirst ? note("warn", t("plugUpd.restartFirst"))
     : "";
   return section({
     body: row({
@@ -34,7 +36,7 @@ export function pluginUpdateSection(update, { name, buttonId }) {
       hint: versions + error,
       control: state.updating
         ? statusLine(t("plug.updating"), "busy")
-        : button({ id: buttonId, label: t("plug.update"), kind: "primary" })
+        : button({ id: buttonId, label: t(state.restartFirst ? "plugUpd.restartAndUpdate" : "plug.update"), kind: "primary" })
     })
   });
 }
