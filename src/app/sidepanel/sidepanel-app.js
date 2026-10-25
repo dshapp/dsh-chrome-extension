@@ -20,6 +20,7 @@ import { mountTriggerMenu } from "./trigger-menu.js";
 import { projectDraft, reconcileEdit, reconcileDraft, renderChipMirror, insertReference, scanFileMentions, fileMentionPath, chipAlignedRange, insertPasted } from "./composer-chips.js";
 import { collectElements } from "./sidepanel-elements.js";
 import { mountAttachmentControls } from "./composer-attachments.js";
+import { focusComposerOnOpen } from "./composer-focus.js";
 import { createSessionShortcutController, getSessionShortcutLabels } from "../../features/sessions/session-shortcuts.js";
 import { visibleSessions } from "../../features/sessions/sidebar-sections.js";
 import { mountGoalBar, mountTodoPanel, mountStatsBar, activeGoal } from "../../features/docks/session-docks.js";
@@ -1940,7 +1941,11 @@ export function createSidepanelApp(root, deps, options = {}) {
     document.defaultView?.addEventListener("unload", () => {
       mainSurfaces?.dispose(); settingsView?.dispose(); deps.automations?.dispose();
     }, { once: true });
-    startConnection();
+    // 打开侧栏即可打字:静态界面就绪时先聚焦一次(连接期间也能起草),会话恢复
+    // 完成后再补一次 —— 恢复可能把输入框换成交互卡片或子代理只读,之后才知道
+    // 该不该聚焦。焦点已有主(用户点了别处 / 引导弹窗开着)时不抢。
+    focusComposerOnOpen(elements);
+    void startConnection().finally(() => focusComposerOnOpen(elements));
     // 通知点击(侧栏已开着):worker 写入 pending sessionId,这里即时切会话。
     // 启动那次的领取在 startConnection 里,要等会话列表就绪。
     deps.pendingSessionOpen?.subscribe?.((sessionId) => {
