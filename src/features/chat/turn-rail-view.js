@@ -62,6 +62,20 @@ export function hiddenTurnCounts({ count, viewHeight, scrollTop }) {
   return { above, below };
 }
 
+/// 两份轨道条目在可见/可交互层面是否一致(turn、锚点、分页目标、预览文本)。
+export function sameTurnRailItems(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (x === y) continue;
+    if (!x || !y) return false;
+    if (x.turn !== y.turn || x.anchorRow !== y.anchorRow || x.seq !== y.seq || x.prompt !== y.prompt || x.response !== y.response) return false;
+  }
+  return true;
+}
+
 function prefersReducedMotion() {
   return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
@@ -153,8 +167,8 @@ export function mountTurnRail(container, { onNavigate, band = null } = {}) {
       scrollTop: scroller.scrollTop
     });
     // 溢出时两枚按钮都占位(隐藏用 visibility),免得滚到头时刻度区上下跳。
-    upButton.hidden = !overflow;
-    downButton.hidden = !overflow;
+    if (upButton.hidden !== !overflow) upButton.hidden = !overflow;
+    if (downButton.hidden !== !overflow) downButton.hidden = !overflow;
     setEdge(upButton, above, "turnNavigation.moreAbove");
     setEdge(downButton, below, "turnNavigation.moreBelow");
     scroller.classList.toggle("fade-top", above > 0);
@@ -163,11 +177,14 @@ export function mountTurnRail(container, { onNavigate, band = null } = {}) {
 
   function setEdge(button, count, key) {
     button.classList.toggle("exhausted", count === 0);
-    button.disabled = count === 0;
-    button.querySelector(".turn-rail-edge-count").textContent = count > 0 ? String(count) : "";
+    if (button.disabled !== (count === 0)) button.disabled = count === 0;
+    const countEl = button.querySelector(".turn-rail-edge-count");
+    const text = count > 0 ? String(count) : "";
+    if (countEl.textContent !== text) countEl.textContent = text;
     const label = t(key, { count });
-    button.setAttribute("aria-label", label);
-    button.title = count > 0 ? label : "";
+    if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+    const title = count > 0 ? label : "";
+    if (button.title !== title) button.title = title;
   }
 
   /// active 轮出视窗时滚回中间;指针在轨道上时不动它。
@@ -196,26 +213,44 @@ export function mountTurnRail(container, { onNavigate, band = null } = {}) {
     }
   }
 
-  function buildTicks() {
-    const previousScroll = scroller.scrollTop;
-    ticks.clear();
-    const fragment = document.createDocumentFragment();
-    for (const item of state.items) {
-      const tick = document.createElement("button");
-      tick.type = "button";
-      tick.className = "turn-tick";
-      tick.dataset.turn = String(item.turn);
-      tick.tabIndex = -1;
-      tick.addEventListener("click", () => onNavigate?.(item));
-      tick.addEventListener("pointerenter", () => showPreview(item, tick));
-      tick.addEventListener("focus", () => showPreview(item, tick));
-      tick.addEventListener("blur", () => { if (previewTurn === item.turn) hidePreview(); });
-      ticks.set(item.turn, { tick, item });
-      fragment.append(tick);
+  function createTick(turn) {
+    const tick = document.createElement("button");
+    tick.type = "button";
+    tick.className = "turn-tick";
+    tick.dataset.turn = String(turn);
+    tick.tabIndex = -1;
+    // 处理器按 turn 回查当前条目:刻度跨快照复用,闭包里不能钉死旧的 item。
+    const current = () => ticks.get(turn)?.item;
+    tick.addEventListener("click", () => { const item = current(); if (item) onNavigate?.(item); });
+    tick.addEventListener("pointerenter", () => { const item = current(); if (item) showPreview(item, tick); });
+    tick.addEventListener("focus", () => { const item = current(); if (item) showPreview(item, tick); });
+    tick.addEventListener("blur", () => { if (previewTurn === turn) hidePreview(); });
+    return tick;
+  }
+
+  /// 按 turn 键对账刻度:已有的刻度原样复用(只换条目引用),只增删真正出现/消失的轮。
+  /// 运行中每个流式帧 store 都会给一份新的 items 数组;若整列重建,新刻度会先以
+  /// 默认样式落地再被加上 active,active 刻度的 transform/颜色过渡每帧重播 —— 即
+  /// "轮次指示器不停闪"。复用 DOM 节点后,内容不变的帧对刻度零改动。
+  function syncTicks() {
+    const nextTurns = new Set(state.items.map((item) => item.turn));
+    for (const [turn, entry] of ticks) {
+      if (nextTurns.has(turn)) continue;
+      entry.tick.remove();
+      ticks.delete(turn);
     }
-    scroller.replaceChildren(fragment);
-    // replaceChildren 会把内容瞬间清空,浏览器随之把 scrollTop 夹到 0;还原读者的位置。
-    scroller.scrollTop = previousScroll;
+    let cursor = scroller.firstElementChild;
+    for (const item of state.items) {
+      let entry = ticks.get(item.turn);
+      if (entry) entry.item = item;
+      else {
+        entry = { tick: createTick(item.turn), item };
+        ticks.set(item.turn, entry);
+      }
+      // 已在正确位置就不碰它:移动节点会丢掉已算好的样式,同样触发过渡重播。
+      if (entry.tick === cursor) cursor = cursor.nextElementSibling;
+      else scroller.insertBefore(entry.tick, cursor);
+    }
     renderedItems = state.items;
   }
 
@@ -229,20 +264,25 @@ export function mountTurnRail(container, { onNavigate, band = null } = {}) {
       tick.classList.toggle("busy", busy);
       tick.classList.toggle("unloaded", item.anchorRow == null);
       tick.classList.toggle("previewing", item.turn === previewTurn && !active);
-      tick.setAttribute("aria-label", t(item.anchorRow != null ? "turnNavigation.jump" : "turnNavigation.jumpLoad", { turn: item.turn }));
-      if (active) tick.setAttribute("aria-current", "true");
-      else tick.removeAttribute("aria-current");
-      if (busy) tick.setAttribute("aria-busy", "true");
-      else tick.removeAttribute("aria-busy");
+      const label = t(item.anchorRow != null ? "turnNavigation.jump" : "turnNavigation.jumpLoad", { turn: item.turn });
+      if (tick.getAttribute("aria-label") !== label) tick.setAttribute("aria-label", label);
+      toggleAttr(tick, "aria-current", active);
+      toggleAttr(tick, "aria-busy", busy);
       // roving tabindex:Tab 只落在 active 刻度上,其余用方向键走。
       const focusable = active && !rovingSet;
       if (focusable) rovingSet = true;
-      if (!scroller.contains(document.activeElement)) tick.tabIndex = focusable ? 0 : -1;
+      const tabIndex = focusable ? 0 : -1;
+      if (!scroller.contains(document.activeElement) && tick.tabIndex !== tabIndex) tick.tabIndex = tabIndex;
     }
     if (!rovingSet && !scroller.contains(document.activeElement)) {
       const last = [...ticks.values()].at(-1);
-      if (last) last.tick.tabIndex = 0;
+      if (last && last.tick.tabIndex !== 0) last.tick.tabIndex = 0;
     }
+  }
+
+  function toggleAttr(el, name, on) {
+    if (on) { if (el.getAttribute(name) !== "true") el.setAttribute(name, "true"); }
+    else if (el.hasAttribute(name)) el.removeAttribute(name);
   }
 
   function render() {
@@ -253,8 +293,8 @@ export function mountTurnRail(container, { onNavigate, band = null } = {}) {
       return;
     }
     const wasHidden = container.hidden;
-    container.hidden = false;
-    if (renderedItems !== items) buildTicks();
+    if (wasHidden) container.hidden = false;
+    if (renderedItems !== items) syncTicks();
     decorateTicks();
     if (wasHidden) placed = false;
     layout();
@@ -353,6 +393,8 @@ export function mountTurnRail(container, { onNavigate, band = null } = {}) {
   return Object.freeze({
     set(items, activeTurn, busyTurn) {
       const next = { items: Array.isArray(items) ? items : [], activeTurn: activeTurn ?? null, busyTurn: busyTurn ?? null };
+      // 运行中每帧都会来一份新数组;内容没变就沿用旧的,不触发任何重排。
+      if (next.items !== state.items && sameTurnRailItems(next.items, state.items)) next.items = state.items;
       const changed = state.items !== next.items || state.activeTurn !== next.activeTurn || state.busyTurn !== next.busyTurn;
       state = next;
       if (changed) render();
