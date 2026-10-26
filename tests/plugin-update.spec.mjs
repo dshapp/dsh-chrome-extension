@@ -207,6 +207,7 @@ test("插件正在运行卸不掉(bundle-in-use):开关拨回去,改成「重启
   const calls = [];
   let hostRestarted = false;
   let restartWorks = false;
+  let restartReason = false;
   const manager = {
     async pluginBundles() { return [bundle(name, { version: "0.3.13" })]; },
     async installBundle(spec) {
@@ -223,7 +224,7 @@ test("插件正在运行卸不掉(bundle-in-use):开关拨回去,改成「重启
   };
   const update = createPluginUpdate({
     name, pluginManager: manager, fetchLatest: async () => "0.3.15",
-    restart: async () => { calls.push(["restart"]); if (restartWorks) hostRestarted = true; return restartWorks; }
+    restart: async () => { calls.push(["restart"]); if (restartWorks) hostRestarted = true; return restartWorks || restartReason; }
   });
   await update.check();
   await update.update();
@@ -242,6 +243,14 @@ test("插件正在运行卸不掉(bundle-in-use):开关拨回去,改成「重启
   html = pluginUpdateSection(update, { name, buttonId: "u" });
   assert.match(html, /请手动重启/);
   assert.match(html, /id="u"/);
+
+  // 重启了但新服务没起来(比如 dsh 本体装坏了):把原因说出来,而不是只说"重启不了"。
+  restartReason = "新服务没有启动，日志在 /tmp/dsh-web.log。";
+  await update.update();
+  assert.equal(update.state.restartError, restartReason);
+  html = pluginUpdateSection(update, { name, buttonId: "u" });
+  assert.match(html, /重启后没能起来：新服务没有启动，日志在 \/tmp\/dsh-web\.log。/);
+  restartReason = false;
 
   calls.length = 0;
   restartWorks = true;
@@ -277,11 +286,14 @@ test("update 失败:原样保留宿主 / pnpm 的说法,按钮还在可以再试
   assert.equal(thrown.state.updating, false);
 });
 
-test("serverRestarter:started 才算重启成功,没有 serverOps 或抛错都是 false", async () => {
-  assert.equal(await serverRestarter(null)(), false);
+test("serverRestarter:started 才算重启成功,否则带回原因(说不出时为空串)", async () => {
+  assert.equal(await serverRestarter(null)(), "");
   assert.equal(await serverRestarter({ restart: async () => ({ started: true }) })(), true);
-  assert.equal(await serverRestarter({ restart: async () => ({ started: false }) })(), false);
-  assert.equal(await serverRestarter({ restart: async () => { throw new Error("no daemon"); } })(), false);
+  assert.equal(await serverRestarter({ restart: async () => ({ started: false }) })(), "");
+  // 旧服务停了、新服务没起来:把日志位置说出来。
+  assert.equal(await serverRestarter({ restart: async () => ({ stopped: true, started: false, log: "/tmp/dsh-web.log" }) })(),
+    "新服务没有启动，日志在 /tmp/dsh-web.log。");
+  assert.equal(await serverRestarter({ restart: async () => { throw new Error("no daemon"); } })(), "no daemon");
 });
 
 test("pluginUpdateSection:有新版给版本对比 + 更新按钮;更新中换成进度;更新完说清是否要重启", async () => {

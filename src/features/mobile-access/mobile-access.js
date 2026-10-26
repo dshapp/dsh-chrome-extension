@@ -153,7 +153,7 @@ export function createMobileAccess({ connection, pluginManager, onChange } = {})
 
   /// 一键装上插件并让它生效(对齐 Mac APIClient.enablePluginBundle:装过就启用,
   /// 没装就装)。宿主说要重启时交给 restart;之后重读状态并出一张码。
-  /// restart 返回 false 表示这台机器上重启不了,此时留下 "restart-required",
+  /// restart 不返回 true 表示没重启成功,此时留下 "restart-required",
   /// 由界面说成"重启服务后生效"。
   async function install({ restart } = {}) {
     if (state.installing || !pluginManager) return;
@@ -173,7 +173,7 @@ export function createMobileAccess({ connection, pluginManager, onChange } = {})
       }
       if (result?.application === "restart-required") {
         const restarted = restart ? await restart() : false;
-        if (restarted === false) {
+        if (restarted !== true) {
           state.installError = "restart-required";
           return;
         }

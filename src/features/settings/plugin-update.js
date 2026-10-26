@@ -14,6 +14,7 @@
 // 新版装不上时把原版本装回去。卸载前宿主会先停用它:要是停不下来(bundle-in-use /
 // stop-profile —— 典型是宿主启动后 profile 的依赖又被改过,只能重启才能换代码),
 // 宿主会把它留在停用状态,这里把开关拨回去,并改成「重启服务并更新」:重启后再走一遍。
+import { t } from "../../shared/i18n.js";
 import { isExactVersion, isUpgrade } from "../host-proxy/version.js";
 import { OFFICIAL_NPM_REGISTRY, NPMMIRROR_REGISTRY } from "./plugin-registry.js";
 
@@ -68,22 +69,25 @@ function reason(result) {
 }
 
 /// 更新 / 安装后宿主要重启时用:经 serverOps 重启 dsh web(与服务端页的「重启服务」同一条路)。
-/// 返回 false = 这台机器上重启不了(daemon 没跑 / 太老),由界面说"重启后生效"。
+/// 返回 true = 新服务已就绪;否则返回没重启成功的原因(字符串,说不出时为空串):
+/// 旧服务可能已经停了而新服务没起来(比如 dsh 本体装坏了),界面要把原因和日志位置说出来,
+/// 只说"重启不了"会让人以为什么都没发生。
 export function serverRestarter(serverOps) {
   return async () => {
-    if (!serverOps) return false;
+    if (!serverOps) return "";
     try {
       const result = await serverOps.restart();
-      return Boolean(result?.started);
-    } catch {
-      return false;
+      if (result?.started) return true;
+      return result?.log ? t("plugUpd.restartNoStart", { log: result.log }) : "";
+    } catch (error) {
+      return String(error?.message || "");
     }
   };
 }
 
 /// @param name          插件包名。
 /// @param pluginManager plugin-manager-service:读清单与装包。
-/// @param restart       宿主说要重启时调用;返回 false = 这台机器上重启不了。
+/// @param restart       宿主说要重启时调用;返回 true = 重启好了,否则是没重启成功的原因。
 /// @param fetchLatest   (name) => 最新版本号 | null,测试替身用。
 /// @param onChange      状态变了就回调一次。
 export function createPluginUpdate({ name, pluginManager, restart, fetchLatest = fetchLatestVersion, onChange } = {}) {
@@ -98,8 +102,10 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     restartRequired: false,
     /// 插件正在运行、换不了:得先重启服务,下一次「更新」会先重启再装。
     restartFirst: false,
-    /// 要先重启,可这台机器上重启不了:只能请用户手动重启。
+    /// 要先重启,可没重启成功:只能请用户手动重启。
     restartFailed: false,
+    /// 没重启成功的原因(serverOps 的说法或新服务的日志位置),说不出时为空。
+    restartError: "",
     error: ""
   };
   // 进页面的检查与更新后的检查可能交错;只认最后一次。
@@ -123,6 +129,7 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     state.restartRequired = false;
     state.restartFirst = false;
     state.restartFailed = false;
+    state.restartError = "";
     state.error = "";
     if (!bundle?.installed || !installedFromRegistry(bundle) || !isExactVersion(bundle.version)) {
       state.installed = null;
@@ -147,10 +154,11 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     state.restartRequired = false;
     emit();
     if (state.restartFirst) {
-      const restarted = restart ? await restart() : false;
+      const restarted = restart ? await restart() : "";
       state.updating = false;
-      if (!restarted) {
+      if (restarted !== true) {
         state.restartFailed = true;
+        state.restartError = typeof restarted === "string" ? restarted : "";
         emit();
         return;
       }
@@ -167,6 +175,7 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     state.updating = true;
     state.restartFirst = false;
     state.restartFailed = false;
+    state.restartError = "";
     emit();
     const add = (version) => pluginManager.installBundle(`${name}@${version}`, {
       requestId: "plugin-update-" + Date.now().toString(36),
@@ -197,8 +206,8 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
       state.installed = target;
       state.updated = target;
       if (result?.application === "restart-required") {
-        const restarted = restart ? await restart() : false;
-        if (restarted === false) state.restartRequired = true;
+        const restarted = restart ? await restart() : "";
+        if (restarted !== true) state.restartRequired = true;
       }
     } catch (error) {
       state.error = String(error?.message || error || "");

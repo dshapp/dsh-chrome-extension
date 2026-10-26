@@ -27,7 +27,9 @@ export function pluginUpdateSection(update, { name, buttonId }) {
   const note = (kind, text) => '<div class="set-row-note ' + kind + '">' + lucideIconSvg("triangle-alert", { size: 12 })
     + "<span>" + escapeHtml(text) + "</span></div>";
   const error = state.error ? note("err", state.error)
-    : state.restartFailed ? note("err", t("plugUpd.restartFailed"))
+    : state.restartFailed ? note("err", state.restartError
+      ? t("plugUpd.restartBroke", { reason: state.restartError })
+      : t("plugUpd.restartFailed"))
     : state.restartFirst ? note("warn", t("plugUpd.restartFirst"))
     : "";
   return section({
