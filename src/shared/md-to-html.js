@@ -4,7 +4,7 @@
 import { autoLinkUrls } from "./auto-link.js";
 import { isLocalImagePath, isSafeImageSrc } from "./image-src.js";
 import { splitMathSegments, renderMath } from "./math-render.js";
-import { externalHref, fileLinkTarget, webUrl } from "./link-targets.js";
+import { externalHref, fileLinkTarget, resolveWorkspacePath, webUrl } from "./link-targets.js";
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
 
@@ -77,12 +77,21 @@ function renderLink(label, escapedDest, options) {
   return label;
 }
 
-/// 转义态的 dest → 宿主 /api/file 要的文件路径;不是本地绝对路径返回 null。
-/// 逐字对齐 web localPathMediaUrl(去掉 ?/# 之后 decodeURIComponent,畸形转义
-/// 不认)与 Mac DSWImageProvider.displayURL(url.path(percentEncoded: false)):
-/// "/work/test%20ws/图.png" 读的是 "/work/test ws/图.png"。
-function localImagePath(escapedSrc) {
-  const raw = String(escapedSrc ?? "").replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => HTML_UNESCAPES[e]);
+/// 转义态的 dest → 宿主 /api/file 要的文件路径;读不了返回 null。两步,同 web
+/// MarkdownImage(`fileImages.resolve(fileLinkTarget(dest).path) ?? pathImages`):
+/// 1. 文件引用(fileLinkTarget:无协议、可带 #L12,带 ? 不认)按会话 cwd 解析
+///    (web ChatView fileImages = fileMediaUrl(resolveWorkspacePath(cwd, path)))——
+///    模型最常写的 ![二维码](<miniapp/static/qr.png>) 这类工作区相对路径走这里;
+/// 2. 兜底:本地绝对路径,逐字对齐 web localPathMediaUrl(去掉 ?/# 之后
+///    decodeURIComponent,畸形转义不认)与 Mac DSWImageProvider.displayURL
+///    (url.path(percentEncoded: false)):"/work/test%20ws/图.png" 读的是 "/work/test ws/图.png"。
+function localImagePath(escapedSrc, cwd) {
+  const raw = unescapeHtml(escapedSrc);
+  const file = fileLinkTarget(raw);
+  if (file) {
+    const resolved = resolveWorkspacePath(cwd, file.path);
+    if (isLocalImagePath(resolved)) return resolved;
+  }
   if (!isLocalImagePath(raw)) return null;
   let path;
   try { path = decodeURIComponent(raw.split(/[?#]/)[0]); } catch { return null; }
@@ -97,6 +106,7 @@ function localImagePath(escapedSrc) {
 // 无 src 的占位 <img data-local-path>,由调用方经宿主 /api/file 读成 blob: 再挂 src
 //(features/chat/local-images.js)。只有助手正文开它 —— 对齐 web 只在
 // AssistantMarkdown 传 pathImages;其余调用点保持原样文字输出。
+// options.cwd:会话工作区根,工作区相对路径图片按它补成绝对路径(web fileImages)。
 function renderInlineMarkup(escaped, options) {
   let out = escaped;
   // 行内 code 通常已被 renderInline 挖成占位符,这条规则因此多数时候不命中。
@@ -119,7 +129,7 @@ function renderInlineMarkup(escaped, options) {
       return `<img class="md-img" src="${src}" alt="${altAttr}" loading="lazy" referrerpolicy="no-referrer">`;
     }
     // 占位不带 src:加载前浏览器按 alt 显示文字;失败时调用方换成 alt 文字。
-    const localPath = options?.localImages ? localImagePath(src) : null;
+    const localPath = options?.localImages ? localImagePath(src, options.cwd) : null;
     if (localPath !== null) {
       return `<img class="md-local-img" data-local-path="${escapeAttribute(localPath)}" alt="${altAttr}">`;
     }

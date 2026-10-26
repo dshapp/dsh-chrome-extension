@@ -107,6 +107,40 @@ test('本地路径与 web localPathMediaUrl / Mac url.path 一样做百分号解
   assert.deepEqual(paths('![a](/tmp/%00.png)'), [])
 })
 
+test('工作区相对路径图片按 cwd 解析(web ChatView fileImages)', () => {
+  // 回归:![开发版二维码](<miniapp/static/preview_qrcode.png>) 在扩展里原样显示成文字,web 显示图片。
+  const paths = (md, cwd) => [...host(mdToHtml(md, { localImages: true, cwd })).querySelectorAll('img')]
+    .map((i) => i.getAttribute('data-local-path'))
+  const cwd = '/Users/u/proj/'
+  assert.deepEqual(paths('![开发版二维码](<miniapp/static/preview_qrcode.png>)', cwd),
+    ['/Users/u/proj/miniapp/static/preview_qrcode.png'])
+  assert.deepEqual(paths('![a](docs/my%20shot.png) ![b](<a b/图.png#L3>)', cwd),
+    ['/Users/u/proj/docs/my shot.png', '/Users/u/proj/a b/图.png'])
+  // 绝对路径不受 cwd 影响;?query 走 localPathMediaUrl 兜底去掉后缀。
+  assert.deepEqual(paths('![a](/tmp/x.png) ![b](/tmp/y.png?v=1)', cwd), ['/tmp/x.png', '/tmp/y.png'])
+  // 相对路径带 ?、带协议、协议相对:不认,保持文字。
+  for (const md of ['![x](rel.png?v=1)', '![x](ftp:rel.png)', '![x](//h/x.png)']) {
+    const root = host(mdToHtml(md, { localImages: true, cwd }))
+    assert.equal(root.querySelector('img'), null, md)
+    assert.ok(root.textContent.includes(md), md)
+  }
+  // 没有 cwd:相对路径仍是文字(与 web 未知 cwd 时一致)。
+  assert.deepEqual(paths('![x](<miniapp/q.png>)'), [])
+})
+
+test('增量渲染按 cwd 读回相对路径图,cwd 变化时重建', async () => {
+  const calls = []
+  const load = async (p) => { calls.push(p); return png() }
+  const box = document.createElement('div')
+  const md = '前文\n\n![qr](<miniapp/inc-rel.png>)\n\n后文\n\n尾'
+  renderIncrementalMarkdown(box, md, { loadLocalImage: load, cwd: '/w/a' })
+  await flush()
+  assert.ok(box.querySelector('img').src.startsWith('blob:'))
+  renderIncrementalMarkdown(box, md, { loadLocalImage: load, cwd: '/w/b' })
+  await flush()
+  assert.deepEqual(calls, ['/w/a/miniapp/inc-rel.png', '/w/b/miniapp/inc-rel.png'])
+})
+
 test('增量渲染对尖括号本地图也会读回', async () => {
   const calls = []
   const box = document.createElement('div')

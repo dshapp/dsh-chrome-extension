@@ -33,6 +33,21 @@ export function webUrl(value) {
 }
 
 /**
+ * 工作区相对路径 → 宿主路径(web dsh-util-workspace-path resolveWorkspacePath):
+ * 绝对路径(POSIX / Windows 盘符 / UNC)原样;没有 cwd 原样;否则拼到 cwd 下。
+ * @param {string|null|undefined} cwd 会话工作区根。
+ * @param {string} path 绝对或工作区相对路径。
+ */
+export function resolveWorkspacePath(cwd, path) {
+  const value = String(path ?? "");
+  const windows = (p) => /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
+  if (value.startsWith("/") || windows(value)) return value;
+  if (!cwd) return value;
+  const separator = windows(cwd) && cwd.includes("\\") ? "\\" : "/";
+  return `${cwd.replace(/[/\\]+$/, "")}${separator}${value.replace(/^[/\\]+/, "")}`;
+}
+
+/**
  * 链接目标若指向本地文件,返回 { path, line? };否则 null。
  * @param {string} value markdown 里写的原始目标(已反转义)。
  */

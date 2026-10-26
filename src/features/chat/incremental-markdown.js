@@ -47,10 +47,15 @@ export function stableCut(markdown, unstableBlocks = UNSTABLE_TAIL_BLOCKS) {
 /// blob:(local-images.js,对齐 web AssistantMarkdown pathImages);只有助手正文传。
 /// fileLinks:把 [label](path#L12) 这类文件目标渲染成可点的 .md-file-link,
 /// 点击由 link-actions.js 接管;同样只有助手正文传。
-export function renderIncrementalMarkdown(host, text, { streaming = false, force = false, loadLocalImage = null, fileLinks = false } = {}) {
+/// cwd:会话工作区根。工作区相对路径图片(![qr](<miniapp/qr.png>))按它补成绝对
+/// 路径再读(web ChatView fileImages);没有 cwd 时只认绝对路径。
+export function renderIncrementalMarkdown(host, text, { streaming = false, force = false, loadLocalImage = null, fileLinks = false, cwd = null } = {}) {
   const source = String(text ?? "");
   const md = (loadLocalImage || fileLinks)
-    ? { ...(loadLocalImage ? { localImages: true } : {}), ...(fileLinks ? { fileLinks: true } : {}) }
+    ? {
+      ...(loadLocalImage ? { localImages: true, ...(cwd ? { cwd } : {}) } : {}),
+      ...(fileLinks ? { fileLinks: true } : {})
+    }
     : undefined;
   let state = host.__inc;
   if (!state) {
@@ -61,6 +66,9 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
     state.tail.className = "md-tail";
     host.append(state.head, state.tail);
   }
+  // 产出依赖 cwd(相对路径图片的解析基准):cwd 变了,冻结前缀也得重建。
+  const base = loadLocalImage ? (cwd || null) : null;
+  if (state.base !== base) { state.base = base; state.cut = undefined; force = true; }
   if (!force && state.text === source) return;
   const cut = stableCut(source);
   if (cut !== state.cut) {
@@ -71,8 +79,9 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
     state.tail.innerHTML = mdToHtml(source.slice(cut ?? 0), md);
   }
   state.text = source;
-  // "](/" 或 "](</" 是占位图产出的必要条件,没有就不扫 DOM(流式每帧都会走到这里)。
-  if (loadLocalImage && (source.includes("](/") || source.includes("](</"))) hydrateLocalImages(host, loadLocalImage);
+  // 占位图只来自 ![…](…);没有就不扫 DOM(流式每帧都会走到这里)。有 cwd 时相对
+  // 路径也会产出占位,所以不能再只看 "](/"。
+  if (loadLocalImage && source.includes("![")) hydrateLocalImages(host, loadLocalImage);
   settleFailedImages(host);
 
   decorateCodeBlocks(host);
@@ -84,7 +93,7 @@ export function renderIncrementalMarkdown(host, text, { streaming = false, force
       if (!ready || !host.isConnected) return;
       state.cut = undefined;
       state.text = null;
-      renderIncrementalMarkdown(host, source, { streaming, force: true, loadLocalImage, fileLinks });
+      renderIncrementalMarkdown(host, source, { streaming, force: true, loadLocalImage, fileLinks, cwd });
     });
   }
 }
