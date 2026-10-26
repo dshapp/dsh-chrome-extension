@@ -51,6 +51,10 @@ export function applyStaticLabels(root) {
   setAttr(root, "#find-close", "aria-label", t("find.close"));
   setAttr(root, "#find-close", "title", t("find.close"));
 
+  // 回到底部
+  setAttr(root, "#scroll-to-bottom", "aria-label", t("chat.scrollToBottom"));
+  setAttr(root, "#scroll-to-bottom", "title", t("chat.scrollToBottom"));
+
   // 轨迹页
   setAttr(root, "#trajectory-pane .trajectory-toolbar", "aria-label", t("trajectory.toolbarLabel"));
   setPlaceholder(root, "#trajectory-search", t("trajectory.searchPlaceholder"));

@@ -190,6 +190,11 @@
     <div id="composer-wrap">
       <!-- 运行状态条(Mac RunningStatusRow):悬浮在输入框区域顶部,不占记录流的行 -->
       <div id="running-status" hidden></div>
+      <!-- 回到底部(对齐 web ChatView toBottom):读者上滚离开底部时出现,点了落底并恢复跟随 -->
+      <button id="scroll-to-bottom" type="button" hidden aria-label="滚动到底部" title="滚动到底部">
+        <!-- lucide: chevron-down -->
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
       <ol id="prompt-queue" hidden aria-live="polite" aria-label="排队消息"></ol>
 
       <!-- 会话停靠区:目标条 / 待办 / 上下文与统计 -->

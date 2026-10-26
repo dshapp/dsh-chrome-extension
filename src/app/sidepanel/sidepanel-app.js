@@ -2,7 +2,7 @@
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
 import { t, getLang } from "../../shared/i18n.js";
-import { createChatRenderer, mountTurnRail, resolveActiveTurn, createTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer, resolveToolPath, openUrlInNewTab } from "../../features/chat/index.js";
+import { createChatRenderer, mountTurnRail, resolveActiveTurn, mountTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer, resolveToolPath, openUrlInNewTab } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
 } from "../../features/interactions/index.js";
@@ -167,6 +167,8 @@ export function createSidepanelApp(root, deps, options = {}) {
   let pendingJumpTurn = null;
 
   function scrollToTurn(anchorRow, turn) {
+    // 点刻度=读者要去别处读:先放手,否则平滑滚动的头几帧还在底部阈值内,会被下一次 pin 拽回。
+    tailFollow.release();
     const el = chatRenderer.elementById(anchorRow);
     if (el) el.scrollIntoView({ block: "start", behavior: "smooth" });
     activeTurn = turn;
@@ -204,8 +206,6 @@ export function createSidepanelApp(root, deps, options = {}) {
   async function jumpToUnloaded(item) {
     // 跳转到一个未加载的轮次=离开当前阅读位置,跟随随之释放。
     tailFollow.release();
-    clearTimeout(stopConfirmTimer);
-    stopConfirmTimer = null;
     pendingJumpTurn = item.turn;
     busyTurn = item.turn;
     turnRail.set(turnRailItems, activeTurn, busyTurn);
@@ -269,11 +269,18 @@ export function createSidepanelApp(root, deps, options = {}) {
   });
 
   // ---- 尾部跟随 ----
-  // 发送即锁尾,直到轮次真正结束或读者自己向上滚(对齐 mac TranscriptTailFollow)。
-  const tailFollow = createTailFollow();
-  let stopConfirmTimer = null;
-  // stop 熬过这段静默(没有新快照)才确认回答结束;期间任何内容修订都证伪它。
-  const STOP_CONFIRM_MS = 400;
+  // 对齐 DSH Web:停在底部就跟随最新内容,读者上滚离开底部即放手,并出现「回到底部」按钮;
+  // 点按钮(或自己滚回底部)落底并恢复跟随。
+  const tailFollow = mountTailFollow(elements.messages, {
+    content: [elements.msgList, elements.interactions],
+    button: elements.scrollToBottom,
+    onReturn: () => {
+      // 回到底部=回到最新一轮:turn 轨道的 active 也恢复跟随最新。
+      activeTurnFollowsLatest = true;
+      activeTurn = turnRailItems.at(-1)?.turn ?? null;
+      turnRail.set(turnRailItems, activeTurn, busyTurn);
+    }
+  });
 
   // ---- 帧分发 ----
   deps.onFrame((frame, stream) => {
@@ -375,11 +382,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     // RPC 回来才齐;若这里只在有值时调用,一个没有权限服务的会话会留着上一个
     // 会话的药丸。传 null 让 dock 自己隐藏入口。
     dock.renderPermMenu(snapshot.permissions);
-    // 尾部跟随:仍在产出的修订先证伪 pending stop;running 只上膛不释放;跟随中重钉。
-    tailFollow.transcriptChanged();
-    tailFollow.runningChanged(snapshot.running);
-    autoScroll();
-    scheduleStopConfirm();
+    // 尾部跟随:停在底部的读者随新内容钉底;已上滚的读者不动,只刷新「回到底部」按钮。
+    tailFollow.autoScroll();
     historyDrawer?.setActive(state.sessionId, snapshot.title);
     // 换了会话:立刻告诉 SW 现在看的是哪条(清它的工具栏未读),不等心跳。
     deps.presence?.sessionChanged?.();
@@ -667,8 +671,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     awaitingTurnStart = true;
     // 发出即亮状态条(Mac:还没有 live 工具时就是"正在分析请求");用时等 turn/start 到了再出。
     runningStatus.set(t("activity.thinking"));
-    // 发送即锁尾:从这一刻起转录钉在最新内容,直到轮次结束或读者自己上滚。
-    tailFollow.didSubmit();
+    // 发送即落底并跟随:看这条消息的回答,直到读者自己上滚。
+    tailFollow.pin();
     try {
       const content = [];
       // 选取的元素(指哪个,语义化 XML)拼在最前面,后接 [指令] 分隔用户原话。
@@ -695,8 +699,6 @@ export function createSidepanelApp(root, deps, options = {}) {
       picker.clear();
     } catch (error) {
       awaitingTurnStart = false;
-      // 没发出去就没有回答可跟;释放,别让阅读位置被一段不存在的内容钉住。
-      tailFollow.release();
       runningStatus.clear();
       showToast(format(error));
       // 回填的是原始草稿(带占位符)+ 原胶囊,不是展开后的文本,
@@ -1122,38 +1124,14 @@ export function createSidepanelApp(root, deps, options = {}) {
     }
   });
   elements.send.addEventListener("click", () => sendMessage({ gesture: "enter" }));
-  // 转录滚动:只有读者自己把视口向上移才释放尾部跟随;程序性 pin 在 settle 窗口内被折扣。
+  // 转录滚动:跟随意图由 tailFollow 自己监听裁决,这里只同步 turn 轨道的 active。
   elements.messages.addEventListener("scroll", () => {
-    tailFollow.viewportChanged(elements.messages.scrollTop);
     syncActiveTurnToScroll();
   }, { passive: true });
 
   function autoResizeInput() {
     elements.input.style.height = "auto";
     elements.input.style.height = `${Math.min(elements.input.scrollHeight, 160)}px`;
-  }
-
-  /// 钉到底部并发起一次 pin:settle 窗口内的 offset 移动是视图自己的,不计入释放判定。
-  function scrollToBottom() {
-    const scroller = elements.messages;
-    scroller.scrollTop = scroller.scrollHeight;
-    tailFollow.beginPin();
-  }
-
-  /// 跟随中每帧重钉;未跟随时什么都不做(读者在自由阅读)。
-  function autoScroll() {
-    if (tailFollow.isFollowing) scrollToBottom();
-  }
-
-  /// 一次 stop 若熬过静默窗口就被确认,跟随随之释放。
-  function scheduleStopConfirm() {
-    clearTimeout(stopConfirmTimer);
-    stopConfirmTimer = null;
-    if (!tailFollow.isStopPending) return;
-    stopConfirmTimer = setTimeout(() => {
-      stopConfirmTimer = null;
-      tailFollow.confirmStop();
-    }, STOP_CONFIRM_MS);
   }
 
   // toast 的隐藏是延时的:重复调用必须先撤掉上一次的定时器,否则旧 timer
@@ -1290,10 +1268,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 附件没有像文字草稿那样按 sessionId 持久化。切换时若继续保留，会把上一
     // 会话选择的图片静默带到下一会话；读取中的占位也必须一并作废。
     if (previousSessionId !== sessionId) deps.attachments.clear();
-    // 跟随属于被离开的内容:切会话即释放。
-    tailFollow.release();
-    clearTimeout(stopConfirmTimer);
-    stopConfirmTimer = null;
+    // 旧落点属于被离开的内容:换会话即回到"落底并跟随"。
+    tailFollow.reset();
     awaitingTurnStart = false;
     // 轨迹模式是一次点击的即时状态:打开任何会话都回到对话列。
     trajectory.close();
@@ -1353,9 +1329,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     // true,后续 notifyRuntime 全被「if (renderScheduled) return」吞掉,聊天记录永远不渲染。
     // applySnapshot 内含 chatRenderer.render + emptyHint + setActive 等完整刷新。
     applySnapshot(deps.sessions.getRuntimeSnapshot());
-    // 打开会话先落到底部;若该轮仍在跑,进入跟随(打开一个正在流式的会话就是想看它)。
-    if (deps.sessions.getRuntimeSnapshot()?.running) tailFollow.didSubmit();
-    scrollToBottom();
+    // 打开会话先落到底部并跟随(正在流式的会话随新内容继续钉底)。
+    tailFollow.pin();
 
     void deps.sessions.refreshGoalActivation?.(sessionId);
     const summary = deps.sessions.listStore.get().find((item) => item.sessionId === sessionId);
@@ -1397,9 +1372,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     const previousSessionId = state.sessionId;
     state.sessionId = childId;
     if (previousSessionId !== childId) deps.attachments.clear();
-    tailFollow.release();
-    clearTimeout(stopConfirmTimer);
-    stopConfirmTimer = null;
+    tailFollow.reset();
     awaitingTurnStart = false;
     trajectory.close();
     chatRenderer.reset();
@@ -1431,7 +1404,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     if (token !== openSessionToken) return;
 
     applySnapshot(deps.sessions.getRuntimeSnapshot());
-    scrollToBottom();
+    tailFollow.pin();
     subagentCatalog.refresh();
 
     const summary = deps.sessions.listStore.get().find((item) => item.sessionId === childId);

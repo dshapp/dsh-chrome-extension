@@ -1,100 +1,182 @@
-// 尾部跟随语义,逐条对齐 macos/Sources/DSHMacKit/Models/TranscriptTailFollow.swift。
+// 尾部跟随,对齐 DSH Web 的 ScrollFollow / ChatReading(dsh-client-ui-chat use-scroll-follow.ts):
 //
-// 发送是"我要看这个回答"的承诺:从提交那刻起把转录钉在最新内容上,直到**轮次真正结束**
-// 或**读者自己向上滚**。不能只看"距底 < N px":新行插入会让 floor 先跳、offset 后到,
-// 那段窗口里视口看起来"被滚上去了",而读者其实没碰任何东西;固定的 slack 必然误判。
+// - 跟随意图只由**阅读位置**决定:停在底部(距底 ≤ 阈值)就跟随,内容增长时钉住最新;
+//   读者自己把视口往上带离底部就不再跟随,之后的流式内容不会把他拽回去。
+// - 读者自己滚回底部(或点「回到底部」按钮)即恢复跟随,不必等下一次发送。
+// - 轮次结束不释放:停在底部的读者照样看到收尾的内容(对齐 web,不再沿用 Mac 的"轮次结束即放手")。
 //
-// 因此释放判据看 offset 自身:只有视口**向上**移动(读者滚动)才算离开。内容在下方
-// 增长只动 floor、不动 offset,天然不可见。
+// 程序自己的 pin 不算读者移动:pin 后记下落点,滚动事件的 offset 与之相同就是我们自己的回声。
+// 内容在下方增长只动 floor、不动 offset,不会产生滚动事件,所以也不会被误判成"上滚"。
+// 触控板/滚轮一次只挪几个像素,单看位置会被下一帧的 pin 拽回去;因此向上的滚轮意图直接释放。
 
-/// 已停稳后,视口向上漂移超过该值才算读者滚离。
-export const SCROLL_AWAY_TOLERANCE = 24;
-/// 一次 pin 之后,这段时间内的 offset 移动是视图自己的工作(滚动 + 回弹),不计入释放判定。
-export const PIN_SETTLE_WINDOW_MS = 150;
+/// 距底不超过该值就算在底部(web ChatReading 用 25px)。
+export const FOLLOW_THRESHOLD_PX = 24;
+/// 读者点了消息区里的东西(展开卡片等)之后这段时间内的尺寸变化归读者,不钉底。
+export const INTERACTION_GRACE_MS = 500;
 
-export function createTailFollow({ now = () => Date.now() } = {}) {
-  let isFollowing = false;
-  let lastOffset = null;
-  let sawRunning = false;
-  let stopPending = false;
-  let pinSettlesAt = null;
+/// 读一个滚动容器的位置与可滚范围,不测量子元素。
+export function scrollMetrics(element) {
+  const height = element.clientHeight;
+  return { top: element.scrollTop, floor: Math.max(0, element.scrollHeight - height) };
+}
 
-  /// 本地发送开始跟随。offset 基准取发送后的下一帧(echo 行落地),不是发送前的旧位置。
-  function didSubmit() {
-    isFollowing = true;
-    lastOffset = null;
-    // 发送先于 running 变 true,所以不能被此刻仍是 false 的 running 释放。
-    sawRunning = false;
-    stopPending = false;
-    pinSettlesAt = null;
+export function isNearBottom(metrics, threshold = FOLLOW_THRESHOLD_PX) {
+  return metrics.floor - metrics.top <= threshold;
+}
+
+/// 纯状态:跟随意图 + 上次程序落点。DOM 接线见 mountTailFollow。
+export function createTailFollow({ threshold = FOLLOW_THRESHOLD_PX } = {}) {
+  let following = true;
+  let sampledTop = null;
+
+  /// 程序把视口钉到了底部(top 为实际落点):进入/保持跟随。
+  function pinned(top) {
+    following = true;
+    sampledTop = top;
   }
 
-  /// running 变化本身不释放:会话列表刷新会整体写 summary.running,一轮中可能
-  /// true→false→true 抖动。stop 只在这里"上膛",由 transcriptChanged 用仍在
-  /// 产出的内容证伪。
-  function runningChanged(running) {
-    if (!isFollowing) return;
-    if (running) {
-      sawRunning = true;
-      stopPending = false;
-    } else if (sawRunning) {
-      stopPending = true;
+  /// 一次滚动事件。返回之后的跟随意图。
+  function scrolled(metrics) {
+    // 自己 pin 的回声(或位置没变):不是读者移动。
+    if (sampledTop != null && Math.abs(metrics.top - sampledTop) <= 1) return following;
+    const movedUp = sampledTop != null && metrics.top < sampledTop;
+    sampledTop = metrics.top;
+    if (isNearBottom(metrics, threshold)) {
+      // 往下滚进底部阈值、或正好停在底(含内容变短被钳到底)即恢复跟随;
+      // 在阈值内往上挪(刚被上滚滚轮释放的那几个像素)不算回到底部。
+      if (!movedUp || metrics.floor - metrics.top < 1) following = true;
+    } else if (movedUp) {
+      // 向上离开底部才放手;向下但还没到底(内容在下面长得比读者滚得快)保持原意图。
+      following = false;
     }
+    return following;
   }
 
-  /// 转录有修订。仍在流动的内容证伪一次 pending stop。
-  function transcriptChanged() {
-    if (!isFollowing) return;
-    stopPending = false;
-  }
-
-  /// 确认一次熬过静默窗口的 stop:回答确实结束了。返回是否因此释放。
-  function confirmStop() {
-    if (!isFollowing || !stopPending) return false;
-    release();
-    return true;
-  }
-
-  /// 视口移动。只有 offset 向上超过阈值才释放;比较基准是本轮跟随到过的最深位置,
-  /// 连续的小回弹不会像逐次两两比较那样累积成误判。
-  function viewportChanged(offsetY) {
-    if (!isFollowing) return;
-    if (pinSettlesAt != null) {
-      if (now() < pinSettlesAt) {
-        lastOffset = lastOffset == null ? offsetY : Math.max(lastOffset, offsetY);
-        return;
-      }
-      pinSettlesAt = null;
-    }
-    if (lastOffset == null) {
-      lastOffset = offsetY;
-      return;
-    }
-    if (offsetY < lastOffset - SCROLL_AWAY_TOLERANCE) {
-      release();
-      return;
-    }
-    lastOffset = Math.max(lastOffset, offsetY);
-  }
-
-  /// 视图将要执行一次 pin:在 settle 窗口内折扣它自己造成的 offset 移动。
-  function beginPin() {
-    if (!isFollowing) return;
-    pinSettlesAt = now() + PIN_SETTLE_WINDOW_MS;
-  }
-
-  /// 离开本转录(切会话、跳转、卸载):丢掉属于旧内容的跟随。
+  /// 读者明确离开当前阅读位置(滚轮上滚、点轮次刻度、分页跳转)。
   function release() {
-    isFollowing = false;
-    lastOffset = null;
-    sawRunning = false;
-    stopPending = false;
-    pinSettlesAt = null;
+    following = false;
+  }
+
+  /// 换了一份转录(切会话):新内容默认落底并跟随,旧落点作废。
+  function reset() {
+    following = true;
+    sampledTop = null;
   }
 
   return {
-    get isFollowing() { return isFollowing; },
-    get isStopPending() { return stopPending; },
-    didSubmit, runningChanged, transcriptChanged, confirmStop, viewportChanged, beginPin, release
+    get isFollowing() { return following; },
+    get threshold() { return threshold; },
+    pinned, scrolled, release, reset
+  };
+}
+
+/// 滚轮事件会不会先被消息区里的某个内层滚动块(代码块、长输出)吃掉。
+function innerScrollerConsumes(target, root, deltaY) {
+  for (let el = target instanceof Element ? target : null; el && el !== root; el = el.parentElement) {
+    if (el.scrollHeight <= el.clientHeight + 1) continue;
+    const overflowY = getComputedStyle(el).overflowY;
+    if (overflowY !== "auto" && overflowY !== "scroll") continue;
+    if (deltaY < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight - 1) return true;
+  }
+  return false;
+}
+
+/// 把跟随策略接到消息区:滚动/滚轮/滚动条拖拽、内容与视口尺寸变化、「回到底部」按钮。
+/// @param scroller - 消息区滚动容器(#messages)
+/// @param options.content - 尺寸变化需要重钉的内容节点(#msg-list 等)
+/// @param options.button - 「回到底部」按钮;未跟随且不在底部时显示
+/// @param options.onReturn - 读者点了按钮(已落底)之后的回调
+export function mountTailFollow(scroller, { content = [], button = null, onReturn, now = () => Date.now() } = {}) {
+  const follow = createTailFollow();
+  let holding = false;
+  let interactedAt = -Infinity;
+
+  function sync() {
+    const following = follow.isFollowing;
+    // 跟随中关掉浏览器的滚动锚定(web 同款):锚定会在内容变化时自己挪 offset,
+    // 那次挪动看起来就像读者上滚。
+    scroller.classList.toggle("tail-following", following);
+    if (button) button.hidden = following || isNearBottom(scrollMetrics(scroller), follow.threshold);
+  }
+
+  /// 钉到底部并跟随。
+  function pin() {
+    scroller.scrollTop = scroller.scrollHeight;
+    follow.pinned(scroller.scrollTop);
+    sync();
+  }
+
+  /// 跟随中重钉;读者在自由阅读(或正拖着滚动条)时只刷新按钮。
+  function autoScroll() {
+    if (holding || !follow.isFollowing) {
+      sync();
+      return;
+    }
+    pin();
+  }
+
+  scroller.addEventListener("scroll", () => {
+    follow.scrolled(scrollMetrics(scroller));
+    sync();
+  }, { passive: true });
+
+  // 向上的滚轮/触控板即读者意图:立刻放手,不等位置越过阈值(否则每一小步都会被下一帧 pin 拽回)。
+  scroller.addEventListener("wheel", (event) => {
+    if (event.ctrlKey || event.deltaY >= 0 || !follow.isFollowing) return;
+    if (scroller.scrollTop <= 0) return;
+    if (innerScrollerConsumes(event.target, scroller, event.deltaY)) return;
+    follow.release();
+    sync();
+  }, { passive: true });
+
+  // 拖滚动条(指针落在容器自身而非内容上)期间不重钉,松手后按位置裁决。
+  scroller.addEventListener("pointerdown", (event) => {
+    if (event.target === scroller) holding = true;
+    else interactedAt = now();
+  });
+  scroller.addEventListener("keydown", () => { interactedAt = now(); });
+  const endHold = () => {
+    if (!holding) return;
+    holding = false;
+    follow.scrolled(scrollMetrics(scroller));
+    autoScroll();
+  };
+  window.addEventListener("pointerup", endHold);
+  window.addEventListener("pointercancel", endHold);
+
+  // 快照之外的尺寸变化(图片/公式异步落地、输入框长高挤小视口):跟随中照样钉底。
+  // 刚点过消息区里的东西(展开卡片)造成的增长归读者:不钉,让他看刚展开的内容。
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(() => {
+      if (follow.isFollowing && !holding && now() - interactedAt < INTERACTION_GRACE_MS
+          && !isNearBottom(scrollMetrics(scroller), follow.threshold)) {
+        follow.release();
+      }
+      autoScroll();
+    });
+    observer.observe(scroller);
+    for (const node of content) if (node) observer.observe(node);
+  }
+
+  button?.addEventListener("click", () => {
+    pin();
+    onReturn?.();
+  });
+
+  sync();
+
+  return {
+    get isFollowing() { return follow.isFollowing; },
+    pin,
+    autoScroll,
+    release() {
+      follow.release();
+      sync();
+    },
+    reset() {
+      follow.reset();
+      sync();
+    },
+    refresh: sync
   };
 }

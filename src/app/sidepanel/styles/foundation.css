@@ -612,6 +612,9 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
   scrollbar-width: thin;
   overscroll-behavior: contain;
 }
+/* 尾部跟随中关掉滚动锚定(对齐 web data-chat-following-tail):锚定会在内容变化时
+   自己挪 scrollTop,那次挪动会被当成读者上滚而误放手。钉底由 tail-follow 负责。 */
+#messages.tail-following { overflow-anchor: none; }
 
 /* 空态 */
 #empty-hint {

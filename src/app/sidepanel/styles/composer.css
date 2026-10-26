@@ -89,6 +89,39 @@
 }
 #running-status[hidden] { display: none; }
 #messages.trajectory-open ~ #composer-wrap #running-status { display: none; }
+
+/* 回到底部(对齐 web ChatView .toBottom):读者上滚离开底部时浮在记录区右下角,
+   压在运行状态条那一行之上,不挡状态文字;点了落底并恢复跟随。 */
+#scroll-to-bottom {
+  position: absolute;
+  inset-inline-end: 1.5rem;
+  inset-block-end: calc(100% + 1.375rem + 6px);
+  z-index: 3;
+  inline-size: 32px;
+  block-size: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  cursor: pointer;
+  animation: scroll-to-bottom-in 0.16s ease-out;
+}
+#scroll-to-bottom:hover { background: var(--user-bubble); }
+#scroll-to-bottom:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
+#scroll-to-bottom[hidden],
+#messages.trajectory-open ~ #composer-wrap #scroll-to-bottom { display: none; }
+@keyframes scroll-to-bottom-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #scroll-to-bottom { animation: none; }
+}
 /* 与卡片图标同一个 16px 方槽:状态条的转圈与上方卡片的图标对齐。
    Mac 在这里用系统最小号的转圈(ProgressView .mini)。 */
 .running-status-spinner {
