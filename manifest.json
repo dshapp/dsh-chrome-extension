@@ -3,7 +3,7 @@
   "default_locale": "en",
   "name": "Deepseek Harness APP",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyBH92A/Xvx4U+5/OncrP16NWrUEf7uNyit/5H/ANBNprRqSxS+8VjVB+Pw4Rr2JuzwzmYNiMa0iPtB0mSSkXCHx6ZcPYPp7mLeYzJM0bogNaz1MxKr/49e7sK1AxnSsfCF4WeK8uua6a59tsbW31KfyxrRM1OU/8yPPaiRCWyo2W152GeTyMxP4mNrdX426Rsd2M0oBMJwT8SsNDkUVtmPYWXtQLagIA28eFP7U5AdciuW64q5opSU1K/a2NsLBq4mczxuNqs/hxmNHRf4JoFIzzF83T4o+bvx5xguK2ZjIz5ReLxVm+HKoSw57FmnwRNdQbIiDOEYOpFcfBGNrkdQIDAQAB",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "description": "__MSG_extDescription__",
   "minimum_chrome_version": "116",
   "permissions": [
