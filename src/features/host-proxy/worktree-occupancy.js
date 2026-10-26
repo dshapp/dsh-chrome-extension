@@ -10,18 +10,25 @@ import { parseWorktrees } from "./git-service.js";
 
 /// worktree 的展示名:取路径最后一段,与 Mac 的 displayName 一致。
 export function worktreeDisplayName(path) {
-  const trimmed = String(path ?? "").replace(/\/+$/, "");
-  const index = trimmed.lastIndexOf("/");
+  const trimmed = String(path ?? "").replace(/[\\/]+$/, "");
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return index === -1 ? trimmed : trimmed.slice(index + 1);
 }
 
-/// 规范化路径以便比较:去掉尾部斜杠。
+/// 规范化路径以便比较:统一分隔符、去掉尾部斜杠。
 ///
-/// 不做 realpath —— 扩展里拿不到文件系统,而 daemon 已经规范化过 cwd,两边
-/// 都来自同一个 `worktree list` 输出,字面比较足够。
+/// 不做 realpath —— 扩展里拿不到文件系统。但 Windows 上两边的拼写天然不同:
+/// `worktree list` 一律输出 `C:/Users/…`,会话 cwd 却是 `C:\Users\…`;盘符
+/// 大小写也可能不一致(Windows 路径本就不区分大小写)。所以反斜杠归一成
+/// 正斜杠,有盘符的路径整体按不区分大小写比较。
+function normalizePath(path) {
+  const slashed = String(path).replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[A-Za-z]:(\/|$)/.test(slashed) ? slashed.toLowerCase() : slashed;
+}
+
 function samePath(a, b) {
   if (!a || !b) return false;
-  return String(a).replace(/\/+$/, "") === String(b).replace(/\/+$/, "");
+  return normalizePath(a) === normalizePath(b);
 }
 
 /// `branch → { path, displayName }`,不含 `currentCwd` 自己那一条。

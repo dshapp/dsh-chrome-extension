@@ -99,7 +99,10 @@ export function parseLocalBranches(stdout) {
   return names;
 }
 
-export function createGitSummaryReader(client) {
+export function createGitSummaryReader(client, { warn = (...args) => console.warn(...args) } = {}) {
+  // 已经报过的宿主拒绝原因。每次切会话都会重读摘要,同一个原因只报一次。
+  const reported = new Set();
+
   /// 跑一条 git,只回 stdout;非零退出回 null。
   ///
   /// 这里刻意不抛错:摘要是由六七条命令拼出来的,任何一条在某些仓库状态下
@@ -112,6 +115,15 @@ export function createGitSummaryReader(client) {
     } catch (error) {
       // 宿主代理整体不可用要让调用方知道(入口需要整体隐藏),所以只吞命令级失败。
       if (error?.isUnsupported) throw error;
+      // 但宿主**拒绝执行**(HTTP 4xx/5xx)与 git 自己非零退出不是一回事:前者
+      // 照样会让入口当成「不是仓库」而隐藏,却没有任何 git 输出可看。Windows 上
+      // daemon 只认 $HOME 时,每条 /host/git 都以 400 "cannot determine HOME"
+      // 被拒,入口永远不出现且毫无痕迹。至少在控制台留下宿主给的原因。
+      const reason = `${error?.status ?? "?"} ${error?.message ?? error}`;
+      if (!reported.has(reason)) {
+        reported.add(reason);
+        warn(`[git-entry] host refused \`git ${args.join(" ")}\` in ${cwd}: ${reason}`);
+      }
       return null;
     }
   }
