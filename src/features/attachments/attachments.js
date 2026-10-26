@@ -84,6 +84,9 @@ async function readAsBase64(file) {
 export function createAttachmentTray({ uploadFile } = {}) {
   const pending = [];
   const listeners = new Set();
+  // 文件的本机路径(setPath)。pasteboard 回包可能早于该文件的占位入列(逐个上传),
+  // 所以按 File 记下,占位创建时再领。
+  const knownPaths = new WeakMap();
   // 由 app 层在 imageLimits 投影到达时注入;未注入时用保守兜底。
   let limits = null;
   const emit = () => {
@@ -114,7 +117,7 @@ export function createAttachmentTray({ uploadFile } = {}) {
     // 先按 bytes 占位再读文件。校验读 pending 是同步的,而读文件是异步的:
     // 不占位的话,一次粘贴多张图产生的并发调用会全部在 pending 仍为空时通过
     // 校验,张数与总字节上限双双被突破。
-    const slot = { part: null, previewUrl: null, bytes: file.size, name: file.name, kind: "image", upload: "ready", file };
+    const slot = { part: null, previewUrl: null, bytes: file.size, name: file.name, kind: "image", upload: "ready", file, path: knownPaths.get(file) ?? null };
     pending.push(slot);
     emit();
     let part;
@@ -152,7 +155,7 @@ export function createAttachmentTray({ uploadFile } = {}) {
 
   async function addFileRaw(file) {
     if (typeof uploadFile !== "function") throw i18nError("attach.noUpload", {});
-    const slot = { part: null, previewUrl: null, bytes: file.size, name: file.name, kind: "file", upload: "uploading", file };
+    const slot = { part: null, previewUrl: null, bytes: file.size, name: file.name, kind: "file", upload: "uploading", file, path: knownPaths.get(file) ?? null };
     pending.push(slot);
     emit();
     await uploadRaw(slot);
@@ -174,6 +177,15 @@ export function createAttachmentTray({ uploadFile } = {}) {
     async addFile(file) {
       const mediaTypes = limits?.mediaTypes ?? FALLBACK_LIMITS.mediaTypes;
       return mediaTypes.includes(file.type) ? addImageRaw(file) : addFileRaw(file);
+    },
+    /// 记下文件在本机的绝对路径(拖入/从访达粘贴时由 native host 读 pasteboard 得到),
+    /// 点胶囊时据此用默认应用打开。可早于或晚于该文件入列。
+    setPath(file, path) {
+      if (!file || typeof file !== "object" || typeof path !== "string" || !path) return false;
+      knownPaths.set(file, path);
+      const slot = pending.find((item) => item.file === file);
+      if (slot) slot.path = path;
+      return true;
     },
     /// 重试一次失败的上传,原始 File 仍被持有。
     async retry(index) {
@@ -200,26 +212,34 @@ export function createAttachmentTray({ uploadFile } = {}) {
   };
 }
 
-export function renderAttachmentTray(container, attachments, { onRemove, onRetry } = {}) {
+/// 胶囊本体可点开(onOpen):图片进查看器,文件用默认应用 / 新标签页打开。
+/// 移除、重试两颗小按钮优先,不触发打开。
+export function renderAttachmentTray(container, attachments, { onRemove, onRetry, onOpen } = {}) {
   container.innerHTML = attachments.map((attachment, index) => {
     const remove = `<button type="button" class="icon-btn" data-index="${index}" aria-label="${escapeHtml(t("attach.remove"))}">${lucideIconSvg("x", { size: 12 })}</button>`;
+    const name = escapeHtml(attachment.name || "");
+    const openLabel = escapeHtml(t("turn.openFile", { name: attachment.name || "" }));
     if (attachment.kind === "image") {
       const src = attachment.previewUrl ? ` src="${attachment.previewUrl}"` : "";
-      return `<div class="attachment-chip image"><img${src} alt="">${remove}</div>`;
+      return `<div class="attachment-chip image" data-open="${index}">`
+        + `<button type="button" class="attachment-open" aria-label="${openLabel}" title="${name}"><img${src} alt="${name}"></button>`
+        + `${remove}</div>`;
     }
     const status = attachment.upload === "failed" ? "failed" : attachment.upload === "uploading" ? "uploading" : "ready";
     const retry = attachment.upload === "failed" && onRetry
       ? `<button type="button" class="icon-btn" data-retry="${index}" aria-label="↻">↻</button>`
       : "";
     const label = attachment.upload === "uploading" ? "…" : "";
-    return `<div class="attachment-chip file ${status}">`
-      + `<span class="file-name" title="${escapeHtml(attachment.name)}">${escapeHtml(attachment.name)}</span>`
+    return `<div class="attachment-chip file ${status}" data-open="${index}">`
+      + `<button type="button" class="attachment-open file-name" aria-label="${openLabel}" title="${name}">${name}</button>`
       + label + retry + remove + `</div>`;
   }).join("");
   container.onclick = (event) => {
     const retry = event.target.closest("button[data-retry]");
     if (retry) { onRetry?.(Number(retry.dataset.retry)); return; }
     const button = event.target.closest("button[data-index]");
-    if (button) onRemove?.(Number(button.dataset.index));
+    if (button) { onRemove?.(Number(button.dataset.index)); return; }
+    const chip = event.target.closest("[data-open]");
+    if (chip && container.contains(chip)) onOpen?.(Number(chip.dataset.open));
   };
 }

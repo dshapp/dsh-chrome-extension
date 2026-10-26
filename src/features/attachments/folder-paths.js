@@ -36,15 +36,24 @@ function basename(path) {
 /// 对不上的一律算 missing —— 宁可提示拿不到路径,也不能插一个别的文件夹的路径。
 /// 同名多个时按出现顺序各取一个,不重复使用同一条路径。
 export function matchDirectoryPaths(names, paths) {
-  const pool = (paths ?? []).filter(isAbsolutePath);
   const matched = [];
   const missing = [];
-  for (const name of names ?? []) {
-    const at = pool.findIndex((path) => basename(path) === name);
-    if (at === -1) { missing.push(name); continue; }
-    matched.push(trimTrailingSeparators(pool.splice(at, 1)[0]));
-  }
+  const paired = pairPathsByName(names, paths);
+  (names ?? []).forEach((name, index) => {
+    if (paired[index]) matched.push(paired[index]);
+    else missing.push(name);
+  });
   return { matched, missing };
+}
+
+/// 与 names 逐项对齐的路径(配不上的为 null)。规则同 matchDirectoryPaths;
+/// 拖入/粘贴的**文件**也用它找回真实路径(点附件胶囊时用默认应用打开)。
+export function pairPathsByName(names, paths) {
+  const pool = (paths ?? []).filter(isAbsolutePath);
+  return (names ?? []).map((name) => {
+    const at = pool.findIndex((path) => basename(path) === name);
+    return at === -1 ? null : trimTrailingSeparators(pool.splice(at, 1)[0]);
+  });
 }
 
 /// 一条绝对路径的提示词写法:含空白时整体加双引号,避免被当成几段文字。

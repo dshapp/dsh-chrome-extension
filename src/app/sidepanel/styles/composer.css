@@ -148,6 +148,17 @@
   color: var(--text);
 }
 .attachment-chip.file.uploading { color: var(--text-faint); border-style: dashed; }
+/* 胶囊本体可点开:图片进查看器,文件用默认应用 / 新标签页打开。 */
+.attachment-chip[data-open] { cursor: pointer; }
+.attachment-open {
+  display: block; padding: 0; margin: 0; border: 0; background: none;
+  color: inherit; font: inherit; text-align: start; cursor: pointer;
+}
+.attachment-chip.image .attachment-open { border-radius: 8px; }
+.attachment-chip.image .attachment-open:hover img { border-color: var(--text-faint); filter: brightness(0.92); }
+.attachment-chip.file:hover { background: var(--bg-raised); }
+.attachment-chip.file:hover .file-name { text-decoration: underline; }
+.attachment-open:focus-visible { outline: 2px solid var(--accent, var(--text-faint)); outline-offset: 2px; }
 .attachment-chip.file.failed { border-color: var(--danger); color: var(--danger); }
 /* 输入区 = 镜像层 + textarea 两层叠放。
    textarea 在上负责编辑与光标,文字设为透明(caret 仍可见);
