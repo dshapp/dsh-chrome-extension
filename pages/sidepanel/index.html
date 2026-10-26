@@ -148,6 +148,9 @@
           <div id="preset-menu" popover="auto" aria-label="Agent 预设"></div>
         </div>
       </div>
+      <!-- 切会话时的历史加载态(转圈 + 骨架屏),由 session-loading.js 填充;
+           历史到达前占住消息区,避免先闪一片空白或「开始对话」空态。 -->
+      <div id="session-loading" hidden></div>
       <div id="msg-list"></div>
       <div id="interactions"></div>
 

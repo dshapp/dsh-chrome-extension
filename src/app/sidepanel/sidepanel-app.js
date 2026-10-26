@@ -2,7 +2,7 @@
 // 与旧版的关键差别:渲染输入是 store 派生的 nodes[],交互卡通过 takeover 接管输入框,
 // plan chip / 触发菜单 / 权限二次确认按 Mac 的座位语义接线。
 import { t, getLang } from "../../shared/i18n.js";
-import { createChatRenderer, mountTurnRail, resolveActiveTurn, mountTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer, resolveToolPath, openUrlInNewTab } from "../../features/chat/index.js";
+import { createChatRenderer, mountTurnRail, resolveActiveTurn, mountTailFollow, mountFindBar, mountRunningStatus, runningStatusLabel, installImageViewer, resolveToolPath, openUrlInNewTab, mountSessionLoading, isAwaitingHistory } from "../../features/chat/index.js";
 import {
   createApprovalCard, createQuestionCard, tryCreatePlanReviewCard, resolveTakeover
 } from "../../features/interactions/index.js";
@@ -80,6 +80,11 @@ export function createSidepanelApp(root, deps, options = {}) {
 
   // 运行状态条:悬浮在输入框区域顶部(Mac RunningStatusRow),不进记录流。
   const runningStatus = mountRunningStatus(elements.runningStatus);
+
+  // 切会话的历史加载态:历史(follow snapshot)落地之前占住消息区。
+  // 刚新建的会话没有历史可等,记下它的 id,直接给「开始对话」空态。
+  const sessionLoading = mountSessionLoading(elements.sessionLoading);
+  let freshSessionId = null;
 
   // 记录里的图片(用户发送的附件 / agent 回复的图片)点击放大。挂在 document 上委托:
   // 卡片详情弹窗(在 body 下,不在消息列表里)里的工具结果图同样可以放大。
@@ -303,6 +308,13 @@ export function createSidepanelApp(root, deps, options = {}) {
 
   deps.sessions.onRuntimeChange((snapshot) => {
     if (snapshot.sessionId !== state.sessionId) return;
+    // 历史落地(加载态 → 记录)是一次性切换,同步渲染,不进 rAF 合并:侧栏不可见时
+    // rAF 不触发,历史明明已在 store 里,加载态却会一直挂着(同 openSession 的理由)。
+    if (sessionLoading.visible && !isAwaitingHistory(snapshot, { freshSessionId })) {
+      pendingSnapshot = null;
+      applySnapshot(snapshot);
+      return;
+    }
     pendingSnapshot = snapshot;
     if (renderScheduled) return;
     renderScheduled = true;
@@ -356,12 +368,16 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 未加载刻度的分页跳转:锚点行刚渲染出来,在这里落点(见 realizePendingJump)。
     realizePendingJump();
     // 运行中的状态不再作为记录流末尾的一行:对齐 Mac,改由输入框上方的状态条给出
-    // "工作类别 · 用时"。记录区里的等待指示只剩切会话时的"加载中",快照到了就收掉。
+    // "工作类别 · 用时"。记录区不再挂等待指示。
     chatRenderer.setTyping(false);
     chatRenderer.setThinking(false);
     runningStatus.set(runningStatusLabel(snapshot, { awaitingTurnStart }), snapshot.runningStartTime);
+    // 历史还没到:继续显示加载态,别让空 nodes 被当成空会话。session.open 返回得
+    // 比历史早,只看 nodes 为空就会先闪一片空白/「开始对话」,用户以为点错了会话。
+    const loadingHistory = isAwaitingHistory(snapshot, { freshSessionId });
+    sessionLoading.set(loadingHistory);
     // 空会话 + 加载失败:空态提示比一片空白更能说明"这不是在加载"。
-    elements.emptyHint.hidden = snapshot.nodes.length > 0 || pendingSteering.length > 0;
+    elements.emptyHint.hidden = loadingHistory || snapshot.nodes.length > 0 || pendingSteering.length > 0;
 
     renderTakeover(snapshot);
     renderQueuePanel(snapshot.queue, snapshot);
@@ -1287,10 +1303,13 @@ export function createSidepanelApp(root, deps, options = {}) {
     elements.composerTakeover.replaceChildren();
     elements.composerTakeover.hidden = true;
     elements.composer.hidden = false;
-    // 加载期间:隐藏「新会话」空态,改用等待动画 —— 否则聊天区先闪成一片空白,
-    // 用户以为点错了会话。applySnapshot 完成后会用真实状态覆盖这个 typing。
+    // 加载期间:隐藏「新会话」空态,改用加载态(转圈 + 骨架屏)—— 否则聊天区先闪成
+    // 一片空白,用户以为点错了会话。加载态一直撑到历史真正落地(见 applySnapshot 里的
+    // isAwaitingHistory),而不是 session.open 返回就收:那时历史往往还在路上。
+    // 刚新建的会话没有历史可等,直接等快照给「开始对话」空态。
+    freshSessionId = fresh ? sessionId : null;
     elements.emptyHint.hidden = true;
-    chatRenderer.setTyping(true, t("sessions.loading"));
+    sessionLoading.set(!fresh);
     // 上一个会话的运行状态不能挂到新会话上;新会话的快照到了会按真实状态重设。
     runningStatus.clear();
     historyDrawer?.setActive(sessionId, null);
@@ -1314,7 +1333,9 @@ export function createSidepanelApp(root, deps, options = {}) {
         if (previousSessionId && previousSnapshot?.sessionId === previousSessionId) {
           applySnapshot(previousSnapshot);
         } else {
-          chatRenderer.setTyping(false);
+          // 没有可回退的会话:收起加载态,给空态,别让转圈一直挂着。
+          sessionLoading.hide();
+          elements.emptyHint.hidden = false;
           updateSendState();
         }
       }
@@ -1384,8 +1405,9 @@ export function createSidepanelApp(root, deps, options = {}) {
     elements.composerTakeover.replaceChildren();
     elements.composerTakeover.hidden = true;
     elements.composer.hidden = false;
+    freshSessionId = null;
     elements.emptyHint.hidden = true;
-    chatRenderer.setTyping(true, t("sessions.loading"));
+    sessionLoading.show();
     runningStatus.clear();
     historyDrawer?.setActive(childId, null);
     subagentCatalog.refresh();
@@ -1396,6 +1418,7 @@ export function createSidepanelApp(root, deps, options = {}) {
       // 打开失败要回滚:上面已把 state/绘制拆到子代理态,不回滚会把用户
       // 停在一个「标题还是父会话、但 chip 已按子代理算」的中间态。
       state.sessionId = address.parentSessionId;
+      sessionLoading.hide();
       subagentCatalog.refresh();
       showToast(format(error));
       return;

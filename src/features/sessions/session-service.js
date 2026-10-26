@@ -222,6 +222,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure, onAw
     for (const entry of buffered) store.applyEvent(entry.event, entry.view);
     applyCachedControl(sessionId);
     applyCachedInteractions(sessionId);
+    store.markHistoryLoaded();
   }
 
   /// 往前翻一页历史并 prepend 进窗口(follow 切点之前)。只向左扩展,绝不缩小

@@ -3,7 +3,7 @@ const IDS = ["hdr-status", "hdr-new", "hdr-title", "hdr-title-wrap", "hdr-open-f
   "workspace-menu", "session-drawer", "session-drawer-scrim", "history-search",
   // 标题里的工作目录前缀("工作目录 / 会话标题"的前半段)
   "hdr-workspace-prefix",
-  "history-list-inner", "shortcut-new", "shortcut-history", "messages", "empty-hint", "msg-list", "interactions", "prompt-queue",
+  "history-list-inner", "shortcut-new", "shortcut-history", "messages", "empty-hint", "session-loading", "msg-list", "interactions", "prompt-queue",
   "preview-strip", "input", "composer-bar", "skills-menu", "perm-btn", "perm-label",
   "perm-menu", "model-btn", "model-label", "model-menu", "send", "toast", "view-settings",
   "attach-btn", "file-input",
@@ -49,6 +49,7 @@ export function collectElements(root) {
     historySearch: byId.get("history-search"),
     messages: byId.get("messages"),
     emptyHint: byId.get("empty-hint"),
+    sessionLoading: byId.get("session-loading"),
     msgList: byId.get("msg-list"),
     interactions: byId.get("interactions"),
     promptQueue: byId.get("prompt-queue"),

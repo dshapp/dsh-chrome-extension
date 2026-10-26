@@ -6,6 +6,7 @@ export * from "./tail-follow.js";
 export * from "./node-views.js";
 export * from "./tool-row-model.js";
 export * from "./running-status.js";
+export * from "./session-loading.js";
 export { installImageViewer, closeImageViewer } from "./image-viewer.js";
 export { openUrlInNewTab } from "./link-actions.js";
 export { fmtTime, decorateCodeBlocks, renderMarkdownInto } from "./chat-view.js";

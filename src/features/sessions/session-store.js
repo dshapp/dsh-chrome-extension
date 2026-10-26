@@ -151,6 +151,10 @@ export function createSessionStore() {
       // follow 流的终态错误(如宿主 resume 失败)。非空即表示这一代会话的历史
       // 不可用,由视图层取代"正在加载对话…"。见 setHistoryError。
       historyError: null,
+      // 这一代会话的历史(follow snapshot / session/page)是否已经落地。reset 后为 false,
+      // 直到 applyHistoryValue 灌完历史才翻成 true。视图据此区分"还在加载"与"真的是空会话":
+      // 只看 nodes 为空分不出两者,切会话时就会先闪一片空白/「开始对话」。
+      historyLoaded: false,
       currentTurn: 0,
       lastSeq: -1,
       // 按 seq 升序去重的原始事件窗口。乱序到达的事件插回它应有的位置并重折,
@@ -1951,6 +1955,7 @@ export function createSessionStore() {
       blank: state.blank,
       running: state.running,
       historyError: state.historyError,
+      historyLoaded: state.historyLoaded,
       currentTurn: state.currentTurn,
       // 运行中本轮的 turn/start 时间(Mac runningStartTime),底部状态行的用时从这里起算。
       runningStartTime: state.running ? state.turnStartTimes.get(state.currentTurn) ?? null : null,
@@ -2029,6 +2034,8 @@ export function createSessionStore() {
       state.historyError = message ? String(message) : null;
       if (state.historyError) state.running = false;
     },
+    /// 本代历史已灌入(空会话的历史页合法地是 0 条,同样算已落地)。
+    markHistoryLoaded() { state.historyLoaded = true; },
     setCwd(cwd) { state.cwd = cwd ?? null; },
     setGoalActivation(goal) {
       state.goalActivation = isObject(goal) ? goal : null;

@@ -403,6 +403,66 @@ span.ref-chip { cursor: default; }
   30% { transform: translateY(-4px); }
 }
 
+/* 切会话的历史加载态(session-loading.js):转圈 + 文案,下面一段对话形状的骨架屏。
+   淡入推迟 120ms:历史瞬间就到时整块还没显形就被收掉,不会闪一下。 */
+#session-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding-block: 0.25rem 1rem;
+  animation: session-loading-in 0.2s ease-out 0.12s both;
+}
+@keyframes session-loading-in { from { opacity: 0; } to { opacity: 1; } }
+.session-loading-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+}
+.session-loading-spinner {
+  flex: none;
+  inline-size: 12px;
+  block-size: 12px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--text-faint) 35%, transparent);
+  border-block-start-color: var(--text-dim);
+  animation: session-loading-spin 0.8s linear infinite;
+}
+@keyframes session-loading-spin { to { rotate: 360deg; } }
+.session-loading-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+.session-loading-skeleton .sk {
+  display: block;
+  block-size: 0.75rem;
+  border-radius: 6px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 6%, transparent) 0%,
+    color-mix(in oklab, var(--text) 13%, transparent) 50%,
+    color-mix(in oklab, var(--text) 6%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: session-loading-shimmer 1.4s ease-in-out infinite;
+}
+/* 用户气泡:靠右、更高、圆角大,与真实的 .msg-user 气泡同一位置 */
+.session-loading-skeleton .sk-user {
+  align-self: flex-end;
+  block-size: 2.25rem;
+  border-radius: 1rem;
+  margin-block: 0.5rem 0.25rem;
+}
+@keyframes session-loading-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #session-loading { animation: none; }
+  .session-loading-skeleton .sk { animation: none; }
+  .session-loading-spinner { animation-duration: 2.4s; }
+}
+
 
 /* ══ 新增:节点行(turn-trigger / chip / turnTail / workflow / unknown) ══ */
 
