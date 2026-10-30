@@ -19,13 +19,16 @@ export function splitUserContent(content) {
       texts.push(block.text);
     } else if (block.type === "image" && (block.data || block.attachment)) {
       const attachment = block.attachment ?? {};
-      // 历史消息里的图片只有 attachmentId(content-addressed),字节要按需读回;
-      // 草稿/乐观消息才内联 data。
+      // 历史消息里的图片只有引用(content-addressed),字节要按需读回,读的时候要回传
+      // 完整引用(attachmentId + mediaType/bytes/width/height/name);草稿/乐观消息才内联 data。
       images.push({
         data: attachment.data ?? block.data,
         mediaType: attachment.mediaType ?? block.mediaType,
         name: attachment.name ?? block.name,
-        attachmentId: attachment.attachmentId ?? block.attachmentId ?? null
+        attachmentId: attachment.attachmentId ?? block.attachmentId ?? null,
+        bytes: attachment.bytes,
+        width: attachment.width,
+        height: attachment.height
       });
     } else if (block.type === "file" && (block.attachment || block.name)) {
       const attachment = block.attachment ?? {};

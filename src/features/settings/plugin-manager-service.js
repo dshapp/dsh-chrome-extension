@@ -28,6 +28,23 @@ export function createPluginManagerService(connection) {
     async removeBundle(name) {
       return connection.call(RPC.pluginManagerRemoveBundle, { name });
     },
+    /// 已装 registry 包比已装版本新的版本(0.2.2):{status:"listed", installed, registry, versions[]}
+    /// 或 {status:"refused", problem, reason}。宿主签名 listVersions(name, options?)。
+    async listVersions(name) {
+      return connection.call(RPC.pluginManagerListVersions, { name, options: {} });
+    },
+    /// 换到指定的较新版本(0.2.2),宿主负责检查、卸旧装新与失败回装:
+    /// {from, to, step: "check"|"remove"|"install", result, restore?}。
+    /// registry:listVersions 答出的源,null = pnpm 自身配置的源,undefined = 宿主自己选。
+    async updateBundle(name, version, { registry, requestId } = {}) {
+      return connection.call(RPC.pluginManagerUpdateBundle, {
+        name, version,
+        options: {
+          ...(registry !== undefined ? { registry } : {}),
+          ...(requestId !== undefined ? { requestId } : {})
+        }
+      });
+    },
     /// 安装前的检查:包名/地址 → 版本、来源、是不是 bundle、作答的 registry,
     /// 或被拒的原因与问过的 registries。宿主签名 inspect(spec, options?),
     /// registry 为 undefined 时整个 options 省略(问宿主配置的首选源)。

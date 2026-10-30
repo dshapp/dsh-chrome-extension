@@ -12,6 +12,7 @@
 //      inspected.registry),不从检查已经发现不通的源开始。宿主每问一个源通告一次
 //      installing + attempt,这里只照实显示,不预演宿主的询问计划。
 import { t } from "../../../shared/i18n.js";
+import { managementErrorText } from "../../../features/settings/plugin-meta.js";
 import { button, textInput, select, notice, escapeHtml } from "./settings-ui.js";
 import {
   REGISTRY_CHOICES, readRegistryChoice, saveRegistryChoice, resolveRegistryChoice,
@@ -319,7 +320,7 @@ export function openPluginInstallSheet({ sheet, settingsDialog, deps, settingsSe
     compatibility.set(result);
     if (result.application === "failed") {
       phase = "failed";
-      error = result.error?.diagnostic || t("plug.installFailed");
+      error = managementErrorText(result.error) || t("plug.installFailed");
       failure = { registries: result.registries ?? attempts, failedAt: result.failedAt };
     } else if (result.application === "cancelled") {
       phase = "idle";

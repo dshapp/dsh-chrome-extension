@@ -1,5 +1,5 @@
 import { t } from "../../../shared/i18n.js";
-import { bundleText, entryText } from "../../../features/settings/plugin-meta.js";
+import { bundleText, entryText, managementErrorText } from "../../../features/settings/plugin-meta.js";
 import { section, row, button, toggle, tag, notice, escapeHtml, chevron, backLink, groupHeader, bindClickableRows } from "./settings-ui.js";
 import { packageArtwork } from "./plugin-artwork.js";
 import { lucideIconSvg } from "../../../features/chat/file-icons.js";
@@ -98,7 +98,7 @@ export function createPluginDetailView({ settingsService, sheet, deps, schemaCon
       + section({ body: hero
         + (status ? notice(readOnlyText(status), "muted") : "")
         + (message ? notice(message, "muted") : "")
-        + (pkg.error ? notice(pkg.error.diagnostic ?? pkg.error.code) : "")
+        + (pkg.error ? notice(managementErrorText(pkg.error)) : "")
         + (actions ? `<div class="set-form-footer"><span class="set-spacer"></span>${actions}</div>` : "") });
     const info = (pkg.source ? row({ label: escapeHtml(t("plug.source")), control: `<span class="set-value mono" title="${escapeHtml(pkg.source)}">${escapeHtml(pkg.source)}</span>` }) : "")
       + (pkg.availability ? row({ label: escapeHtml(t("plug.availability")), control: `<span class="set-value">${escapeHtml(pkg.availability)}</span>` }) : "");
@@ -144,7 +144,7 @@ export function createPluginDetailView({ settingsService, sheet, deps, schemaCon
     busy.add(key); onChange();
     try {
       const result = await settingsService.setVersionExemption(key, item.runtimeVersion ?? item.version, enabled, enabled ? true : undefined);
-      if (result?.application === "failed") errors.set(key, result.error?.diagnostic ?? result.error?.code);
+      if (result?.application === "failed") errors.set(key, managementErrorText(result.error));
       else { errors.delete(key); if (result?.application === "restart-required") errors.set(key, t("plug.changedRestart")); }
       await refreshExemptions(); await onChange({ refresh: true });
     } catch (error) { errors.set(key, deps.formatErrorDetails(error)); }

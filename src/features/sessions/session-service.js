@@ -477,7 +477,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure, onAw
     if (!followedStreamId || !currentFollowAddress) return;
     connection.unsubscribe?.(followedStreamId);
     connection.subscribe?.(followedStreamId, STREAM.follow, {
-      request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true }
+      request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true, activate: true }
     });
   }
 
@@ -656,7 +656,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure, onAw
       if (followedStreamId) connection.unsubscribe?.(followedStreamId);
       followedStreamId = `follow:${id}`;
       connection.subscribe?.(followedStreamId, STREAM.follow, {
-        request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true }
+        request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true, activate: true }
       });
       followJobs(id);
       return id;
@@ -849,7 +849,7 @@ export function createSessionService(connection, { onBackgroundTurnFailure, onAw
       if (followedStreamId) connection.unsubscribe?.(followedStreamId);
       followedStreamId = `follow:${childId}`;
       connection.subscribe?.(followedStreamId, STREAM.follow, {
-        request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true }
+        request: { address: currentFollowAddress, ...HISTORY_PAGE_OPTIONS, assistantStream: true, activate: true }
       });
       followJobs(childId);
       return null;
@@ -885,12 +885,17 @@ export function createSessionService(connection, { onBackgroundTurnFailure, onAw
       }
     },
 
-    /// 按 attachmentId 读回历史图片的字节(web SessionFace.readAttachment)。
+    /// 按转录里的图片引用读回历史图片的字节(web SessionFace.readAttachment)。
+    /// dsh 0.2.2 要整份 ImageAttachmentRef 且 schema 严格(多余字段、name:null 都会被拒),
+    /// 所以只挑这几个字段,没有 name 就不带。
     /// 返回 { attachment, data },data 是 base64;失败返回 null 让渲染层落 failed 占位。
-    async readAttachment(sessionId, attachmentId) {
+    async readAttachment(sessionId, attachment) {
       const id = sessionId ?? currentSessionId;
-      if (!id || !attachmentId) return null;
-      return connection.call(RPC.sessionAttachment, { request: { sessionId: id, attachmentId } });
+      if (!id || !attachment?.attachmentId) return null;
+      const { attachmentId, mediaType, bytes, width, height, name } = attachment;
+      return connection.call(RPC.sessionAttachment, { request: { sessionId: id, attachment: {
+        attachmentId, mediaType, bytes, width, height, ...(typeof name === "string" ? { name } : {})
+      } } });
     },
 
     async models(sessionId) {

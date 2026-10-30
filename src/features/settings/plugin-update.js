@@ -1,58 +1,27 @@
 // 设置页里单个插件的「有新版 → 一键更新」:浏览器页(dsh-chrome-control)与移动端访问页
 // (dsh-mobile-bridge)共用。对齐 Mac 的 PluginUpdateChecker。
 //
-// 已装版本以宿主 pluginManager/listBundles 为准 —— 它读的就是正在跑的那个 profile。
-// 最新版直接问 npm registry 的 dist-tags.latest:宿主的 inspect 对已装的包一律答
-// already-installed,问不出新版本。只检查从 registry 装的:link: / file: / git 装的
-// 是本地开发版,"有新版"无从谈起,装回 registry 版反而会把开发版冲掉。
+// 全部交给宿主(0.2.2 pluginManager):listBundles 的 updatable 说这个包是不是从 registry
+// 装的(link: / file: / git 装的本地开发版不提示,装回 registry 版会把开发版冲掉);
+// listVersions 列出比已装版本新的版本,并标好预发布、弃用、能否当 bundle 装、是否兼容当前 DSH;
+// updateBundle 换版:宿主开着 HMR 时先停用并卸掉旧版再装新版,新版装不上就把旧版装回去,
+// 保留原来的启停。已加载的包换代码只能重启,宿主因此答 restart-required,交给调用方的 restart。
 //
-// 更新走宿主 installBundle(name@latest),保留原来的启停;已加载的包换代码只能重启,
-// 宿主因此答 restart-required,交给调用方的 restart。
-//
-// 宿主开着 HMR 时(dsh web 默认)不许原地换版本、答 already-installed,它给的路是先
-// removeBundle 再装(web 插件页的「更新」也是这么做的),两步都当场生效、不必重启;
-// 新版装不上时把原版本装回去。卸载前宿主会先停用它:要是停不下来(bundle-in-use /
-// stop-profile —— 典型是宿主启动后 profile 的依赖又被改过,只能重启才能换代码),
-// 宿主会把它留在停用状态,这里把开关拨回去,并改成「重启服务并更新」:重启后再走一遍。
+// 卸旧版时宿主会先停用它:要是停不下来(bundle-in-use / stop-profile —— 典型是宿主启动后
+// profile 的依赖又被改过,只能重启才能换代码),宿主会把它留在停用状态,这里把开关拨回去,
+// 并改成「重启服务并更新」:重启后再走一遍。
 import { t } from "../../shared/i18n.js";
 import { isExactVersion, isUpgrade } from "../host-proxy/version.js";
-import { OFFICIAL_NPM_REGISTRY, NPMMIRROR_REGISTRY } from "./plugin-registry.js";
+import { managementErrorText } from "./plugin-meta.js";
 
-/// 依次问的源:npm 官方源不通(常见于国内网络)再问 npmmirror。
-export const UPDATE_REGISTRIES = Object.freeze([OFFICIAL_NPM_REGISTRY, NPMMIRROR_REGISTRY]);
-const FETCH_TIMEOUT_MS = 8000;
-
-/// profile 里这一项是不是按 registry 版本号装的。宿主把它报成 `name@<range>`;
-/// 本地路径、git、npm: 别名的 range 都带 ":" 或 "/"。
-export function installedFromRegistry(bundle) {
-  const source = bundle?.source;
-  const prefix = `${bundle?.name}@`;
-  if (typeof source !== "string" || !source.startsWith(prefix)) return false;
-  const range = source.slice(prefix.length);
-  return range !== "" && !/[:/]/.test(range);
-}
-
-/// registry 上 latest 指向的版本;都问不到时 null(离线是常态,不算错)。
-export async function fetchLatestVersion(name, {
-  fetchImpl = globalThis.fetch, registries = UPDATE_REGISTRIES, timeoutMs = FETCH_TIMEOUT_MS
-} = {}) {
-  const path = "-/package/" + name.replace("/", "%2f") + "/dist-tags";
-  for (const registry of registries) {
-    try {
-      const response = await fetchImpl(registry + path, {
-        headers: { accept: "application/json" },
-        credentials: "omit",
-        cache: "no-store",
-        signal: AbortSignal.timeout(timeoutMs)
-      });
-      if (!response.ok) continue;
-      const latest = (await response.json())?.latest;
-      if (isExactVersion(latest)) return latest;
-    } catch {
-      // 换下一个源。
-    }
-  }
-  return null;
+/// 宿主列出的较新版本里挑更新目标:latest 标签优先,否则最新的稳定版;
+/// 必须声明 bundle、兼容当前 DSH、未弃用、不是预发布。没有可装的给 null。
+export function pickUpdate(list) {
+  if (list?.status !== "listed") return null;
+  const usable = (Array.isArray(list.versions) ? list.versions : []).filter((entry) =>
+    entry?.bundle && !entry.incompatible && !entry.deprecated && !entry.prerelease && isExactVersion(entry.version));
+  const pick = usable.find((entry) => entry.tags?.includes("latest")) ?? usable[0];
+  return pick ? { version: pick.version, registry: list.registry } : null;
 }
 
 /// 宿主的变更没有落地(失败或被取消)。
@@ -65,7 +34,7 @@ const BLOCKED_WHILE_RUNNING = new Set(["bundle-in-use", "stop-profile"]);
 
 /// 失败的说法:宿主 / pnpm 的原话优先,最后才是错误码。
 function reason(result) {
-  return result.error?.diagnostic || result.packageResult?.output || result.error?.code || result.application;
+  return result.error?.diagnostic || result.packageResult?.output || managementErrorText(result.error) || result.application;
 }
 
 /// 更新 / 安装后宿主要重启时用:经 serverOps 重启 dsh web(与服务端页的「重启服务」同一条路)。
@@ -86,14 +55,15 @@ export function serverRestarter(serverOps) {
 }
 
 /// @param name          插件包名。
-/// @param pluginManager plugin-manager-service:读清单与装包。
+/// @param pluginManager plugin-manager-service:读清单、列版本、换版。
 /// @param restart       宿主说要重启时调用;返回 true = 重启好了,否则是没重启成功的原因。
-/// @param fetchLatest   (name) => 最新版本号 | null,测试替身用。
 /// @param onChange      状态变了就回调一次。
-export function createPluginUpdate({ name, pluginManager, restart, fetchLatest = fetchLatestVersion, onChange } = {}) {
+export function createPluginUpdate({ name, pluginManager, restart, onChange } = {}) {
   const state = {
     installed: null,
     latest: null,
+    /// 答出 latest 的源:更新从它装。
+    registry: undefined,
     enabled: true,
     updating: false,
     /// 刚由这一页更新到的版本:给一句"已更新",直到下次检查。
@@ -113,7 +83,7 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
   const emit = () => onChange?.(state);
   const available = () => Boolean(state.installed && state.latest && isUpgrade(state.installed, state.latest));
 
-  /// 读已装版本,再问 registry。每进一次页面调一次 —— 它要走网络,不放进轮询。
+  /// 读已装版本,再问宿主有哪些新版。每进一次页面调一次 —— 宿主要去问 registry,不放进轮询。
   async function check() {
     if (state.updating) return;
     const seq = ++checkSeq;
@@ -131,7 +101,7 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     state.restartFailed = false;
     state.restartError = "";
     state.error = "";
-    if (!bundle?.installed || !installedFromRegistry(bundle) || !isExactVersion(bundle.version)) {
+    if (!bundle?.installed || bundle.updatable !== true || !isExactVersion(bundle.version)) {
       state.installed = null;
       state.latest = null;
       emit();
@@ -139,9 +109,10 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
     }
     state.installed = bundle.version;
     state.enabled = bundle.enabled !== false;
-    const latest = await fetchLatest(name);
+    const update = pickUpdate(await pluginManager.listVersions(name).catch(() => null));
     if (seq !== checkSeq) return;
-    state.latest = latest;
+    state.latest = update?.version ?? null;
+    state.registry = update?.registry;
     emit();
   }
 
@@ -171,34 +142,23 @@ export function createPluginUpdate({ name, pluginManager, restart, fetchLatest =
 
   async function install() {
     const target = state.latest;
-    const previous = state.installed;
     state.updating = true;
     state.restartFirst = false;
     state.restartFailed = false;
     state.restartError = "";
     emit();
-    const add = (version) => pluginManager.installBundle(`${name}@${version}`, {
-      requestId: "plugin-update-" + Date.now().toString(36),
-      enabled: state.enabled
-    });
     try {
-      let result = await add(target);
-      if (failed(result) && result.error?.code === "already-installed") {
-        const removed = await pluginManager.removeBundle(name).catch((error) => ({ application: "failed", thrown: error }));
-        if (failed(removed)) {
+      const outcome = await pluginManager.updateBundle(name, target, {
+        registry: state.registry,
+        requestId: "plugin-update-" + Date.now().toString(36)
+      });
+      const result = outcome?.result;
+      if (failed(result)) {
+        if (outcome.step === "remove") {
           // 宿主卸载前先停用了它:卸不掉就把开关拨回去,别让插件就此被关掉。
           if (state.enabled) await pluginManager.setBundleEnabled(name, true).catch(() => undefined);
-          if (removed.thrown) throw removed.thrown;
-          if (BLOCKED_WHILE_RUNNING.has(removed.error?.code)) state.restartFirst = true;
-          else state.error = reason(removed);
-          return;
+          if (BLOCKED_WHILE_RUNNING.has(result.error?.code)) { state.restartFirst = true; return; }
         }
-        // 旧版已经卸掉了:新版装不上就把原来的装回去,别让插件就此没了。
-        const restore = () => add(previous).catch(() => undefined);
-        result = await add(target).catch(async (error) => { await restore(); throw error; });
-        if (failed(result)) await restore();
-      }
-      if (failed(result)) {
         state.error = reason(result);
         return;
       }

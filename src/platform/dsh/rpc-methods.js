@@ -99,6 +99,9 @@ export const RPC = Object.freeze({
   pluginManagerSetBundleEnabled: "pluginManager/setBundleEnabled",
   pluginManagerSetPluginEnabled: "pluginManager/setPluginEnabled",
   pluginManagerRemoveBundle: "pluginManager/removeBundle",
+  // 0.2.2:已装 registry 包的较新版本,以及由宿主负责卸旧装新与失败回装的换版。
+  pluginManagerListVersions: "pluginManager/listVersions",
+  pluginManagerUpdateBundle: "pluginManager/updateBundle",
   pluginManagerInspect: "pluginManager/inspect",
   pluginManagerInstallBundle: "pluginManager/installBundle",
   pluginManagerCancelInstall: "pluginManager/cancelInstall",

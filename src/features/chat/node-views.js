@@ -35,7 +35,7 @@ function el(tag, className, text) {
   return node;
 }
 
-/// 历史图片按 attachmentId 惰性读回(content-addressed,块里没有字节)。
+/// 历史图片按图片引用惰性读回(content-addressed,块里没有字节;缓存按 attachmentId)。
 /// 同一 id 只读一次;读回前留 loading 占位,失败标 failed(绝不写 ...base64,undefined)。
 ///
 /// 缓存必须有上限:entry.url 是整张图的 `data:` base64,模块级 Map 无上限累积
@@ -96,7 +96,7 @@ function applyImageSource(img, source, context = {}) {
     trimAttachmentImageCache();
   }
   if (!entry.pending) {
-    entry.pending = Promise.resolve(context.readAttachment(id)).then((value) => {
+    entry.pending = Promise.resolve(context.readAttachment(a.attachment ?? a)).then((value) => {
       const bytes = typeof value === "string" ? value : value?.data;
       const type = value?.attachment?.mediaType || mediaType;
       if (typeof bytes !== "string" || !bytes) throw new Error("empty attachment");
@@ -682,7 +682,7 @@ function createBlockPart(kind) {
   return assistantImage(null);
 }
 
-/// assistant 图片块:内联 base64 或按 attachmentId 读回 + 文件名作 alt。
+/// assistant 图片块:内联 base64 或按图片引用读回 + 文件名作 alt。
 function assistantImage(attachment, context = {}) {
   const img = document.createElement("img");
   img.className = "msg-agent-img";

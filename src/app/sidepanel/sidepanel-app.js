@@ -121,8 +121,8 @@ export function createSidepanelApp(root, deps, options = {}) {
         // 气泡里的会话引用胶囊:点了就切到被引用的那个会话(可跨工作区)。
         onOpenSession: (sessionId) => { void openSession(sessionId).catch((error) => showToast(format(error))); },
         onRevealPath: (path) => { void deps.workspaces.revealPath(path).catch((error) => showToast(format(error))); },
-        // 历史图片只有 attachmentId,按需回读字节(web historical-images)。
-        readAttachment: (attachmentId) => deps.sessions.readAttachment?.(snap?.sessionId, attachmentId) ?? null,
+        // 历史图片只有引用,按需回读字节(web historical-images);整份引用原样交给宿主。
+        readAttachment: (attachment) => deps.sessions.readAttachment?.(snap?.sessionId, attachment) ?? null,
         // 助手正文里的本地绝对路径图片:宿主 GET /api/file?path=…(dsh 0.1.7,
         // web localPathMediaUrl),要鉴权,所以读成 Blob 而不是直接 <img src>。
         readLocalImage: (path) => deps.connection.getBlob("/api/file", { path }),

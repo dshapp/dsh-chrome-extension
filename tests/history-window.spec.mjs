@@ -47,7 +47,7 @@ test('follow 开流带轮次窗口', async () => {
   await service.open('s1')
   const follow = subscriptions.find((item) => item.endpoint === STREAM.follow)
   assert.deepEqual(follow.args, {
-    request: { address: { kind: 'session', sessionId: 's1' }, ...WINDOW, assistantStream: true }
+    request: { address: { kind: 'session', sessionId: 's1' }, ...WINDOW, assistantStream: true, activate: true }
   })
 })
 

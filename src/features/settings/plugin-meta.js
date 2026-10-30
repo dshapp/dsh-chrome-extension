@@ -6,7 +6,20 @@
 //
 // 回退规则对齐 web locale.resolveText:字符串原样;译文表按当前语言的回退链
 // (完整 id → 主语言 → en)取第一个存在的值,空串也算"存在"。
-import { getLang } from "../../shared/i18n.js";
+import { getLang, t } from "../../shared/i18n.js";
+
+/// ManagementError 里宿主不带原话(diagnostic)的拒绝码 → 本地文案。认不出的码原样显示。
+const MANAGEMENT_ERROR_TEXT = {
+  "incompatible-version": "plug.errIncompatibleVersion",
+  "unsupported-platform": "plug.errUnsupportedPlatform"
+};
+
+/// 插件管理失败的说法:宿主原话优先,其次已知码的文案,最后是码本身。
+export function managementErrorText(error) {
+  if (!error) return "";
+  const key = MANAGEMENT_ERROR_TEXT[error.code];
+  return error.diagnostic || (key ? t(key) : error.code ?? "");
+}
 
 export function resolveLocalizedText(text, lang = getLang()) {
   if (typeof text === "string") return text;

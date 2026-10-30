@@ -14,7 +14,7 @@ import {
 } from "./settings-ui.js";
 import { lucideIconSvg } from "../../../features/chat/file-icons.js";
 import { openPluginInstallSheet } from "./plugin-install-sheet.js";
-import { bundleText } from "../../../features/settings/plugin-meta.js";
+import { bundleText, managementErrorText } from "../../../features/settings/plugin-meta.js";
 import { createPluginDetailView, updateAvailable } from "./plugin-detail-view.js";
 import { packageArtwork, cardArtwork } from "./plugin-artwork.js";
 
@@ -151,12 +151,20 @@ export function createMarketplaceView({
     });
   }
 
+  /// listedByDefault:false(dsh 0.2.2,如不支持本机系统的包)未启用、未安装时默认不列出;
+  /// 搜索框输入完整包名时仍显示,好让人能找到并启用它。
+  function listedBundles() {
+    return bundles.filter((bundle) => bundle.listedByDefault !== false || bundle.enabled || bundle.installed
+      || query.trim() === bundle.name);
+  }
+
   function officialBundles() {
-    return bundles.filter((bundle) => bundle.official === true || (bundle.official === undefined && bundle.optional === true));
+    return listedBundles().filter((bundle) => bundle.official === true || (bundle.official === undefined && bundle.optional === true));
   }
 
   function installedBundles() {
-    return bundles.filter((bundle) => !officialBundles().includes(bundle) && bundle.installed);
+    const official = officialBundles();
+    return listedBundles().filter((bundle) => !official.includes(bundle) && bundle.installed);
   }
 
   function matchesQuery(values) {
@@ -354,8 +362,8 @@ export function createMarketplaceView({
 
   function applicationText(result) {
     if (!result) return "";
-    if (result.error?.diagnostic) return result.error.diagnostic;
-    if (result.error?.code) return result.error.code;
+    const errorText = managementErrorText(result.error);
+    if (errorText) return errorText;
     const key = APPLICATION_TEXT[result.application];
     return key ? t(key) : "";
   }

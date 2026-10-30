@@ -29,7 +29,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() 
 
 function renderImage(attachmentId, counts) {
   const context = {
-    readAttachment: async (id) => {
+    readAttachment: async ({ attachmentId: id }) => {
       counts.set(id, (counts.get(id) ?? 0) + 1)
       return { data: 'QUJD', attachment: { mediaType: 'image/png' } } // "ABC"
     }

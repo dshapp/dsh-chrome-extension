@@ -161,7 +161,7 @@ function renderTrigger(content, reads = []) {
   return createTurnTriggerNode(
     turnTriggerNode({ seq: 1, time: Date.now(), messageId: 'm', content, source: { kind: 'tool-jobs' } }),
     {
-      readAttachment: async (id) => {
+      readAttachment: async ({ attachmentId: id }) => {
         reads.push(id)
         return { data: 'QUJD', attachment: { mediaType: 'image/png' } } // "ABC"
       }
