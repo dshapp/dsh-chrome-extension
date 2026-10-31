@@ -34,7 +34,8 @@ export function webUrl(value) {
 
 /**
  * 工作区相对路径 → 宿主路径(web dsh-util-workspace-path resolveWorkspacePath):
- * 绝对路径(POSIX / Windows 盘符 / UNC)原样;没有 cwd 原样;否则拼到 cwd 下。
+ * 绝对路径(POSIX / Windows 盘符 / UNC)原样;没有 cwd 原样;否则拼到 cwd 下,
+ * 拼接前去掉开头的 "./"、"/"、"\"(./a.png → <cwd>/a.png,不留 "/./")。
  * @param {string|null|undefined} cwd 会话工作区根。
  * @param {string} path 绝对或工作区相对路径。
  */
@@ -44,7 +45,7 @@ export function resolveWorkspacePath(cwd, path) {
   if (value.startsWith("/") || windows(value)) return value;
   if (!cwd) return value;
   const separator = windows(cwd) && cwd.includes("\\") ? "\\" : "/";
-  return `${cwd.replace(/[/\\]+$/, "")}${separator}${value.replace(/^[/\\]+/, "")}`;
+  return `${cwd.replace(/[/\\]+$/, "")}${separator}${value.replace(/^(?:\.?[/\\])+/, "")}`;
 }
 
 /**

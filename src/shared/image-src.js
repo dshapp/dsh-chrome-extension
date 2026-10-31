@@ -15,7 +15,7 @@
 //    <script>,是图片里唯一能执行代码的格式。
 //
 // 第三类是 isLocalImagePath 放行的**绝对本地路径**(dsh 0.1.7,对齐 web
-// AssistantMarkdown.localPathMediaUrl):它不直接进 src,而是由调用方经宿主
+// AssistantMarkdown.localPathMediaUrl;POSIX 与 Windows 盘符两种写法):它不直接进 src,而是由调用方经宿主
 // 鉴权路由 /api/file?path=… 读成 blob: 再挂上去(见 features/chat/local-images.js)。
 // 读哪些文件由宿主的文件系统策略裁决,这里只保证它形如本地绝对路径。
 //
@@ -51,18 +51,24 @@ export function isSafeImageSrc(src) {
 }
 
 /**
- * 这个图片地址是否是宿主能按 /api/file 读的**绝对 POSIX 路径**。
+ * 这个图片地址是否是宿主能按 /api/file 读的**绝对本地路径**。
  *
- * 规则逐字对齐 web localPathMediaUrl:以 "/" 开头且不是 "//"(协议相对地址,
- * 指向别的主机)。file:// 与 Windows 路径(C:\…)同 web 一样不放行,原样按
- * 文字输出。输入同样是转义态;"/" 前缀不受转义影响。控制字符照 isSafeImageSrc
- * 的理由直接拒绝(宿主对 \0 也回 400)。
+ * 规则逐字对齐 web fileMediaUrl(isAbsoluteWorkspacePath,且不以两个分隔符开头):
+ * - POSIX:以 "/" 开头;
+ * - Windows 盘符:"C:\…" 或 "C:/…"。Windows 宿主上会话 cwd 就是这种形状,工作区
+ *   相对路径按它补全后也是 —— 只认 "/" 的话,Windows 上所有本地图都退化成
+ *   markdown 原文(![开发版二维码](<miniapp/static/preview_qrcode.png>) 的回归)。
+ * 以两个分隔符开头的不放行:"//host/x" 是协议相对地址,"\\server\share" 是 UNC,
+ * 都指向别的主机。file:// 同 web 一样不放行,原样按文字输出。输入同样是转义态;
+ * "/"、"\"、":" 不受转义影响。控制字符照 isSafeImageSrc 的理由直接拒绝
+ *(宿主对 \0 也回 400)。
  *
  * @param {string} src 待检查的地址(转义态)。
  * @returns {boolean} 放行为 true。
  */
 export function isLocalImagePath(src) {
   const value = String(src ?? "");
-  if (!value.startsWith("/") || value.startsWith("//")) return false;
+  if (/^[\\/]{2}/.test(value)) return false;
+  if (!value.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(value)) return false;
   return !/[\u0000-\u001f\u007f]/.test(value);
 }

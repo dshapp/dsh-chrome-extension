@@ -3,7 +3,8 @@
  *
  * 对齐 web AssistantMarkdown.localPathMediaUrl 及其测试
  * assistant-markdown-path-images.client.spec.tsx、Mac 7d3e1cd:
- * - 只放行以 "/" 开头且不是 "//" 的地址;相对路径、file://、Windows 路径保持原样文字。
+ * - 只放行以 "/" 开头且不是 "//" 的地址,以及 Windows 盘符路径(C:\… / C:/…,对齐 web
+ *   fileMediaUrl);相对路径、file://、UNC 保持原样文字。
  * - 只有助手正文(localImages 模式)产出占位图,其余 mdToHtml 调用点行为不变。
  * - 占位图经宿主 GET /api/file?path=… 读成 blob: 挂上;失败换成「图片无法预览 · alt」(alt 空则原路径)。
  * - api-client.getBlob 带 cookie、走 401 重试,path 按 URLSearchParams 编码。
@@ -42,8 +43,14 @@ function host(html) {
 test('isLocalImagePath 与 web localPathMediaUrl 同规则', () => {
   assert.equal(isLocalImagePath('/tmp/graph.png'), true)
   assert.equal(isLocalImagePath('/Users/a/b c.png'), true)
+  // Windows 盘符路径(web isAbsoluteWorkspacePath):反斜杠、正斜杠、混写都认。
+  assert.equal(isLocalImagePath('C:\\tmp\\x.png'), true)
+  assert.equal(isLocalImagePath('d:/work/x.png'), true)
+  assert.equal(isLocalImagePath('C:\\work\\proj\\miniapp/static/qr.png'), true)
   for (const value of ['', 'relative.png', './a.png', '//cdn.example.com/x.png',
-    'file:///tmp/x.png', 'C:\\tmp\\x.png', 'https://a.com/x.png', '/tmp/a\u0000.png', '/tmp/\n.png']) {
+    'file:///tmp/x.png', 'https://a.com/x.png', '/tmp/a\u0000.png', '/tmp/\n.png',
+    // UNC 与 "\/" 开头同 web fileMediaUrl 一样拒绝;裸盘符、盘符相对路径不是绝对路径。
+    '\\\\server\\share\\x.png', '\\/x.png', 'C:', 'C:x.png', 'C:\\a\u0000.png']) {
     assert.equal(isLocalImagePath(value), false, value)
   }
   // 安全边界不变:本地路径不会被 isSafeImageSrc 直接放进 src。
@@ -126,6 +133,29 @@ test('工作区相对路径图片按 cwd 解析(web ChatView fileImages)', () =>
   }
   // 没有 cwd:相对路径仍是文字(与 web 未知 cwd 时一致)。
   assert.deepEqual(paths('![x](<miniapp/q.png>)'), [])
+  // "./" 开头同 web resolveWorkspacePath 一样去掉,不留 "/./"。
+  assert.deepEqual(paths('![x](./docs/a.png)', cwd), ['/Users/u/proj/docs/a.png'])
+})
+
+test('Windows 宿主:工作区相对路径与盘符绝对路径都渲染成图片', () => {
+  // 回归:Windows 上 cwd 是 C:\…,补全后的路径不以 "/" 开头,
+  // ![开发版二维码](<miniapp/static/preview_qrcode.png>) 原样显示成 markdown 文字。
+  const paths = (md, cwd) => [...host(mdToHtml(md, { localImages: true, cwd })).querySelectorAll('img')]
+    .map((i) => i.getAttribute('data-local-path'))
+  const cwd = 'C:\\Users\\u\\proj'
+  // 分隔符按 web resolveWorkspacePath:cwd 带 "\" 就用 "\" 接,相对部分原样保留。
+  assert.deepEqual(paths('![开发版二维码](<miniapp/static/preview_qrcode.png>)', cwd),
+    ['C:\\Users\\u\\proj\\miniapp/static/preview_qrcode.png'])
+  assert.deepEqual(paths('![a](./docs/my%20shot.png)', cwd), ['C:\\Users\\u\\proj\\docs/my shot.png'])
+  assert.deepEqual(paths('![a](<miniapp/q.png>)', 'C:/Users/u/proj/'), ['C:/Users/u/proj/miniapp/q.png'])
+  // 盘符绝对路径不受 cwd 影响,反斜杠/正斜杠都认。
+  assert.deepEqual(paths('![a](<C:\\shots\\a b.png>) ![b](D:/shots/b.png)', cwd),
+    ['C:\\shots\\a b.png', 'D:/shots/b.png'])
+  // UNC 指向别的主机:不认,保持文字。
+  const unc = '![x](<\\\\server\\share\\x.png>)'
+  const root = host(mdToHtml(unc, { localImages: true, cwd }))
+  assert.equal(root.querySelector('img'), null)
+  assert.ok(root.textContent.includes('\\\\server\\share\\x.png'))
 })
 
 test('增量渲染按 cwd 读回相对路径图,cwd 变化时重建', async () => {
