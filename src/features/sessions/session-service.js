@@ -629,23 +629,11 @@ export function createSessionService(connection, { onBackgroundTurnFailure, onAw
       // 切换目标本身就使旧分页失效；不能等新会话也调用 loadHistory 才递增。
       // 否则旧请求在 follow 切换后返回，会通过 ensureStore 把当前会话切回去。
       loadToken += 1;
-      if (sessionId) {
-        // 会话的 cwd 在创建时固定。attach 时若不带归属参数,宿主会回退到它的
-        // 启动目录(dsh web 的 --cwd,常是 ~),与存档 cwd 一比即 session-conflict。
-        // 所以只在**有**归属参数时才 attach;没有就直接用列表里记的 cwd 兜底,
-        // 再没有就跳过 attach —— 后面的 loadHistory 本就不需要先 create。
-        // (Mac 端同源策略:AppModel.createOrAdoptSession 在 cwd 可能不符时丢弃 id。)
-        const known = listStore.get().find((item) => item.sessionId === sessionId);
-        const location = locationOf({ workspaceId, cwd: cwd ?? known?.cwd });
-        if (location.workspaceId || location.cwd) {
-          try {
-            await connection.call(RPC.sessionCreate, { request: { sessionId, ...location } });
-          } catch (error) {
-            // 归属参数与存档 cwd 不符:会话已存在,attach 不是必需的,继续读历史。
-            if (error?.code !== "session/conflict") throw error;
-          }
-        }
-      }
+      // 打开已有会话不再先 session/create 认领(attach)。宿主的 create 对具名会话走
+      // claim → 同步 resume 整个 agent,实测每次 200~280ms,而且它排在 follow 前面串行
+      // 等待 —— 切会话的一半时间都耗在这里。DSH Web(Session.doOpen)打开会话只开
+      // session/follow{activate:true}:快照直接读 observation 返回,agent 由宿主在后台
+      // promote;随后的 session/prompt 也会自己解析/恢复 agent。这里对齐 Web。
       const id = sessionId ?? await service.create(locationOf({ workspaceId, cwd }));
       // 等 attach/create 时又打开了别的会话：旧调用只把自己的 id 交还给调用方，
       // 不再触碰当前 store，也不替换较新调用刚开的 follow 流。
@@ -720,10 +708,25 @@ export function createSessionService(connection, { onBackgroundTurnFailure, onAw
     },
 
     async prompt(sessionId, content, { mode = "queue" } = {}) {
-      return connection.call(RPC.sessionPrompt, { request: {
-        requestId: crypto.randomUUID(), sessionId, mode, content,
-        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-      } });
+      const requestId = crypto.randomUUID();
+      // 空闲会话里的普通发送直接进本轮记录:先贴本端回显,durable user/message
+      // (source.rpcId === requestId)到达时由 store 替换掉(对齐 web 的 transcript 回显)。
+      // 运行中的排队/插队各有自己的投影(队列面板 / pendingSteering),不在这里回显。
+      const echoed = mode === "queue" && isCurrent(sessionId) && !store.getSnapshot().running
+        && store.addLocalEcho(sessionId, requestId, content);
+      if (echoed) notifyRuntime();
+      try {
+        return await connection.call(RPC.sessionPrompt, { request: {
+          requestId, sessionId, mode, content,
+          clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        } });
+      } catch (error) {
+        if (echoed) {
+          store.retireLocalEcho(sessionId, requestId);
+          if (isCurrent(sessionId)) notifyRuntime();
+        }
+        throw error;
+      }
     },
 
     async cancel(sessionId) {

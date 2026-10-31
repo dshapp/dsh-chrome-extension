@@ -124,6 +124,13 @@ export function createSessionStore() {
   //   replied:本端刚回答过、inbox 投影还没反映出来的 callId,避免重复作答。
   const hiddenQuestionCalls = new Map();
   const repliedQuestionCalls = new Map();
+  // 本端刚提交、宿主还没写出 durable user/message 的消息回显(web pendingSubmissions
+  // 的 transcript 回显)。空闲会话发出的消息要等宿主拼完本轮上下文、在 step/start 时
+  // 才写 user/message —— 小会话约 0.4s,大会话/冷 agent 可达数秒,期间记录区什么都
+  // 没有,看起来像没发出去。按会话存在闭包里:follow 快照/缺口修复会 reset state,
+  // 回显不能跟着丢。以 requestId 对账:user/message 的 source.rpcId 就是它。
+  const localEchoes = new Map();
+  let echoRevision = 0;
   const callSet = (map, sessionId) => {
     let set = map.get(sessionId);
     if (!set) { set = new Set(); map.set(sessionId, set); }
@@ -569,6 +576,7 @@ export function createSessionStore() {
     const base = { seq: event.seq, time: event.time, messageId: msg.id, content: msg.content };
     let node;
     if (msg.sourceKind === "user") {
+      retireEcho(state.sessionId, str(msg.source?.rpcId));
       node = state.claimedSteeringIds.has(msg.id) ? steeringNode(base) : userNode(base);
     } else if (isWaking(msg.id) || msg.sourceKind === "user-question-reply") {
       // 限时提问的迟到回答是用户自己的答复(web question-reply 节点):
@@ -1067,6 +1075,9 @@ export function createSessionStore() {
     if (turn == null) return;
     state.activeSteps.clear();
     recordTurnEndBoundary(event.seq, event.time);
+    // 兜底:回显发出之后结束的轮仍没带出它的 user/message(被取消/被拒),就不再挂着。
+    // 只比时间,重放窗口里更早的 turn/end 不会误清刚发出的回显。
+    retireEchoesBefore(state.sessionId, num(event.time));
 
     const reason = isObject(d.reason) ? d.reason : null;
     const kind = reason ? str(reason.kind) : null;
@@ -1912,12 +1923,27 @@ export function createSessionStore() {
   ///
   /// 不进 state.nodes:它不参与 turn process 折叠、turn rail、lastNode 推导。
   /// 按 queue 引用 + 消息 id 缓存节点对象,流式期间每帧的快照不会让渲染层重建这行。
-  let pendingSteeringCache = { queue: null, contexts: null, size: 0, nodes: [] };
+  function retireEcho(sessionId, requestId) {
+    const echoes = localEchoes.get(sessionId);
+    if (!requestId || !echoes?.delete(requestId)) return;
+    if (!echoes.size) localEchoes.delete(sessionId);
+    echoRevision += 1;
+  }
+
+  function retireEchoesBefore(sessionId, time) {
+    const echoes = localEchoes.get(sessionId);
+    if (!echoes || time == null) return;
+    for (const [requestId, node] of echoes) {
+      if (node.time <= time) retireEcho(sessionId, requestId);
+    }
+  }
+
+  let pendingSteeringCache = { queue: null, contexts: null, size: 0, echoes: -1, nodes: [] };
   const pendingSteeringNodeById = new Map();
   function pendingSteeringNodes() {
     const queue = state.queue;
     if (pendingSteeringCache.queue === queue && pendingSteeringCache.contexts === state.contexts
-      && pendingSteeringCache.size === state.contexts.size) {
+      && pendingSteeringCache.size === state.contexts.size && pendingSteeringCache.echoes === echoRevision) {
       return pendingSteeringCache.nodes;
     }
     const nodes = [];
@@ -1939,7 +1965,9 @@ export function createSessionStore() {
       nodes.push(node);
     }
     for (const id of pendingSteeringNodeById.keys()) if (!live.has(id)) pendingSteeringNodeById.delete(id);
-    pendingSteeringCache = { queue, contexts: state.contexts, size: state.contexts.size, nodes };
+    // 本端回显排在最后:它们是最新提交的,且宿主还没有为它们给出任何行。
+    for (const node of localEchoes.get(state.sessionId)?.values() ?? []) nodes.push(node);
+    pendingSteeringCache = { queue, contexts: state.contexts, size: state.contexts.size, echoes: echoRevision, nodes };
     return nodes;
   }
 
@@ -2006,6 +2034,22 @@ export function createSessionStore() {
     applyAssistantStreamFrame,
     applyAssistantStreamBaseline,
     setQueue(items) { state.queue = Array.isArray(items) ? items : []; },
+    /// 提交即回显(只取文本部分:图片/文件在 prompt 里是内联字节或上传回执,形状与
+    /// durable 记录不同,交给真正的 user/message 去画)。没有文本就不回显。
+    addLocalEcho(sessionId, requestId, content) {
+      if (!sessionId || !requestId) return false;
+      const text = (Array.isArray(content) ? content : []).filter((part) => part?.type === "text" && part.text);
+      if (!text.length) return false;
+      let echoes = localEchoes.get(sessionId);
+      if (!echoes) { echoes = new Map(); localEchoes.set(sessionId, echoes); }
+      echoes.set(requestId, {
+        ...steeringNode({ seq: Number.POSITIVE_INFINITY, time: Date.now(), messageId: `echo-${requestId}`, content: text }),
+        pending: true
+      });
+      echoRevision += 1;
+      return true;
+    },
+    retireLocalEcho(sessionId, requestId) { retireEcho(sessionId, requestId); },
     setJobs(jobs) { state.jobs = Array.isArray(jobs) ? jobs : []; },
     setApproval(approval) { state.pendingApproval = approval ?? null; },
     setQuestion(question) { state.pendingQuestion = question ?? null; },

@@ -6,6 +6,14 @@ import { ensureServerRunning } from "./native-supervisor.js";
 const OPEN_TIMEOUT_MS = 8000;
 const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const STABLE_GENERATION_MS = 30000;
+// 载体 iframe 只需要一个 127.0.0.1:3080 同源文档让 content/dsh-relay.js 注入,
+// 绝不能指向 "/":那是整个 DSH Web SPA(约 1.6MB JS + 十几个 RPC + 自己的一条 mux、
+// 自己的 session/list、按自身记忆恢复并 activate 某个会话),每次打开侧栏都在一个
+// 0×0 的隐藏 iframe 里完整跑一遍。relay 的 onmessage 与这个 SPA 共用 iframe 主线程,
+// SPA 冷启动/渲染期间所有下行帧都排在它后面(实测首个 follow 快照晚到 150~300ms)。
+// GET /api/remote.mux 不带 Upgrade 时宿主回一个几字节的 text/plain 404,文档极轻、
+// 路由与 mux 同生共死;content script 照常在 document_start 注入。
+const RELAY_DOCUMENT_PATH = "/api/remote.mux";
 
 export const DshStreamState = Object.freeze({
   CONNECTING: "connecting", CONNECTED: "connected", DISCONNECTED: "disconnected"
@@ -14,7 +22,7 @@ export const DshStreamState = Object.freeze({
 function iframeCarrier(baseUrl, onOpen, onMessage, onClose) {
   const origin = new URL(baseUrl).origin;
   const iframe = document.createElement("iframe");
-  iframe.src = origin + "/";
+  iframe.src = origin + RELAY_DOCUMENT_PATH;
   iframe.hidden = true;
   iframe.setAttribute("aria-hidden", "true");
   iframe.style.cssText = "width:0;height:0;border:0;position:absolute;left:-9999px;";
@@ -60,6 +68,9 @@ function directCarrier(baseUrl, onOpen, onMessage, onClose) {
 
 export function exceedsUtf8ByteLimit(text, limit) {
   if (text.length > limit) return true;
+  // 一个 UTF-16 码元至多编码成 3 个 UTF-8 字节:长度的 3 倍都不超限就无需逐字扫描
+  // (follow 快照动辄数 MB,逐字扫描是每帧白付的一遍 O(n))。
+  if (text.length * 3 <= limit) return false;
   let bytes = text.length;
   for (let index = 0; index < text.length; index += 1) {
     const unit = text.charCodeAt(index);
@@ -215,3 +226,4 @@ export function createDownlink(options) {
 
 export const MUX_MAX_FRAME_BYTES = MAX_FRAME_BYTES;
 export const MUX_STABLE_GENERATION_MS = STABLE_GENERATION_MS;
+export const MUX_RELAY_DOCUMENT_PATH = RELAY_DOCUMENT_PATH;
