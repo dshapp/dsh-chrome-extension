@@ -95,6 +95,12 @@
    顶栏左边的扩展图标(距内容区边缘 8px)与右边的关闭钮(9px)。 */
 :root { --gutter-start: 8px; --gutter-end: 9px; }
 
+/* 顶栏高度(含 1px 底边框):右侧聊天顶栏 #header 与左侧会话列表的搜索行
+   #history-search-wrap 共用这一个值,两条底边框因此落在同一条水平线上。
+   两边都用固定高度 + 竖直居中,而不是靠内边距撑高 —— 内容高度不同(顶栏里有
+   两行的 Git 入口,搜索行只有一行输入框),靠内边距撑出来的高度永远对不齐。 */
+:root { --topbar-h: 42px; }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
   height: 100%;
@@ -115,7 +121,8 @@ a { color: var(--link); }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px calc(var(--gutter-end) - 7px) 8px calc(var(--gutter-start) - 7px);
+  block-size: var(--topbar-h);
+  padding: 0 calc(var(--gutter-end) - 7px) 0 calc(var(--gutter-start) - 7px);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   flex-shrink: 0;
@@ -510,7 +517,8 @@ body.sidebar-resizing * { cursor: col-resize !important; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 10px 8px 12px;
+  block-size: var(--topbar-h);
+  padding: 0 10px 0 12px;
   /* 不透明底色:滚动内容不能从背后透出来。 */
   background: var(--bg);
   border-bottom: 1px solid var(--border-soft);
