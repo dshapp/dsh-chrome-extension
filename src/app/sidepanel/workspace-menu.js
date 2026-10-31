@@ -1,7 +1,7 @@
 // Header 的工作目录(workspace)下拉:决定历史列表的过滤范围与新建会话的归属。
 // 会话的 cwd 在 session.create 时固定、之后不可改,所以这里只做两件事——
 // 过滤历史 + 决定下一个新会话建在哪,绝不改动已有会话。
-import { renderMenuItems } from "./sidepanel-overlays.js";
+import { renderMenuItems } from "./menu-items.js";
 import { t } from "../../shared/i18n.js";
 import { workspaceDisplayName } from "../../shared/workspace-path.js";
 

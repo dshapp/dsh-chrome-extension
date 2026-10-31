@@ -385,6 +385,88 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
 @media (prefers-reduced-motion: reduce) {
   #session-drawer, #session-drawer-scrim { transition: none; }
 }
+
+/* ── 左侧栏三档(纯 CSS 响应式;JS 只记用户意图,不量宽度)──
+   参考 codemax-chrome 的左侧栏:侧栏总宽度决定形态,全部由下面两条 @media 判定。
+     窄 < 640px:   现状 —— 没有图标栏,抽屉是带遮罩的浮层(#session-drawer.open)。
+     中 640–767px: 左侧常驻 44px 图标栏(缩小版);用户展开(body.sidebar-expanded)
+                   后变成 288px 的挤出栏,聊天区让开、不盖遮罩。
+     宽 ≥ 768px:   默认就是 288px 挤出栏;用户收起(body.sidebar-collapsed,持久化)
+                   后回到图标栏。
+   三个意图 class 由 sidepanel-overlays / sidebar-state 维护,档位则只在这里:
+   JS 偶尔需要知道「这次点击在哪一档」时读 --sidebar-tier,不挂任何 resize 监听。
+   抽屉可见 ⇔ animation-name 变成 sidebar-shown:可见性一变浏览器就派发一次
+   animationstart,抽屉据此在「拖宽后自己出现」时补画列表(见 sidepanel-overlays)。 */
+:root { --sidebar-tier: overlay; --sidebar-w: 288px; --rail-w: 44px; }
+@keyframes sidebar-shown { from { opacity: 1; } to { opacity: 1; } }
+@keyframes sidebar-hidden { from { opacity: 1; } to { opacity: 1; } }
+#session-drawer { animation: sidebar-hidden 1ms; }
+#session-drawer.open { animation-name: sidebar-shown; }
+#sidebar-rail { display: none; }
+@media (min-width: 640px) {
+  :root { --sidebar-tier: rail; }
+  body { padding-inline-start: var(--rail-w); transition: padding-inline-start .18s ease; }
+  /* 挤出档是常驻的一栏,不是浮层:没有遮罩、没有投影。 */
+  #session-drawer-scrim { display: none; }
+  #session-drawer { width: var(--sidebar-w); box-shadow: none; }
+  #sidebar-rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 41;
+    width: var(--rail-w);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 0 10px;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+  }
+  /* 左侧已有图标栏 / 展开栏的开关,顶栏入口前的 panel-left 图标就重复了;标题照常可点、可双击改名。 */
+  #hdr-title-wrap .hdr-entry-icon { display: none; }
+  /* 设置页是 fixed 全屏覆盖:让出左栏,导航仍可用。 */
+  body #view-settings { inset-inline-start: var(--rail-w); }
+  body:is(.session-drawer-open, .sidebar-expanded) { padding-inline-start: var(--sidebar-w); }
+  body:is(.session-drawer-open, .sidebar-expanded) #session-drawer {
+    transform: none; visibility: visible; animation-name: sidebar-shown;
+  }
+  body:is(.session-drawer-open, .sidebar-expanded) #sidebar-rail { display: none; }
+  body:is(.session-drawer-open, .sidebar-expanded) #view-settings { inset-inline-start: var(--sidebar-w); }
+}
+@media (min-width: 768px) {
+  :root { --sidebar-tier: expanded; }
+  body:not(.sidebar-collapsed) { padding-inline-start: var(--sidebar-w); }
+  body:not(.sidebar-collapsed) #session-drawer {
+    transform: none; visibility: visible; animation-name: sidebar-shown;
+  }
+  body:not(.sidebar-collapsed) #sidebar-rail { display: none; }
+  body:not(.sidebar-collapsed) #view-settings { inset-inline-start: var(--sidebar-w); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body { transition: none; }
+}
+/* 图标栏按钮:与顶栏同一套 .hdr-btn 悬停,只是方形居中。 */
+.rail-btn { justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 8px; }
+.rail-btn.active, .rail-btn[aria-expanded="true"] { background: var(--border-soft); color: var(--text); }
+.rail-spacer { flex: 1; }
+/* 「最近会话」弹层(sidebar-rail.js):外观沿用通用 [popover] 菜单,位置交给锚点定位,
+   挂在图标右侧;不支持锚点定位时退回图标栏右上。它是 #sidebar-rail 的子节点,
+   图标栏被 CSS 隐藏时弹层随之不渲染。 */
+#sidebar-rail-recents {
+  inset: 8px auto auto calc(var(--rail-w) + 8px);
+  inline-size: min(18rem, calc(100vw - var(--rail-w) - 16px));
+  max-block-size: min(28rem, calc(100dvh - 16px));
+}
+[data-rail="recents"] { anchor-name: --sidebar-rail-recents-trigger; }
+@supports (position-area: block-start) {
+  #sidebar-rail-recents {
+    position-anchor: --sidebar-rail-recents-trigger;
+    position-area: inline-end span-block-end;
+    position-try-fallbacks: flip-block;
+    inset: auto;
+    margin-inline-start: 8px;
+  }
+}
 /* 搜索行钉在抽屉顶部:列表滚动时它保持可见。 */
 #history-search-wrap {
   flex: none;

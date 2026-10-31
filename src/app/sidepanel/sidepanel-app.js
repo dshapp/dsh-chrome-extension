@@ -8,6 +8,9 @@ import {
 } from "../../features/interactions/index.js";
 import { createQueuePanel } from "../../features/prompt-queue/index.js";
 import { mountHistoryDrawer } from "./sidepanel-overlays.js";
+import { createSidebarState } from "./sidebar-state.js";
+import { mountSidebarRail } from "./sidebar-rail.js";
+import { itemTitle } from "./session-drawer-view.js";
 import { mountSettings } from "./settings/settings-root.js";
 import { mountMainSurfaces } from "./main-surfaces.js";
 import { mountAutomationsPage } from "../../features/automations/index.js";
@@ -52,6 +55,7 @@ export function createSidepanelApp(root, deps, options = {}) {
   const elements = collectElements(root);
   let sending = false;
   let historyDrawer = null;
+  let sidebarRail = null;
   let workspaceMenu = null;
   let settingsView = null;
   let mainSurfaces = null;
@@ -1480,6 +1484,16 @@ export function createSidepanelApp(root, deps, options = {}) {
       activeSessionId: state.sessionId
     }).map((item) => item.sessionId);
   }
+  /// 图标栏「最近会话」:同列表的过滤口径(不含归档 / 子代理 / 空白行),按更新时间新到旧。
+  function recentSessions(limit) {
+    return visibleSessions(deps.sessions.listStore.get(), {
+      archivedIds: deps.sessions?.archivedSessionIds?.() ?? deps.workspaces?.archivedSessionIds ?? [],
+      activeSessionId: null
+    })
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+      .slice(0, limit)
+      .map((item) => ({ id: item.sessionId, title: itemTitle(item) }));
+  }
   function stepSession(delta) {
     const list = sidebarOrderIds();
     if (!list.length) return false;
@@ -1800,6 +1814,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     void dock.refreshPresetMenu();
     historyDrawer?.relabel?.();
     historyDrawer?.refresh?.();
+    sidebarRail?.relabel();
     setupGuide?.relabel();
     apiKeyOnboarding?.relabel();
   }
@@ -1870,7 +1885,20 @@ export function createSidepanelApp(root, deps, options = {}) {
       pinnedStore: deps.pinnedStore ?? null,
       // 分区标题右侧的「添加目录」:与工作目录菜单里的那一项同一条路径。
       onAddWorkspace: () => workspaceMenu?.addDirectory?.(),
-      showToast
+      showToast,
+      // 三档布局(窄浮层 / 中图标栏 / 宽展开栏):形态由 CSS @media 决定,这里只记用户意图。
+      layout: createSidebarState({ doc: document })
+    });
+    // 中 / 宽档收起时左侧的图标栏(缩小版)。
+    sidebarRail = mountSidebarRail(document, {
+      onExpand: () => historyDrawer?.show(),
+      onSearch: () => historyDrawer?.show(),
+      onNew: () => { void newSession(); },
+      onSettings: () => settingsView?.show(),
+      listRecent: recentSessions,
+      currentId: () => state.sessionId ?? null,
+      onPick: (sessionId) => { void openSession(sessionId); },
+      shortcutLabels
     });
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
     settingsView = mountSettings(
@@ -1927,7 +1955,8 @@ export function createSidepanelApp(root, deps, options = {}) {
     // The archive view appends its footer during mount; Settings remains last.
     document.querySelector("#session-drawer").append(document.querySelector("#history-settings-btn"));
     const navigationIcons = { plugins: "puzzle", automations: "clock" };
-    for (const button of document.querySelectorAll("[data-main-surface]")) {
+    // 只给抽屉里的导航补图标:图标栏里同名的两颗按钮由 sidebar-rail.js 自己画。
+    for (const button of document.querySelectorAll("#history-navigation [data-main-surface]")) {
       button.insertAdjacentHTML("afterbegin", lucideIconSvg(navigationIcons[button.dataset.mainSurface], { size: 15 }));
     }
     document.querySelector("#history-new-btn").insertAdjacentHTML("afterbegin", lucideIconSvg("plus", { size: 15 }));

@@ -27,7 +27,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   // 分区标题右侧那颗「添加目录」:复用工作目录菜单里的同一条 pickAndCreate 路径。
   onAddWorkspace = null,
   // deps 是纯组装层,没有 toast —— 与设置页同样由 app 就地补进来。
-  showToast = null
+  showToast = null,
+  // 三档布局的意图状态(sidebar-state.js)。缺省时等价于改动前:只有窄档浮层。
+  layout = null
 } = {}) {
   // 挂起请求/草稿的权威来源 —— session.list 的摘要里没有这两样。
   const listStore = deps.sessions?.listStore ?? null;
@@ -56,16 +58,37 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   // 不会触发下面「点抽屉外就收起」。
   const confirmDialog = createConfirmDialog(() => drawer);
 
-  function isOpen() { return drawer.classList.contains("open"); }
+  // 窄档浮层是否开着(.open)。中 / 宽档的可见性由 CSS 按档位与意图 class 决定,见 isOpen。
+  function overlayOpen() { return drawer.classList.contains("open"); }
+  function isOpen() { return layout ? layout.isShown(overlayOpen()) : overlayOpen(); }
+  function pushed() { return layout?.pushed() ?? false; }
+  // 本次可见期间列表是否已按「刚打开」重置过(清搜索、高亮回首行、展开当前组)。
+  let primed = false;
 
-  /// 打开抽屉:清空上一次的搜索词、渲染列表,并把光标放进搜索框。
-  function open() {
-    drawer.classList.add("open");
-    scrim.hidden = false;
-    // 遮罩要先出现在 DOM 里,下一帧再上色,否则 opacity 过渡不会跑。
-    requestAnimationFrame(() => scrim.classList.add("open"));
-    document.body.classList.add("session-drawer-open");
+  /// 打开抽屉(用户手势):窄档是浮层 + 遮罩;中 / 宽档是挤出栏,记下用户的展开意图。
+  /// 已经开着时只把光标放进搜索框(⌘F「在会话中查找」走这里)。
+  function open({ focus = true } = {}) {
+    const wasOpen = isOpen();
+    if (pushed()) {
+      layout.expand();
+    } else if (!overlayOpen()) {
+      drawer.classList.add("open");
+      scrim.hidden = false;
+      // 遮罩要先出现在 DOM 里,下一帧再上色,否则 opacity 过渡不会跑。
+      requestAnimationFrame(() => scrim.classList.add("open"));
+      document.body.classList.add("session-drawer-open");
+    }
     entry.setAttribute("aria-expanded", "true");
+    if (!wasOpen) prime();
+    // 抽屉刚开始滑入,同一帧里 focus() 在部分浏览器上不生效。
+    if (focus) requestAnimationFrame(() => search.focus());
+  }
+
+  /// 列表进入可见:清空上一次的搜索词并渲染。用户打开时顺带后台刷新一次;
+  /// 拖宽后由 CSS 自己显出来时(animationstart)只画 warm 快照 —— listStore 一直被
+  /// 实时帧维护着,不必在启动早期就去打一次 session/list。
+  function prime({ fetch = true } = {}) {
+    primed = true;
     search.value = "";
     clearTimeout(searchDebounceTimer);
     remote = { query: "", pending: false, items: [], hasMore: false };
@@ -78,13 +101,13 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     if (allItems.length) paint({ resetSelection: true });
     else renderLoading(list);
     // 后台静默刷新:single-flight,会和启动/重连的在途拉取合并;回包后整体替换。
-    void refresh({ resetSelection: true });
-    // 抽屉刚开始滑入,同一帧里 focus() 在部分浏览器上不生效。
-    requestAnimationFrame(() => search.focus());
+    if (fetch) void refresh({ resetSelection: true });
   }
 
-  function hide({ restoreFocus = false } = {}) {
-    if (!isOpen()) return;
+  /// 收起浮层。打开会话 / 新建 / 进设置等导航顺手调它;中 / 宽档下抽屉是常驻的一栏,
+  /// 导航不收它 —— 只有 force(用户主动收起)才动。
+  function hide({ restoreFocus = false, force = false } = {}) {
+    if (!overlayOpen() || (pushed() && !force)) return;
     // 抽屉被别的路径收起(快捷键、打开别的页面)时,悬着的确认按取消结算。
     confirmDialog.cancel();
     drawer.classList.remove("open");
@@ -92,19 +115,45 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
     document.body.classList.remove("session-drawer-open");
     entry.setAttribute("aria-expanded", "false");
     // 遮罩淡出后才移出可交互层,否则它会在过渡期间吃掉点击。
-    setTimeout(() => { if (!isOpen()) scrim.hidden = true; }, 200);
+    setTimeout(() => { if (!overlayOpen()) scrim.hidden = true; }, 200);
     if (restoreFocus) entry.focus();
   }
+
+  /// 用户主动收起(关闭钮 / 顶栏入口 / ⌘K)。挤出档收起后左边剩图标栏,焦点落到它的「展开」上。
+  function collapse({ restoreFocus = false } = {}) {
+    const wasPushed = pushed();
+    confirmDialog.cancel();
+    hide({ force: true });
+    layout?.collapse();
+    entry.setAttribute("aria-expanded", String(isOpen()));
+    if (!restoreFocus) return;
+    const railExpand = wasPushed ? document.querySelector('#sidebar-rail [data-rail="expand"]') : null;
+    (railExpand ?? entry).focus();
+  }
+
+  // 可见性由 CSS 决定(拖宽后宽档自己展开),每次变化浏览器都派发一次 animationstart
+  //(见 foundation.css 的 sidebar-shown / sidebar-hidden):在这里补画列表、同步 aria。
+  drawer.addEventListener("animationstart", (event) => {
+    if (event.target !== drawer) return;
+    if (event.animationName === "sidebar-shown") {
+      entry.setAttribute("aria-expanded", "true");
+      if (!primed) prime({ fetch: false });
+    } else if (event.animationName === "sidebar-hidden") {
+      primed = false;
+      confirmDialog.cancel();
+      entry.setAttribute("aria-expanded", "false");
+    }
+  });
 
   // 单击开关抽屉、双击原地改名;两者的判定与编辑框在 header-title-edit.js。
   const titleEdit = mountHeaderTitleEdit({
     entry, title, sessionId: () => activeSessionId, showToast,
     rename: (sessionId, name) => deps.sessions.rename(sessionId, name),
-    toggle: () => (isOpen() ? hide() : open()),
+    toggle: () => (isOpen() ? collapse() : open()),
     beforeEdit: () => hide()
   });
   scrim.addEventListener("click", () => hide({ restoreFocus: true }));
-  closeButton?.addEventListener("click", () => hide({ restoreFocus: true }));
+  closeButton?.addEventListener("click", () => collapse({ restoreFocus: true }));
 
   // 搜索(对齐 web WorkspaceBrowser):本地标题/工作区命中即时出现,宿主内容命中
   // 250ms 防抖后接在后面。remote 只属于它的 query —— 换词立刻作废旧命中并进入
@@ -137,7 +186,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   // 抽屉之外的点击关掉它。抽屉内的 popover(视图选项)虽然画在 top layer 里,
   // 但仍是抽屉的 DOM 子节点,composedPath 能命中,所以不需要额外的例外分支。
   document.addEventListener("click", (event) => {
-    if (!isOpen()) return;
+    if (!overlayOpen() || pushed()) return;
     const path = event.composedPath();
     if (path.includes(drawer) || path.includes(entry) || path.includes(scrim)) return;
     hide();
@@ -317,6 +366,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
 
   /// 供搜索框与全局快捷键复用。返回 true 表示按键已被消费。
   function handleKeyDown(event) {
+    // 挤出栏常驻可见,输入框里的方向键 / 回车不能被它劫持:只有焦点在抽屉里,
+    // 或窄档浮层开着(焦点可能落在 body 上)时才接管。
+    if (!drawer.contains(event.target) && !(overlayOpen() && !pushed())) return false;
     if (!isOpen()) return false;
     // 确认框开着:方向键/回车/Esc 归它(Esc 由 <dialog> 原生取消),列表不抢。
     if (confirmDialog.isOpen()) return false;
@@ -332,7 +384,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
         openRow(item);
         return true;
       }
-      case "Escape": event.preventDefault(); hide({ restoreFocus: true }); return true;
+      case "Escape":
+        if (pushed()) return false;   // 常驻的一栏不随 Esc 消失
+        event.preventDefault(); hide({ restoreFocus: true }); return true;
       default: return false;
     }
   }
@@ -371,8 +425,10 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   });
 
   return {
-    show() { if (!isOpen()) open(); },
+    show: (options) => open(options),
     hide,
+    collapse,
+    isOpen,
     refresh,
     /// 语言切换后重画菜单与列表。
     relabel() {
@@ -380,8 +436,11 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
       if (isOpen()) paint();
     },
     setActive(sessionId, sessionTitle) {
-      if (sessionId !== activeSessionId) titleEdit.cancel();
+      const changed = sessionId !== activeSessionId;
+      if (changed) titleEdit.cancel();
       activeSessionId = sessionId;
+      // 挤出栏常驻可见:换了当前会话要重画高亮行(浮层下打开会话时它已收起)。
+      if (changed && isOpen()) paint();
       title.textContent = sessionTitle || t("new_session");
       // 未读提醒的清除挂在这里,而不是在 openSession 里再调一次:
       // 打开会话与新建会话两条路径都已经走过 setActive(见 sidepanel-app),
@@ -407,6 +466,3 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   };
 }
 
-// 通用 popover 菜单渲染器住在 menu-items.js。这里再导出,让既有调用方
-//(composer-dock / composer-menus / workspace-menu)的 import 路径保持不变。
-export { renderMenuItems } from "./menu-items.js";

@@ -1,7 +1,7 @@
 // composer 底栏控件:plan chip、权限模式(含 full-access 二次确认)、模型 + 推理档。
 // 对齐 macos/.../Components/Composer/ComposerDock.swift 的同名座位。
 import { t } from "../../shared/i18n.js";
-import { renderMenuItems } from "./sidepanel-overlays.js";
+import { renderMenuItems } from "./menu-items.js";
 import { RPC } from "../../platform/dsh/rpc-methods.js";
 import { renderModelMenu, modelMenuEntries } from "./model-menu.js";
 import { orderModelProviders } from "../../features/models/model-ranking.js";

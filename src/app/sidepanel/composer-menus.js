@@ -1,5 +1,5 @@
 // composer 底栏的 popover 菜单:模型选择、权限预设、"/" 候选(命令 + 技能)。
-import { renderMenuItems } from "./sidepanel-overlays.js";
+import { renderMenuItems } from "./menu-items.js";
 import { t } from "../../shared/i18n.js";
 
 /// 内置权限预设的本地化名(宿主给的 name 就是 id,不可读)。对齐 Mac 的 displayName。

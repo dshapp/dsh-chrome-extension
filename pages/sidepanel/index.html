@@ -312,6 +312,21 @@
        住在 body 层而不是 header 里:它要盖住整个侧栏的高度,而 header 只有 42px,
        做它的子节点就只能在那条窄带里滑动。遮罩单独一层,点它即关。 -->
   <div id="session-drawer-scrim" hidden></div>
+  <!-- 左侧图标栏(缩小版):侧栏够宽(≥ 640px)且展开栏没开时才显示,形态完全由
+       foundation.css 的 @media 决定;按钮的图标与文案由 sidebar-rail.js 注入。
+       插件 / 自动化复用 data-main-surface,点击与高亮归 main-surfaces。 -->
+  <nav id="sidebar-rail" aria-label="侧边栏">
+    <button class="hdr-btn rail-btn" type="button" data-rail="expand"></button>
+    <button class="hdr-btn rail-btn" type="button" data-rail="new"></button>
+    <button class="hdr-btn rail-btn" type="button" data-rail="search"></button>
+    <button class="hdr-btn rail-btn" type="button" data-rail="recents" aria-haspopup="menu" aria-expanded="false"></button>
+    <button class="hdr-btn rail-btn" type="button" data-main-surface="plugins" data-rail-icon="puzzle"></button>
+    <button class="hdr-btn rail-btn" type="button" data-main-surface="automations" data-rail-icon="clock"></button>
+    <span class="rail-spacer" aria-hidden="true"></span>
+    <button class="hdr-btn rail-btn" type="button" data-rail="settings"></button>
+    <!-- 「最近会话」悬停 / 点击弹出,点一项打开。住在图标栏里:图标栏被藏起时它也不渲染。 -->
+    <div id="sidebar-rail-recents" popover="auto" role="menu"></div>
+  </nav>
   <aside id="session-drawer" role="dialog" aria-label="会话" aria-modal="false">
     <div id="history-search-wrap">
       <!-- lucide: search -->
