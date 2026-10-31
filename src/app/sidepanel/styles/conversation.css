@@ -965,10 +965,12 @@ dialog.card-detail[open] { display: flex; flex-direction: column; }
 
 /* ── 会话 turn 轨道:浮在消息区右缘的轮次刻度(对齐 web TurnNavigator) ──
    外框竖向居中于消息区(top 由 JS 按 #messages 写入),刻度在内部 scroller 里
-   固定 12px 间距排开;放不下时 scroller 内部滚动,两端出渐隐 + "还有 N 轮"翻页钮。 */
+   固定 12px 间距排开;放不下时 scroller 内部滚动,两端出渐隐 + "还有 N 轮"翻页钮。
+   消息列右侧只留 9px gutter(--gutter-end),所以刻度贴着右缘画、长度收短:
+   常态刻度(12px × 0.6)整根落在 gutter 里,不压消息;只有当前轮放满时才略探进内容区。 */
 #turn-rail {
   position: fixed;
-  right: 4px;
+  right: 1px;
   top: 50%;
   transform: translateY(-50%);
   width: 26px;
@@ -1001,7 +1003,7 @@ dialog.card-detail[open] { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 0 3px 0 0;
+  padding: 0 1px 0 0;
   background: none;
   border: none;
   border-radius: 4px;
@@ -1011,7 +1013,7 @@ dialog.card-detail[open] { display: flex; flex-direction: column; }
 .turn-tick::before {
   content: "";
   display: block;
-  width: 18px;
+  width: 12px;
   height: 2px;
   border-radius: 999px;
   background: var(--border-strong, #9a9aa5);
