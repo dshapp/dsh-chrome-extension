@@ -366,7 +366,9 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
 #session-drawer {
   position: fixed;
   inset: 0 auto 0 0;
-  width: min(88%, 340px);
+  /* 窄档浮层:默认 min(88%, 340px);用户拖过(--sidebar-w-pref,见 sidebar-resize.js)
+     就用拖出来的宽度,但不低于 200px、右边至少留 48px 遮罩可点关。 */
+  width: min(calc(100vw - 48px), max(200px, var(--sidebar-w-pref, min(88vw, 340px))));
   display: flex;
   flex-direction: column;
   /* 关着时整体推到视口左侧之外。用 transform 而不是 display:none:
@@ -381,6 +383,34 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
   z-index: 41;
 }
 #session-drawer.open { transform: translateX(0); visibility: visible; }
+/* 右缘的调宽把手(sidebar-resize.js):一条 8px 热区骑在边框上,悬停 / 拖动 / 键盘聚焦时
+   边框位置亮起一条线。住在抽屉里,抽屉隐藏(visibility)时随之不可点。 */
+#session-drawer-resizer {
+  position: absolute;
+  inset: 0 -4px 0 auto;
+  width: 8px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+#session-drawer-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 3px;
+  width: 2px;
+  background: transparent;
+  transition: background .12s ease .08s;
+}
+#session-drawer-resizer:hover::after,
+#session-drawer-resizer:focus-visible::after,
+body.sidebar-resizing #session-drawer-resizer::after { background: var(--text-faint); }
+/* 拖动期间:宽度紧跟指针,不能有过渡;全页保持 col-resize 光标、不选中文字。 */
+body.sidebar-resizing,
+body.sidebar-resizing #session-drawer,
+body.sidebar-resizing #view-settings { transition: none !important; }
+body.sidebar-resizing { user-select: none; }
+body.sidebar-resizing * { cursor: col-resize !important; }
 /* 动画敏感的用户直接切换,不做位移。 */
 @media (prefers-reduced-motion: reduce) {
   #session-drawer, #session-drawer-scrim { transition: none; }
@@ -397,7 +427,14 @@ body.shortcut-hints-visible .shortcut-hint { display: inline-flex; }
    JS 偶尔需要知道「这次点击在哪一档」时读 --sidebar-tier,不挂任何 resize 监听。
    抽屉可见 ⇔ animation-name 变成 sidebar-shown:可见性一变浏览器就派发一次
    animationstart,抽屉据此在「拖宽后自己出现」时补画列表(见 sidepanel-overlays)。 */
-:root { --sidebar-tier: overlay; --sidebar-w: 288px; --rail-w: 44px; }
+/* 挤出栏宽度:默认 288px;用户拖过就用 --sidebar-w-pref(sidebar-resize.js 写在 :root 上),
+   夹在 200px 与「给聊天区留 360px、最多 560px」之间 —— 上限永远不低于默认 288px,
+   免得刚过 640px 时默认宽被挤小。上下限只写在这里,JS 松手后按实际渲染宽度存。 */
+:root {
+  --sidebar-tier: overlay;
+  --sidebar-w: clamp(200px, var(--sidebar-w-pref, 288px), max(288px, min(560px, 100vw - 360px)));
+  --rail-w: 44px;
+}
 @keyframes sidebar-shown { from { opacity: 1; } to { opacity: 1; } }
 @keyframes sidebar-hidden { from { opacity: 1; } to { opacity: 1; } }
 #session-drawer { animation: sidebar-hidden 1ms; }

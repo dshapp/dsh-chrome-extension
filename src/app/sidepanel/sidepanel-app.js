@@ -10,6 +10,7 @@ import { createQueuePanel } from "../../features/prompt-queue/index.js";
 import { mountHistoryDrawer } from "./sidepanel-overlays.js";
 import { createSidebarState } from "./sidebar-state.js";
 import { mountSidebarRail } from "./sidebar-rail.js";
+import { mountSidebarResize } from "./sidebar-resize.js";
 import { itemTitle } from "./session-drawer-view.js";
 import { mountSettings } from "./settings/settings-root.js";
 import { mountMainSurfaces } from "./main-surfaces.js";
@@ -1889,6 +1890,8 @@ export function createSidepanelApp(root, deps, options = {}) {
       // 三档布局(窄浮层 / 中图标栏 / 宽展开栏):形态由 CSS @media 决定,这里只记用户意图。
       layout: createSidebarState({ doc: document })
     });
+    // 抽屉右缘拖拽调宽(宽度偏好存 localStorage,上下限由 foundation.css 按档位夹)。
+    mountSidebarResize({ doc: document });
     // 中 / 宽档收起时左侧的图标栏(缩小版)。
     sidebarRail = mountSidebarRail(document, {
       onExpand: () => historyDrawer?.show(),

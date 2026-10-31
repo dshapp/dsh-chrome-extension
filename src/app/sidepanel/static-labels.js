@@ -27,6 +27,8 @@ export function applyStaticLabels(root) {
   setAttr(root, "#session-drawer", "aria-label", t("history.label"));
   setAttr(root, "#session-drawer-close", "aria-label", t("history.close"));
   setAttr(root, "#session-drawer-close", "title", t("history.close"));
+  setAttr(root, "#session-drawer-resizer", "aria-label", t("sidebar.resize"));
+  setAttr(root, "#session-drawer-resizer", "title", t("sidebar.resizeHint"));
   setPlaceholder(root, "#history-search", t("history.searchPlaceholder"));
 
   // 工作目录菜单 / 弹层
