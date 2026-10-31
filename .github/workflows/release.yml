@@ -54,24 +54,64 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "asset=dsh-chrome-extension-${TAG}.zip" >> "$GITHUB_OUTPUT"
 
-      - name: Build ZIP package
+      # 上传 Chrome Web Store 用的包:manifest.json 在 zip 根目录、含 _locales,
+      # 脚本内校验包内容与仓库逐字节一致、无开发文件混入
+      - name: Build Chrome Web Store ZIP
+        id: store_zip
+        run: bash scripts/package-store-zip.sh
+
+      - name: Upload Chrome Web Store ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-web-store-v${{ steps.store_zip.outputs.version }}
+          path: ${{ steps.store_zip.outputs.zip }}
+          if-no-files-found: error
+          retention-days: 90
+
+      # 手动加载用的包:与商店包内容相同,外面多包一层 dsh-chrome-extension/ 目录,
+      # 解压即得可「加载已解压的扩展程序」的文件夹
+      - name: Build unpacked-install ZIP
         shell: bash
+        env:
+          STORE_ZIP: ${{ steps.store_zip.outputs.zip }}
+          ASSET: ${{ steps.meta.outputs.asset }}
         run: |
           set -euo pipefail
           STAGE="$RUNNER_TEMP/dsh-chrome-extension"
+          rm -rf "$STAGE"
           mkdir -p "$STAGE"
-          cp -R \
-            manifest.json background.js \
-            content icons pages src sw \
-            "$STAGE/"
+          unzip -q "$STORE_ZIP" -d "$STAGE"
           cd "$RUNNER_TEMP"
-          zip -r "$GITHUB_WORKSPACE/${{ steps.meta.outputs.asset }}" dsh-chrome-extension
+          zip -r -X -q "$GITHUB_WORKSPACE/$ASSET" dsh-chrome-extension
+
+      - name: Write job summary
+        shell: bash
+        env:
+          STORE_ZIP: ${{ steps.store_zip.outputs.zip }}
+          STORE_NAME: ${{ steps.store_zip.outputs.name }}
+          STORE_SHA256: ${{ steps.store_zip.outputs.sha256 }}
+          VERSION: ${{ steps.store_zip.outputs.version }}
+        run: |
+          {
+            echo "## Chrome Web Store package"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| File | \`$STORE_NAME\` |"
+            echo "| manifest version | \`$VERSION\` |"
+            echo "| Size | $(du -h "$STORE_ZIP" | cut -f1) |"
+            echo "| SHA-256 | \`$STORE_SHA256\` |"
+            echo
+            echo "Upload it at https://chrome.google.com/webstore/devconsole. The store rejects a version it has already accepted, so bump \`version\` in manifest.json and package.json before submitting a new build."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
           ASSET: ${{ steps.meta.outputs.asset }}
+          STORE_ZIP: ${{ steps.store_zip.outputs.zip }}
+          STORE_NAME: ${{ steps.store_zip.outputs.name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -85,8 +125,12 @@ jobs:
             echo "## Installation"
             echo
             echo "Download **${ASSET}**, unzip it, then load the extracted folder from Chrome extensions."
+            echo
+            echo "## Chrome Web Store"
+            echo
+            echo "Upload **${STORE_NAME}** as-is to the [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole) (manifest.json sits at the zip root)."
           } > release-notes.md
-          gh release create "$TAG" "$ASSET" \
+          gh release create "$TAG" "$ASSET" "$STORE_ZIP" \
             --target "$GITHUB_SHA" \
             --title "DSH Chrome Extension $TAG" \
             --notes-file release-notes.md \

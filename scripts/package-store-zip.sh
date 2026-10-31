@@ -6,6 +6,8 @@
 # node_modules / tests / npm 元数据 / 点文件等开发文件。
 #
 # 用法:npm run package:zip   (即 bash scripts/package-store-zip.sh)
+# CI:.github/workflows/release.yml(push main)与 pull-request.yml 都调用本脚本,
+#     产物在 Actions 的 artifact「chrome-web-store-v<version>」和 GitHub Release 附件里。
 #
 # 发布清单(脚本之外的人工步骤):
 #   1. 先改 manifest.json 的 "version"(CWS 拒绝重复版本号),本脚本自动取它命名 zip
@@ -75,3 +77,13 @@ fi
 echo "created : $root/$out ($(du -h "$out" | cut -f1))"
 echo "entries : $(wc -l <<<"$entries" | tr -d ' ') files"
 echo "verified: manifest.json 在 zip 根目录 / 包内容与工作区逐字节一致 / 无开发文件混入"
+
+# 在 GitHub Actions 里把产物信息交给后续 step(本地运行时无此变量,跳过)
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  {
+    echo "version=$version"
+    echo "zip=$out"
+    echo "name=$(basename "$out")"
+    echo "sha256=$(shasum -a 256 "$out" | cut -d' ' -f1)"
+  } >> "$GITHUB_OUTPUT"
+fi

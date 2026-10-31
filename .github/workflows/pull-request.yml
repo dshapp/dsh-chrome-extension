@@ -47,24 +47,15 @@ jobs:
           MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
           test "$PACKAGE_VERSION" = "$MANIFEST_VERSION"
 
-      - name: Build ZIP package
-        shell: bash
-        run: |
-          set -euo pipefail
-          STAGE="$RUNNER_TEMP/dsh-chrome-extension"
-          mkdir -p "$STAGE"
-          cp -R \
-            manifest.json background.js \
-            content icons pages src sw \
-            "$STAGE/"
-          cd "$RUNNER_TEMP"
-          zip -r "$GITHUB_WORKSPACE/dsh-chrome-extension-pr.zip" dsh-chrome-extension
-          test -s "$GITHUB_WORKSPACE/dsh-chrome-extension-pr.zip"
+      # 与发版同一个脚本:manifest.json 在 zip 根目录、内容与仓库逐字节一致、无开发文件
+      - name: Build Chrome Web Store ZIP
+        id: store_zip
+        run: bash scripts/package-store-zip.sh
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: dsh-chrome-extension-pr-${{ github.event.pull_request.number }}
-          path: dsh-chrome-extension-pr.zip
+          path: ${{ steps.store_zip.outputs.zip }}
           if-no-files-found: error
           retention-days: 7
