@@ -1,4 +1,4 @@
-// composer 底栏控件:plan chip、权限模式(含 full-access 二次确认)、模型 + 推理档。
+// composer 底栏控件:计划模式开关、权限模式(含 full-access 二次确认)、模型 + 推理档。
 // 对齐 macos/.../Components/Composer/ComposerDock.swift 的同名座位。
 import { t } from "../../shared/i18n.js";
 import { renderMenuItems } from "./menu-items.js";
@@ -51,49 +51,93 @@ export function presetMenuLabel(preset) {
 }
 
 export function createComposerDock({ elements, deps, state, showToast, format }) {
-  // ---- plan chip ----
-  // 读 projections.plan 折算出的目标态。开启时显示药丸,点击执行 /plan off,
-  // 并在投影确认退出前保持可见但禁用(乐观切换会让 chip 闪烁)。
-  let planLeaving = false;
+  // ---- 计划模式开关(权限模式右侧)----
+  // 读 projections.plan 折算出的目标态(pending 时已取反,见 session-store)。
+  // 关闭时是一行弱灰字,点击执行 /plan;开启时是高亮药丸,点击执行 /plan off。
+  // 点击后不做乐观切换(会让开关闪烁):保持原样但禁用,等投影确认到目标态再放开。
+  /// 用户点了、尚未被投影确认的目标态;null = 没有在途切换。
+  let planTarget = null;
+  /// 最近一次投影给出的状态(true / false / null = 会话没有计划模式服务)。
+  let planCurrent = null;
+  let planReadOnly = false;
+  let planTargetTimer = null;
   let modelLoadGeneration = 0;
   let modelSelectionGeneration = 0;
   let presetLoadGeneration = 0;
 
-  function renderPlanChip(planMode) {
+  function clearPlanTarget() {
+    planTarget = null;
+    if (planTargetTimer) clearTimeout(planTargetTimer);
+    planTargetTimer = null;
+  }
+
+  /// planMode:投影折算值。options.readOnly:只读子代理会话,开关可见但不可点。
+  function renderPlanChip(planMode, { readOnly = false } = {}) {
     const chip = elements.planChip;
     if (!chip) return;
-    const active = planMode === true;
-    chip.hidden = !active;
-    if (!active) {
-      planLeaving = false;
+    planReadOnly = readOnly;
+    // 没有 plan 投影(宿主未装计划模式 / 会话尚未就绪):不给一个点了没用的开关。
+    if (planMode !== true && planMode !== false) {
+      planCurrent = null;
+      clearPlanTarget();
+      chip.hidden = true;
       return;
     }
+    planCurrent = planMode;
+    if (planTarget !== null && planMode === planTarget) clearPlanTarget();
+    const active = planMode === true;
+    chip.hidden = false;
+    chip.classList.toggle("on", active);
+    chip.setAttribute("aria-pressed", String(active));
     // 占位符由 sidepanel-app 的 applyComposerAvailability 统一裁决,这里不写,
     // 否则两处会互相覆盖(子代理只读提示会被计划模式文案盖掉)。
-    chip.disabled = planLeaving;
+    chip.disabled = planTarget !== null || readOnly;
     const label = chip.querySelector(".plan-chip-label");
     if (label) label.textContent = t("composer.planChip");
-    chip.title = t("composer.planChipOff");
-    chip.setAttribute("aria-label", t("composer.planChipOff"));
+    const hint = active ? t("composer.planChipOff") : t("composer.planChipOn");
+    chip.title = hint;
+    chip.setAttribute("aria-label", hint);
   }
 
-  async function exitPlanMode() {
-    if (!state.sessionId || planLeaving) return;
-    planLeaving = true;
-    renderPlanChip(true);
+  /// 切到目标态。必须走斜杠命令通道:当普通 prompt 发出去只是一条聊天消息,
+  /// 宿主不会切换计划模式,开关不动而用户以为点了没反应(已在真实后端验证)。
+  async function setPlanMode(on) {
+    const sessionId = state.sessionId;
+    if (!sessionId || planTarget !== null || planCurrent === null || planCurrent === on) return;
+    planTarget = on;
+    renderPlanChip(planCurrent, { readOnly: planReadOnly });
+    // 兜底:命令被宿主接受却迟迟没有投影回来时,别让开关永远灰着。
+    planTargetTimer = setTimeout(() => {
+      planTargetTimer = null;
+      if (planTarget === null) return;
+      planTarget = null;
+      renderPlanChip(planCurrent, { readOnly: planReadOnly });
+    }, 8000);
+    const failText = on ? t("composer.planEnterFailed") : t("composer.planExitFailed");
     try {
-      // 必须走斜杠命令通道。当普通 prompt 发出去只是一条聊天消息,宿主不会切换计划模式,
-      // 药丸会一直亮着而用户以为点了没反应(已在真实后端验证)。
-      await deps.commands.execute(state.sessionId, "/plan off");
+      const execution = await deps.commands.execute(sessionId, on ? "/plan" : "/plan off");
+      if (execution?.result?.kind === "error") throw new Error(execution.result.text || t("command.failed"));
     } catch (error) {
-      planLeaving = false;
-      showToast(t("composer.planExitFailed"));
+      if (state.sessionId === sessionId) {
+        clearPlanTarget();
+        renderPlanChip(planCurrent, { readOnly: planReadOnly });
+      }
+      showToast(failText);
       showToast(format(error));
     }
-    // 不在这里清 planLeaving:等 plan 投影确认退出后由 renderPlanChip(false) 收尾。
+    // 成功时不在这里清 planTarget:等 plan 投影确认到目标态后由 renderPlanChip 收尾。
   }
 
-  elements.planChip?.addEventListener("click", exitPlanMode);
+  function togglePlanMode() {
+    if (planCurrent === null) return;
+    return setPlanMode(!planCurrent);
+  }
+
+  function exitPlanMode() {
+    return setPlanMode(false);
+  }
+
+  elements.planChip?.addEventListener("click", () => { void togglePlanMode(); });
 
   // ---- 权限模式 ----
   function renderPermMenu(permissions) {
@@ -311,7 +355,7 @@ export function createComposerDock({ elements, deps, state, showToast, format })
   return {
     renderPlanChip, renderPermMenu, refreshModelMenu, refreshPresetMenu,
     confirmFullAccess, currentPresetName,
-    // 快捷键"退出 Plan 模式"复用同一个动作(药丸点击也走它)。
-    exitPlanMode
+    // 快捷键"退出 Plan 模式"复用同一个动作(开关点击走 togglePlanMode)。
+    exitPlanMode, togglePlanMode, setPlanMode
   };
 }

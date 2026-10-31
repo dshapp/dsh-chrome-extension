@@ -899,20 +899,27 @@
 .btn.ghost { border-color: transparent; color: var(--text-dim); }
 .btn.ghost:hover:not(:disabled) { color: var(--text); }
 
-/* plan 药丸 */
-/* 开启计划模式时的 tinted Capsule:warn 文字 + 15% warn 底色(与 .h-badge-warn
-   同一观感族),文字加粗,右侧 ✕ 表示点击退出。 */
+/* 计划模式开关(权限模式右侧)。
+   关闭:只是一行很弱的灰字,不画底色,也不带 ✕ —— 存在感低到不打扰,但点得到。 */
 .plan-chip {
   display: inline-flex; align-items: center; gap: 0.25rem;
+  color: var(--text-faint);
+}
+.plan-chip:hover { color: var(--text-dim); background: transparent; }
+.plan-chip-x { display: none; line-height: 1; }
+/* 开启:tinted Capsule —— warn 文字 + 15% warn 底色(与 .h-badge-warn 同一观感族),
+   文字加粗,右侧 ✕ 表示再点关闭。 */
+.plan-chip.on {
   padding-inline: 0.625rem 0.5rem;
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 15%, transparent);
-  font-size: 0.8125rem; font-weight: 600;
+  font-weight: 600;
 }
+.plan-chip.on .plan-chip-x { display: inline-flex; }
 /* hover 加深底色,文字保持 warn,不被 .bar-btn:hover 的 --text 覆盖 */
-.plan-chip:hover { color: var(--warn); background: color-mix(in srgb, var(--warn) 24%, transparent); }
-.plan-chip:disabled { opacity: 0.6; }
-.plan-chip-x { display: inline-flex; line-height: 1; }
+.plan-chip.on:hover { color: var(--warn); background: color-mix(in srgb, var(--warn) 24%, transparent); }
+/* 切换在途(等宿主投影确认)时禁用,避免连点来回翻 */
+.plan-chip:disabled { opacity: 0.6; cursor: default; }
 
 /* "/" 与 "@" 触发候选菜单 */
 #trigger-menu {

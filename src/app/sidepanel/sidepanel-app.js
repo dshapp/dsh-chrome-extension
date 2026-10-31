@@ -398,7 +398,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     subagentCatalog.refresh();
     // 图片限制以宿主投影为准,composer 据此在本地就把超限文件挡下。
     deps.attachments.setLimits?.(snapshot.imageLimits);
-    dock.renderPlanChip(snapshot.planMode);
+    dock.renderPlanChip(snapshot.planMode, { readOnly: Boolean(snapshot.subagent && snapshot.subagent.readOnly) });
     // 占位符与可用性统一在这里裁决(子代理只读 > 计划模式 > 默认)。
     applyComposerAvailability(snapshot);
     // 无条件重画:0.1.6 的 permissions 投影只剩 currentValue,选项要等目录
@@ -871,8 +871,19 @@ export function createSidepanelApp(root, deps, options = {}) {
     // 在下面原样搬到新会话,发送流程读的是它自己早先取好的副本。
     const text = elements.input.value;
     const chips = occurrences;
+    // 计划模式开关是在旧空会话上拨的:搬家后的新会话要接着开着,
+    // 否则用户以为在计划模式里发出的第一条消息会被直接执行。
+    const carryPlan = deps.sessions.getRuntimeSnapshot?.()?.planMode === true;
     setInputText("");
     const created = await newSession();
+    if (created && carryPlan) {
+      try {
+        await deps.commands.execute(created, "/plan");
+      } catch (error) {
+        showToast(t("composer.planEnterFailed"));
+        return false;
+      }
+    }
     setInputText(text, chips);
     autoResizeInput();
     updateSendState();

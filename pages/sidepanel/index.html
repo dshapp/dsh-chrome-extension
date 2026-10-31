@@ -255,11 +255,6 @@
             </svg>
           </button>
 
-          <!-- plan mode 药丸:仅在计划模式开启时显示,点击执行 /plan off -->
-          <button class="bar-btn plan-chip" id="plan-chip" type="button" hidden>
-            <span class="plan-chip-label">Plan</span><span class="plan-chip-x" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
-          </button>
-
           <!-- 技能/命令候选菜单:仅由输入框的 "/" 触发,底栏不再放入口按钮 -->
           <div id="skills-menu" popover="auto" aria-label="Skills"></div>
 
@@ -270,6 +265,12 @@
             </svg>
           </button>
           <div id="perm-menu" popover="auto" aria-label="权限模式"></div>
+
+          <!-- 计划模式开关:紧挨权限模式右侧。关闭时是一行很弱的灰字,点击执行 /plan 开启;
+               开启后变成高亮药丸(带 ✕),再点执行 /plan off 关闭。会话没有计划模式服务时隐藏。 -->
+          <button class="bar-btn plan-chip" id="plan-chip" type="button" aria-pressed="false" hidden>
+            <span class="plan-chip-label">Plan</span><span class="plan-chip-x" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+          </button>
 
           <div id="model-picker">
             <button class="bar-btn" id="model-btn" type="button" popovertarget="model-menu" aria-label="Select model">
