@@ -41,7 +41,7 @@ const SURFACE_LABEL_KEYS = Object.freeze({
  * @param {object} options
  * @param {() => void} options.onExpand
  * @param {() => void} options.onNew
- * @param {() => void} options.onSearch
+ * @param {(button: Element) => void} options.onSearch 收到被点的按钮(悬浮搜索框的 invoker)。
  * @param {() => void} options.onSettings
  * @param {(limit: number) => Array<{ id: string, title: string, leadingHtml?: string, trailingHtml?: string }>} options.listRecent
  *        最近更新的在前。leadingHtml / trailingHtml 是行首状态灯与行尾徽章/时间(可信 HTML)。
@@ -164,7 +164,8 @@ export function mountSidebarRail(doc, {
     switch (action) {
       case "expand": onExpand(); break;
       case "new": onNew(); break;
-      case "search": onSearch(); break;
+      // 带上按钮本身:悬浮搜索框把它当 invoker,再点一次是关。
+      case "search": onSearch(button); break;
       case "settings": onSettings(); break;
       case "recents":
         // 悬停已经打开时点一下是关;关着时点开,焦点落到第一项,键盘可直接上下选。

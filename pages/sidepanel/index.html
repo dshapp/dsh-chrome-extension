@@ -327,6 +327,20 @@
     <!-- 「最近会话」悬停 / 点击弹出,点一项打开。住在图标栏里:图标栏被藏起时它也不渲染。 -->
     <div id="sidebar-rail-recents" popover="auto" role="menu"></div>
   </nav>
+  <!-- 图标栏「搜索」:不展开会话列表,直接在页面上方悬浮一个搜索框(自动聚焦),
+       输入关键字后在它下方列出候选会话。行为见 session-quick-search.js。 -->
+  <div id="session-quick-search" popover="auto" role="dialog">
+    <div class="quick-search-field">
+      <!-- lucide: search -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m21 21-4.34-4.34"/>
+        <circle cx="11" cy="11" r="8"/>
+      </svg>
+      <input id="session-quick-search-input" type="text" role="combobox" aria-autocomplete="list"
+        aria-controls="session-quick-search-results" aria-expanded="false" autocomplete="off" spellcheck="false" />
+    </div>
+    <div id="session-quick-search-results" role="listbox" hidden></div>
+  </div>
   <aside id="session-drawer" role="dialog" aria-label="会话" aria-modal="false">
     <div id="history-search-wrap">
       <!-- lucide: search -->

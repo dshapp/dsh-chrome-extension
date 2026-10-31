@@ -510,6 +510,51 @@ body.sidebar-resizing * { cursor: col-resize !important; }
 .menu-item.rail-recent-item > .h-state,
 .menu-item.rail-recent-item > .h-when-row { flex: none; overflow: visible; }
 .menu-item.rail-recent-item.selected::after { content: none; }
+/* 图标栏「搜索」的悬浮搜索框(session-quick-search.js):浮在页面上方、图标栏右侧
+   区域的水平正中;搜索框固定在顶,候选列表在它下面单独滚动。外框沿用通用 [popover]。 */
+#session-quick-search {
+  inset: 8px auto auto calc(var(--rail-w) + (100vw - var(--rail-w)) / 2);
+  translate: -50% 0;
+  inline-size: min(34rem, calc(100vw - var(--rail-w) - 24px));
+  max-block-size: min(30rem, calc(100dvh - 16px));
+  padding: 0;
+  overflow: hidden;
+  flex-direction: column;
+}
+#session-quick-search:popover-open { display: flex; }
+.quick-search-field {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  block-size: 42px;
+  padding: 0 12px;
+  color: var(--text-faint);
+}
+.quick-search-field svg { flex: none; inline-size: 15px; block-size: 15px; }
+#session-quick-search-input {
+  flex: 1;
+  min-inline-size: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+#session-quick-search-results {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 4px 6px 6px;
+  border-block-start: 1px solid var(--border);
+}
+#session-quick-search-results[hidden] { display: none; }
+.menu-item.quick-search-item.active { background: var(--border-soft); }
+.menu-item.quick-search-item.current .menu-item-label { font-weight: 600; }
+.quick-search-note { padding: 8px 10px; font-size: 12px; color: var(--text-faint); }
 @supports (position-area: block-start) {
   #sidebar-rail-recents {
     position-anchor: --sidebar-rail-recents-trigger;

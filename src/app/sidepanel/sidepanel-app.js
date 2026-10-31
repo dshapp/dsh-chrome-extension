@@ -10,6 +10,7 @@ import { createQueuePanel } from "../../features/prompt-queue/index.js";
 import { mountHistoryDrawer } from "./sidepanel-overlays.js";
 import { createSidebarState } from "./sidebar-state.js";
 import { mountSidebarRail } from "./sidebar-rail.js";
+import { mountSessionQuickSearch } from "./session-quick-search.js";
 import { mountSidebarResize } from "./sidebar-resize.js";
 import { itemTitle, sessionRowDecorHtml } from "./session-drawer-view.js";
 import { mountSettings } from "./settings/settings-root.js";
@@ -57,6 +58,7 @@ export function createSidepanelApp(root, deps, options = {}) {
   let sending = false;
   let historyDrawer = null;
   let sidebarRail = null;
+  let quickSearch = null;
   let workspaceMenu = null;
   let settingsView = null;
   let mainSurfaces = null;
@@ -1830,6 +1832,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     historyDrawer?.relabel?.();
     historyDrawer?.refresh?.();
     sidebarRail?.relabel();
+    quickSearch?.relabel();
     setupGuide?.relabel();
     apiKeyOnboarding?.relabel();
   }
@@ -1906,10 +1909,26 @@ export function createSidepanelApp(root, deps, options = {}) {
     });
     // 抽屉右缘拖拽调宽(宽度偏好存 localStorage,上下限由 foundation.css 按档位夹)。
     mountSidebarResize({ doc: document });
+    // 图标栏的「搜索」:不展开会话列表,在页面上方悬浮一个搜索框,输入后在下方列出候选会话。
+    // 搜索口径(本地 + 宿主内容)与每行的状态灯 / 徽章都与会话抽屉同一套。
+    quickSearch = mountSessionQuickSearch(document, {
+      sessions: () => deps.sessions?.listStore?.get?.() ?? [],
+      workspaces: () => deps.workspaces?.workspaces ?? [],
+      archivedIds: () => deps.sessions?.archivedSessionIds?.() ?? deps.workspaces?.archivedSessionIds ?? [],
+      search: deps.sessions?.search ? (query) => deps.sessions.search(query) : null,
+      decorate: (item) => sessionRowDecorHtml(item, {
+        listStore: deps.sessions?.listStore ?? null,
+        pinnedStore: deps.pinnedStore ?? null,
+        activeSessionId: state.sessionId ?? null
+      }),
+      currentId: () => state.sessionId ?? null,
+      homeOptions: () => ({ home: deps.sessions?.hostHome ?? null, homeLabel: t("workspace.home") }),
+      onPick: (sessionId) => { void openSession(sessionId); }
+    });
     // 中 / 宽档收起时左侧的图标栏(缩小版)。
     sidebarRail = mountSidebarRail(document, {
       onExpand: () => historyDrawer?.show(),
-      onSearch: () => historyDrawer?.show(),
+      onSearch: (button) => quickSearch?.toggle(button),
       onNew: () => { void newSession(); },
       onSettings: () => settingsView?.show(),
       listRecent: recentSessions,
@@ -1918,8 +1937,8 @@ export function createSidepanelApp(root, deps, options = {}) {
       shortcutLabels
     });
     // 弹层开着时跟着会话状态(运行 / 徽章 / 置顶)就地重画;关着时 refreshRecents 自己跳过。
-    deps.sessions?.listStore?.subscribe?.(() => sidebarRail?.refreshRecents());
-    deps.pinnedStore?.subscribe?.(() => sidebarRail?.refreshRecents());
+    deps.sessions?.listStore?.subscribe?.(() => { sidebarRail?.refreshRecents(); quickSearch?.refresh(); });
+    deps.pinnedStore?.subscribe?.(() => { sidebarRail?.refreshRecents(); quickSearch?.refresh(); });
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
     settingsView = mountSettings(
       // 语言切换要重画整个界面(静态标签 + 各 pane),所以把 app 的 relabel 交给设置页。
