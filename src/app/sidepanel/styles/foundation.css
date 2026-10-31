@@ -440,7 +440,7 @@ body.sidebar-resizing * { cursor: col-resize !important; }
 :root {
   --sidebar-tier: overlay;
   --sidebar-w: clamp(200px, var(--sidebar-w-pref, 288px), max(288px, min(560px, 100vw - 360px)));
-  --rail-w: 44px;
+  --rail-w: 32px;
 }
 @keyframes sidebar-shown { from { opacity: 1; } to { opacity: 1; } }
 @keyframes sidebar-hidden { from { opacity: 1; } to { opacity: 1; } }
@@ -460,11 +460,11 @@ body.sidebar-resizing * { cursor: col-resize !important; }
     width: var(--rail-w);
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 8px 0 10px;
+    align-items: stretch;
+    padding: 6px 0 8px;
     background: var(--bg);
-    border-right: 1px solid var(--border);
+    /* 分隔线画在栏外(投影),不占栏宽:按钮因此能和整条栏严格同宽。 */
+    box-shadow: 1px 0 0 var(--border);
   }
   /* 左侧已有图标栏 / 展开栏的开关,顶栏入口前的 panel-left 图标就重复了;标题照常可点、可双击改名。 */
   #hdr-title-wrap .hdr-entry-icon { display: none; }
@@ -489,8 +489,10 @@ body.sidebar-resizing * { cursor: col-resize !important; }
 @media (prefers-reduced-motion: reduce) {
   body { transition: none; }
 }
-/* 图标栏按钮:与顶栏同一套 .hdr-btn 悬停,只是方形居中。 */
-.rail-btn { justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 8px; }
+/* 图标栏按钮:与顶栏同一套 .hdr-btn 悬停配色,只是方形居中、不带圆角。
+   按钮与整条图标栏严格同宽(--rail-w),上下首尾相接,点击区域就是整条栏,
+   悬停 / 激活的底色也正好铺满这块直角方块。 */
+.rail-btn { justify-content: center; width: 100%; aspect-ratio: 1; padding: 0; border-radius: 0; }
 .rail-btn.active, .rail-btn[aria-expanded="true"] { background: var(--border-soft); color: var(--text); }
 .rail-spacer { flex: 1; }
 /* 「最近会话」弹层(sidebar-rail.js):外观沿用通用 [popover] 菜单,位置交给锚点定位,
