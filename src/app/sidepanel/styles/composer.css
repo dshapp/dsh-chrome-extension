@@ -2314,11 +2314,16 @@ a.srv-url:hover { text-decoration: underline; }
 .history-item.dragging { opacity: 0.4; }
 .history-item.drop-before { box-shadow: inset 0 2px 0 0 var(--link); }
 .history-item.drop-after { box-shadow: inset 0 -2px 0 0 var(--link); }
-.history-item[draggable="true"] { cursor: grab; }
-.history-item[draggable="true"]:active { cursor: grabbing; }
+/* 可拖的行悬停时不换光标:仍是 foundation.css 里的 pointer —— 行首先是"点一下
+   打开会话"的按钮,拖动是次要手势。拖拽光标只挂在按下态(:active)上:这是原生
+   HTML5 DnD,拖起之后页面收不到鼠标移动,光标冻结在拖起那一刻的样子 —— 所以
+   必须在按下时就换成 grabbing,拖动全程才会是拖拽样式;等 dragstart 再改类名
+   已经来不及。分组标题同理。 */
+.history-item[draggable="true"]:active,
+.history-group[draggable="true"]:active { cursor: grabbing; }
 /* 分组拖拽(history-group-drag.js):落点按整组算,所以"插到组后面"的线画在
-   组内最后一个元素(可能是会话行或「展开其余」)的下沿。标题仍是 pointer 光标 ——
-   它首先是一个点击折叠的按钮,拖动是次要手势。 */
+   组内最后一个元素(可能是会话行或「展开其余」)的下沿。标题悬停仍是 pointer 光标 ——
+   它首先是一个点击折叠的按钮,拖动是次要手势;按下/拖动时的 grabbing 见上。 */
 .history-group.group-dragging { opacity: 0.4; }
 .history-group.group-drop-before { box-shadow: inset 0 2px 0 0 var(--link); }
 .history-item.group-drop-after,
