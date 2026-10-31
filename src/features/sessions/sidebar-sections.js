@@ -53,7 +53,25 @@ export function collapsedRows(rows, limit, isLive = null) {
 /// 单列表模式一次最多画几行。Mac 的单列表不截断 —— 那是一个会自己虚拟化的
 /// 原生 List;这里每次重画都是整块 innerHTML,上千行会让流式输出期间的每一帧
 /// 都重建上千个节点。超出的部分报一行"继续输入以筛选",与搜索结果同一条规矩。
+///
+/// 上限只截闲置行:当前会话、空白、运行中、有子代理在跑的行即便排在上限之后
+/// 也照画(见 cappedRows)—— Mac / Web 不截断,它们在那边看得见,这里就不能凭
+/// 一条渲染上限把正在跑的会话藏起来。
 export const FLAT_ROW_LIMIT = 500;
+
+/**
+ * 单列表的渲染上限:前 limit 行照画,之后只留下活着的行(及当前会话)。
+ * 保持原顺序。
+ *
+ * @param {Array} rows 已排好序的行。
+ * @param {number} limit 上限。
+ * @param {(item: object) => boolean} keep 上限之外仍要画的行。
+ * @returns {Array} 要画的行。
+ */
+export function cappedRows(rows, limit, keep) {
+  if (rows.length <= limit) return rows;
+  return rows.filter((item, index) => index < limit || keep(item));
+}
 
 /// 不属于任何 workspace 的那一桶。id 同时用作折叠状态的 key,所以取一个
 /// 不可能与 workspaceId 撞车的名字。
@@ -195,7 +213,9 @@ export function buildSidebarSections({
       rows: sort(rest, orderBy, null),
       collapsed: false,
       expanded: false,
-      rowLimit: FLAT_ROW_LIMIT
+      rowLimit: FLAT_ROW_LIMIT,
+      keepBeyondLimit: (item) => item.blank || item.running || item.sessionId === activeSessionId
+        || Boolean(isLive?.(item))
     }));
   } else {
     const claimed = new Set();
@@ -243,14 +263,19 @@ export function buildSidebarSections({
 
 /// 组装一段分区:把"折叠/截断"这件事在这里算完,视图只管画。
 /// isLive 只给「展开其余」式的分组折叠用;单列表的 FLAT_ROW_LIMIT 是渲染上限
-/// 兜底,置顶区不截断,都不传。
-function section({ kind, id, workspaceId = null, title, hint = null, rows, collapsed, expanded, rowLimit, isLive = undefined }) {
+/// 兜底,用 keepBeyondLimit 放行上限之外的活行;置顶区不截断,都不传。
+function section({
+  kind, id, workspaceId = null, title, hint = null, rows, collapsed, expanded, rowLimit,
+  isLive = undefined, keepBeyondLimit = null
+}) {
   const all = rows ?? [];
   const limited = collapsed
     ? []
     : expanded || all.length <= rowLimit
       ? all
-      : isLive !== undefined ? collapsedRows(all, rowLimit, isLive) : all.slice(0, rowLimit);
+      : isLive !== undefined ? collapsedRows(all, rowLimit, isLive)
+        : keepBeyondLimit ? cappedRows(all, rowLimit, keepBeyondLimit)
+          : all.slice(0, rowLimit);
   return {
     kind,
     id,

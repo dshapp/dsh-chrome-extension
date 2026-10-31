@@ -213,6 +213,35 @@ test("单列表一次最多画 FLAT_ROW_LIMIT 行,其余记进 hiddenCount", asy
   assert.equal(renderedIds.length, FLAT_ROW_LIMIT);
 });
 
+test("单列表的渲染上限不藏活行:上限之后的运行中 / 空白当前 / 当前会话 / 子代理在跑的行照画", async () => {
+  const { FLAT_ROW_LIMIT } = await import("../src/features/sessions/sidebar-sections.js");
+  const ids = Array.from({ length: FLAT_ROW_LIMIT + 10 }, (_, index) => `s${index}`);
+  const tail = (offset) => ids[FLAT_ROW_LIMIT + offset];
+  const sessions = ids.map((id) => session(id));
+  sessions[FLAT_ROW_LIMIT + 1].running = true;
+  sessions[FLAT_ROW_LIMIT + 3].blank = true;
+  const { sections, renderedIds } = buildSidebarSections({
+    sessions,
+    groupBy: SidebarGroupBy.flat,
+    orderBy: "manual",
+    sortRows: (rows) => rows,
+    activeSessionId: tail(3),
+    isRunningSubagentRoot: (id) => id === tail(7)
+  });
+  const kept = [tail(1), tail(3), tail(7)];
+  assert.equal(sections[0].rows.length, FLAT_ROW_LIMIT + kept.length);
+  assert.deepEqual(renderedIds.slice(FLAT_ROW_LIMIT), kept, "保持原顺序,只放行活行");
+  assert.equal(sections[0].hiddenCount, 10 - kept.length);
+
+  const viaActive = buildSidebarSections({
+    sessions: ids.map((id) => session(id)),
+    groupBy: SidebarGroupBy.flat,
+    sortRows: (rows) => rows,
+    activeSessionId: tail(9)
+  });
+  assert.equal(viaActive.renderedIds.at(-1), tail(9), "当前打开的会话即便闲置也画出来");
+});
+
 test("单列表模式下置顶区照样在最上面(分组轴不影响它)", () => {
   const { sections } = buildSidebarSections({
     sessions: [session("a"), session("b")],

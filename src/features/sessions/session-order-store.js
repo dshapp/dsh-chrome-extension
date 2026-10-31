@@ -11,8 +11,12 @@
 //    那些槽位**,子集之外的相对顺序纹丝不动。这样在"某个工作目录"里拖一下,
 //    不会把"全部"视图里其他会话的顺序搅乱。
 //
-// 3. **没记录过的排在后面。** 从没被拖过的会话按时间倒序追加在末尾 ——
-//    新会话不该因为"没有手动位置"就沉到一个随机的地方。
+// 3. **没记录过的排在最前。** 从没被摆过位置的会话(典型:拖过之后才新建的会话)
+//    按时间倒序排在账本行**之前**。与 Mac / Web(reconcileManualOrder)不同,
+//    它们把这批追加在末尾 —— 但扩展的单列表有 FLAT_ROW_LIMIT 渲染上限,而
+//    reorder() 第一次拖动就会把当时整个可见子集(常常上千条)写进账本:之后
+//    每个新会话都排在上千条之后、落在上限之外,刚新建、正在跑的会话在列表里
+//    直接看不见。新会话出现在顶部,用户拖过它之后它才有自己的手动位置。
 //
 // 账本存 chrome.storage.local(与 settings.js 同一个前缀)。它是**浏览器本地**的,
 // 和 macOS 那边一样不上报宿主:手动顺序是"我这台机器上我习惯的样子",
@@ -69,6 +73,7 @@ export function createSessionOrderStore() {
      * 按手动顺序解析一个可见子集。
      *
      * 账本为空(从没拖过)时直接按时间倒序 —— 这也是首次使用的样子。
+     * 否则:不在账本里的行按时间倒序在前,账本里的行按账本顺序在后。
      *
      * @param {Array} visible 可见行。
      * @returns {Array} 排好序的新数组。
@@ -85,7 +90,8 @@ export function createSessionOrderStore() {
       }
       known.sort((a, b) => a.at - b.at);
       fresh.sort(byUpdatedDesc);
-      return known.map((entry) => entry.summary).concat(fresh);
+      // 没摆过位置的在前(见文件头第 3 条):新会话不能沉到上千条账本行之后。
+      return fresh.concat(known.map((entry) => entry.summary));
     },
 
     /**
