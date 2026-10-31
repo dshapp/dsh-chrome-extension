@@ -65,16 +65,17 @@
 .queue-btn:disabled { opacity: 0.4; cursor: default; }
 
 /* ── Composer(对齐原 extension 的 codex 覆盖样式) ── */
-#composer-wrap { padding: 0.5rem 1.25rem 1rem; flex-shrink: 0; position: relative; }
+/* 左右与消息列同一组 gutter:输入框描边和消息气泡、顶栏图标对齐在同一条竖线上。 */
+#composer-wrap { padding: 0.5rem var(--gutter-end) 1rem var(--gutter-start); flex-shrink: 0; position: relative; }
 
 /* 运行状态条(Mac RunningStatusRow):"正在运行命令 · 1分5秒"。
    悬浮在输入框区域的正上方,不是记录流里的一行 —— 记录区底部常驻留出它的高度
    (#messages 的 padding-bottom),出现/消失都不会推动记录。
-   左右边距与记录列(#messages 的 1.5rem)对齐,文字与卡片标题从同一 x 起排。
+   左右边距与记录列(#messages 的 gutter)对齐,文字与卡片标题从同一 x 起排。
    底色与页面同色,上沿渐隐:滚动中的记录从它下面经过时不会与文字叠在一起。 */
 #running-status {
   position: absolute;
-  inset-inline: 1.5rem;
+  inset-inline: var(--gutter-start) var(--gutter-end);
   inset-block-end: 100%;
   z-index: 2;
   display: flex;
@@ -94,7 +95,7 @@
    压在运行状态条那一行之上,不挡状态文字;点了落底并恢复跟随。 */
 #scroll-to-bottom {
   position: absolute;
-  inset-inline-end: 1.5rem;
+  inset-inline-end: var(--gutter-end);
   inset-block-end: calc(100% + 1.375rem + 6px);
   z-index: 3;
   inline-size: 32px;

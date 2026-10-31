@@ -85,6 +85,12 @@
   color-scheme: dark;
 }
 
+/* 等宽字体栈。必须点名具体字体,不能只写泛型 monospace:侧栏 <html lang="zh">,
+   Windows 上 Chrome 把 zh 的泛型 monospace 映射到「新宋体」(NSimSun),
+   数字、+ 与 U+2212 减号会落到不同字体/度量上,改动文件卡里的 +N / −N 上下错位。
+   Consolas / Cascadia Mono 是 Windows 自带的等宽字体,排在泛型之前。 */
+:root { --font-mono: ui-monospace, "SFMono-Regular", Menlo, "Cascadia Mono", Consolas, "Liberation Mono", monospace; }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
   height: 100%;
