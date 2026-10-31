@@ -88,11 +88,9 @@ function statusHtml(status, show, pinned) {
   return '<span class="h-state h-state-idle" aria-hidden="true"></span>';
 }
 
-/// 一行会话。ctx 提供实时状态(挂起/草稿/未读)与当前选中态。
-/// grouped=true 时行会缩进一格,让"谁属于哪个组"一眼可见(Mac 靠 List 原生缩进)。
-function rowHtml(item, { index, groupId, grouped = false, ctx }) {
-  const { listStore, activeSessionId, selectedIndex, shortcutLabels, draggable, pinnedStore } = ctx;
-  const hint = shortcutLabels && index < 9 ? shortcutLabels.historyItem(index + 1) : "";
+/// 一行会话的实时状态:行首灯(状态/图钉/占位)与行尾内容(徽章/时间)。
+/// 抽屉行与图标栏「最近会话」弹层共用这一份判定,两处对同一个会话说同一句话。
+function rowState(item, { listStore, pinnedStore, activeSessionId }) {
   const trailing = resolveSessionRowTrailing({
     awaitingUser: listStore?.awaitingUser(item.sessionId) ?? null,
     isSelected: item.sessionId === activeSessionId,
@@ -118,6 +116,32 @@ function rowHtml(item, { index, groupId, grouped = false, ctx }) {
   });
   const archived = Boolean(item.archived);
   const pinned = !archived && Boolean(pinnedStore?.isPinned?.(item.sessionId));
+  return { trailing, status, showStatus, archived, pinned };
+}
+
+/**
+ * 行首状态槽与行尾内容的 HTML,不带任何行操作 —— 给只读的会话列表(图标栏
+ * 「最近会话」弹层)用,与抽屉行同一套判定与同一套 class。
+ *
+ * @param {object} item 会话摘要(listStore 的行)。
+ * @param {object} ctx { listStore, pinnedStore, activeSessionId }。
+ * @returns {{ leading: string, trailing: string }}
+ */
+export function sessionRowDecorHtml(item, ctx = {}) {
+  const { trailing, status, showStatus, pinned } = rowState(item, ctx);
+  const tail = trailingHtml(trailing);
+  return {
+    leading: statusHtml(status, showStatus, pinned),
+    trailing: tail ? `<span class="h-when-row">${tail}</span>` : ""
+  };
+}
+
+/// 一行会话。ctx 提供实时状态(挂起/草稿/未读)与当前选中态。
+/// grouped=true 时行会缩进一格,让"谁属于哪个组"一眼可见(Mac 靠 List 原生缩进)。
+function rowHtml(item, { index, groupId, grouped = false, ctx }) {
+  const { activeSessionId, selectedIndex, shortcutLabels, draggable } = ctx;
+  const hint = shortcutLabels && index < 9 ? shortcutLabels.historyItem(index + 1) : "";
+  const { trailing, status, showStatus, archived, pinned } = rowState(item, ctx);
   const title = itemTitle(item);
   // 空白(blank)行是"还什么都没发生"的临时行:分叉/重命名/归档都会作用在
   // 不存在的内容上,所以和 Mac 一样对它关掉整排行操作。归档行打不开,唯一能做的

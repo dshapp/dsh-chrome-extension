@@ -11,6 +11,8 @@ import { lucideIconSvg } from "../../features/chat/file-icons.js";
 ///        (movedId, beforeId|null)。不给则完全维持原有行为(不加任何属性、不绑事件)。
 /// @param selectedIds 一个菜单里有**多根轴**时用它(会话列表的视图选项:分组 + 排序
 ///        各选一项)。与 selectedId 并存,两者命中任意一个就打勾。
+/// 条目可带 leadingHtml / trailingHtml:标题前后的**可信** HTML 片段(调用方自己转义),
+/// 图标栏「最近会话」用它画出与会话抽屉同一套的状态灯与行尾徽章/时间。
 export function renderMenuItems(container, entries, {
   selectedId, selectedIds, onSelect, groupBy, emptyText, onReorder
 }) {
@@ -34,7 +36,9 @@ export function renderMenuItems(container, entries, {
     + items.map((item) => (
       `<button type="button" class="menu-item${isSelected(item.id) ? " selected" : ""}" data-item-id="${escapeHtml(item.id)}"${onReorder && item.draggable ? ' draggable="true"' : ""}>`
       + (item.icon ? `<span class="menu-item-icon">${lucideIconSvg(item.icon, { size: 14 })}</span>` : "")
-      + `<span>${escapeHtml(item.label)}</span>${item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}`
+      + (item.leadingHtml ?? "")
+      + `<span class="menu-item-label">${escapeHtml(item.label)}</span>${item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}`
+      + (item.trailingHtml ?? "")
       + `</button>`
     )).join("")
   )).join("");

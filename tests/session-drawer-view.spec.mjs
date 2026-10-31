@@ -20,7 +20,7 @@ const dom = new JSDOM('<!doctype html><html><body><ul id="history-list-inner"></
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 
-const { renderSections, renderResultRows, SECTION_HEAD_ID } =
+const { renderSections, renderResultRows, sessionRowDecorHtml, SECTION_HEAD_ID } =
   await import("../src/app/sidepanel/session-drawer-view.js");
 const { buildSidebarSections, SidebarGroupBy } =
   await import("../src/features/sessions/sidebar-sections.js");
@@ -146,4 +146,36 @@ test("搜索结果是一串平铺的行,超出上限时补一行提示", () => {
   assert.equal(rendered.length, 2);
   assert.equal(list().querySelectorAll(".history-group").length, 0, "搜索态没有分组");
   assert.ok(list().querySelector(".history-more"), "被截断的条数要说出来");
+});
+
+test("sessionRowDecorHtml 与抽屉行同一套行首灯 / 行尾内容,但不带行操作", () => {
+  const listStore = {
+    awaitingUser: (id) => (id === "wait" ? "approval" : null),
+    hasDraft: (id) => id === "draft",
+    isErrored: (id) => id === "err",
+    isCompleted: () => false,
+    isRunningSubagentRoot: () => false
+  };
+  const decorCtx = { listStore, pinnedStore: { isPinned: (id) => id === "pin" }, activeSessionId: null };
+  const items = [
+    session("run", { running: true }), session("err"), session("wait"),
+    session("draft"), session("pin"), session("idle")
+  ];
+  renderResultRows(list(), { items, ctx: { ...ctx({ pinned: ["pin"] }), listStore } });
+  for (const item of items) {
+    const row = list().querySelector(`[data-session-id="${item.sessionId}"]`);
+    const decor = sessionRowDecorHtml(item, decorCtx);
+    const wrap = document.createElement("div");
+    wrap.innerHTML = decor.leading + decor.trailing;
+    assert.equal(wrap.querySelector(".h-state").outerHTML, row.querySelector(".h-state").outerHTML, `${item.sessionId} 行首一致`);
+    assert.equal(wrap.querySelector(".h-when-row > :not(kbd)").outerHTML,
+      row.querySelector(".h-when-row > :not(kbd)").outerHTML, `${item.sessionId} 行尾一致`);
+    assert.equal(wrap.querySelector(".h-actions, button"), null, "不带行操作");
+  }
+  assert.match(sessionRowDecorHtml(items[0], decorCtx).leading, /h-state-ongoing/);
+  assert.match(sessionRowDecorHtml(items[1], decorCtx).leading, /h-state-error/);
+  assert.match(sessionRowDecorHtml(items[2], decorCtx).trailing, /h-badge-warn/);
+  assert.match(sessionRowDecorHtml(items[3], decorCtx).trailing, /h-badge-warn/);
+  assert.match(sessionRowDecorHtml(items[4], decorCtx).leading, /h-state-pin/);
+  assert.match(sessionRowDecorHtml(items[5], decorCtx).trailing, /h-when/);
 });

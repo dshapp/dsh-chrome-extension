@@ -6,7 +6,9 @@
 //
 // 「最近会话」对齐 codemax-chrome 的 rail-recents(Codex 的 Recents):悬停或点击图标,在它
 // 右边弹出最近会话标题,点一项打开。位置交给 CSS 锚点定位;弹层是图标栏的子节点,
-// 图标栏被 CSS 藏起时它也跟着不渲染。
+// 图标栏被 CSS 藏起时它也跟着不渲染。每一行与会话抽屉的行同一套呈现:行首状态灯
+//(在跑 / 失败 / 跑完未读 / 置顶),行尾徽章或时间 —— 只是没有行操作按钮。
+// 弹层开着时,会话状态变化经 refreshRecents() 就地重画。
 import { t } from "../../shared/i18n.js";
 import { lucideIconSvg } from "../../features/chat/file-icons.js";
 import { renderMenuItems } from "./menu-items.js";
@@ -41,8 +43,9 @@ const SURFACE_LABEL_KEYS = Object.freeze({
  * @param {() => void} options.onNew
  * @param {() => void} options.onSearch
  * @param {() => void} options.onSettings
- * @param {(limit: number) => Array<{ id: string, title: string }>} options.listRecent 最近更新的在前。
- * @param {() => string|null} options.currentId 当前会话,在弹层里打勾。
+ * @param {(limit: number) => Array<{ id: string, title: string, leadingHtml?: string, trailingHtml?: string }>} options.listRecent
+ *        最近更新的在前。leadingHtml / trailingHtml 是行首状态灯与行尾徽章/时间(可信 HTML)。
+ * @param {() => string|null} options.currentId 当前会话,在弹层里高亮。
  * @param {(id: string) => void} options.onPick
  * @param {{ newSession?: string, history?: string }|null} [options.shortcutLabels]
  */
@@ -51,7 +54,7 @@ export function mountSidebarRail(doc, {
 }) {
   const rail = doc.querySelector("#sidebar-rail");
   const menu = doc.querySelector("#sidebar-rail-recents");
-  if (!rail) return { relabel() {}, closeRecents() {}, isRecentsOpen: () => false };
+  if (!rail) return { relabel() {}, closeRecents() {}, refreshRecents() {}, isRecentsOpen: () => false };
   const recentsButton = rail.querySelector('[data-rail="recents"]');
   let open = false;
   let openTimer = null;
@@ -67,7 +70,12 @@ export function mountSidebarRail(doc, {
   function paintRecents() {
     const items = listRecent(RECENTS_LIMIT) ?? [];
     const heading = t("sidebar.recents");
-    renderMenuItems(menu, items.map((item) => ({ id: item.id, label: item.title })), {
+    renderMenuItems(menu, items.map((item) => ({
+      id: item.id,
+      label: item.title,
+      leadingHtml: item.leadingHtml ?? "",
+      trailingHtml: item.trailingHtml ?? ""
+    })), {
       selectedId: currentId?.() ?? null,
       groupBy: () => heading,
       emptyText: t("sidebar.recentsEmpty"),
@@ -76,7 +84,23 @@ export function mountSidebarRail(doc, {
         onPick(id);
       }
     });
-    for (const row of menu.querySelectorAll(".menu-item")) row.setAttribute("role", "menuitem");
+    for (const row of menu.querySelectorAll(".menu-item")) {
+      row.setAttribute("role", "menuitem");
+      // 状态灯 / 徽章 / 时间的样式与会话抽屉行共用(foundation.css 里同一组选择器)。
+      row.classList.add("rail-recent-item");
+    }
+  }
+
+  /// 弹层开着时按最新会话状态重画(运行状态灯、徽章、时间)。重画会换掉整排按钮,
+  /// 所以把键盘焦点按 id 还回原来那一行,方向键选到一半不会被后台帧打断。
+  function refreshRecents() {
+    if (!open || !menu) return;
+    const focusedId = menu.contains(doc.activeElement) ? doc.activeElement?.dataset?.itemId : null;
+    paintRecents();
+    if (focusedId) {
+      const row = [...menu.querySelectorAll(".menu-item")].find((el) => el.dataset.itemId === focusedId);
+      row?.focus();
+    }
   }
 
   function openRecents() {
@@ -172,5 +196,5 @@ export function mountSidebarRail(doc, {
   }
   relabel();
 
-  return { relabel, closeRecents, isRecentsOpen: () => open };
+  return { relabel, closeRecents, refreshRecents, isRecentsOpen: () => open };
 }

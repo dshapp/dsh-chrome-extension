@@ -92,3 +92,25 @@ test("最近会话:上下方向键在条目间循环", () => {
   press("ArrowUp");
   assert.equal(document.activeElement.dataset.itemId, "b");
 });
+
+test("最近会话:行首状态灯与行尾内容画在标题两侧,弹层开着时 refreshRecents 就地重画", () => {
+  const recent = [
+    { id: "a", title: "A", leadingHtml: '<span class="h-state h-state-ongoing"></span>', trailingHtml: '<span class="h-when-row"><span class="h-when">1m</span></span>' },
+    { id: "b", title: "B" }
+  ];
+  const { rail, menu, click } = setup({ recent });
+  rail.refreshRecents();
+  assert.equal(menu.querySelector(".menu-item"), null, "关着时不重画");
+  click('[data-rail="recents"]');
+  const row = menu.querySelector('[data-item-id="a"]');
+  assert.ok(row.classList.contains("rail-recent-item"));
+  assert.deepEqual([...row.children].map((el) => el.className), ["h-state h-state-ongoing", "menu-item-label", "h-when-row"]);
+  assert.equal(menu.querySelector('[data-item-id="b"] .h-state'), null);
+  assert.equal(menu.querySelector('[data-item-id="b"] .h-actions'), null);
+
+  menu.querySelector('[data-item-id="b"]').focus();
+  recent[0].leadingHtml = '<span class="h-state h-state-error"></span>';
+  rail.refreshRecents();
+  assert.ok(menu.querySelector('[data-item-id="a"] .h-state-error'), "状态变化重画进来");
+  assert.equal(document.activeElement.dataset.itemId, "b", "焦点还回原来那一行");
+});

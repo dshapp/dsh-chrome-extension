@@ -502,6 +502,14 @@ body.sidebar-resizing * { cursor: col-resize !important; }
   max-block-size: min(28rem, calc(100dvh - 16px));
 }
 [data-rail="recents"] { anchor-name: --sidebar-rail-recents-trigger; }
+/* 最近会话行:状态灯 / 徽章 / 时间的外观直接复用会话抽屉行的规则(那些选择器同时认
+   .rail-recent-item),这里只把它们排进 .menu-item 的单行布局 —— 标题吃掉剩余宽度,
+   灯与行尾不伸缩;当前会话靠底色标出,行尾已被时间占着,不再画勾。
+   选择器带上 .menu-item:composer.css 在本文件之后加载,同权重的 .menu-item 规则会盖过来。 */
+.menu-item.rail-recent-item { flex-wrap: nowrap; gap: 8px; }
+.menu-item.rail-recent-item > .h-state,
+.menu-item.rail-recent-item > .h-when-row { flex: none; overflow: visible; }
+.menu-item.rail-recent-item.selected::after { content: none; }
 @supports (position-area: block-start) {
   #sidebar-rail-recents {
     position-anchor: --sidebar-rail-recents-trigger;
@@ -639,15 +647,15 @@ body.sidebar-resizing * { cursor: col-resize !important; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.history-item .h-when { font-size: 11px; color: var(--text-faint); }
+:is(.history-item, .rail-recent-item) .h-when { font-size: 11px; color: var(--text-faint); }
 /* 行尾警示徽章:「待审批 / 待回答 / 草稿」共用一套着色 —— 与 macOS 的
    tinted Capsule 同一个观感族,统一走 --warn,而不是各自写死一个色值。 */
-.history-item .h-badge {
+:is(.history-item, .rail-recent-item) .h-badge {
   font-size: 11px; line-height: 1.5;
   padding: 1px 6px; border-radius: 999px;
   white-space: nowrap; flex-shrink: 0;
 }
-.history-item .h-badge-warn {
+:is(.history-item, .rail-recent-item) .h-badge-warn {
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 15%, transparent);
 }
@@ -660,7 +668,7 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 /* 行首状态槽位。宽度与 macOS 的 statusSlotWidth 同为 12px,并且**无论是否点灯
    都占满**——否则标题会随会话状态变化左右跳动。行首不需要像旧的 .h-dot 那样在
    hover 时隐藏:.h-actions 是绝对定位在行的右端的,盖不到这里。 */
-.history-item .h-state {
+:is(.history-item, .rail-recent-item) .h-state {
   flex-shrink: 0;
   width: 12px; height: 12px;
   border-radius: 50%;
@@ -668,7 +676,7 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 }
 /* 双层观感照搬 macOS 的 WebStateDot:10% 透明外圈 + 实心内点,
    让小圆点在浅色和深色主题下都有足够的存在感。 */
-.history-item .h-state:not(.h-state-idle)::after {
+:is(.history-item, .rail-recent-item) .h-state:not(.h-state-idle)::after {
   content: "";
   position: absolute; inset: 3px;
   border-radius: 50%;
@@ -677,32 +685,32 @@ body.shortcut-hints-visible .hist-shortcut-hint + .h-when { display: none; }
 /* 正在执行:脉冲蓝点。用 --link 而不是 --accent —— 后者在两个主题里分别是
    近黑/近白的单色文字色,点出来看不出"在忙"。--link 是两个主题各自调过的蓝,
    正对应 macOS WebStateDot 的 systemBlue。与 .subagent-dot.running 共用 pulse。 */
-.history-item .h-state-ongoing {
+:is(.history-item, .rail-recent-item) .h-state-ongoing {
   color: var(--link);
   background: color-mix(in srgb, currentColor 12%, transparent);
   animation: pulse 1.2s infinite;
 }
 /* 执行完未读:绿点,不动画 —— 它报的是一个已经结束的事实,不是进行中的活动。 */
-.history-item .h-state-done {
+:is(.history-item, .rail-recent-item) .h-state-done {
   color: var(--ok);
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
 /* 失败未读:红点。 */
-.history-item .h-state-error {
+:is(.history-item, .rail-recent-item) .h-state-error {
   color: var(--danger);
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
 /* 空闲行:只占位,不画任何东西。 */
-.history-item .h-state-idle { background: none; }
+:is(.history-item, .rail-recent-item) .h-state-idle { background: none; }
 /* 置顶且没有状态要报的行:图钉占住同一个槽位(对齐 Mac 的做法 ——
    行高固定,而"正在跑"比"被置顶"更值得那一个槽位)。 */
-.history-item .h-state-pin {
+:is(.history-item, .rail-recent-item) .h-state-pin {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--text-faint);
 }
-.history-item .h-state-pin svg { display: block; width: 10px; height: 10px; }
+:is(.history-item, .rail-recent-item) .h-state-pin svg { display: block; width: 10px; height: 10px; }
 .history-item .h-actions {
   position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
   display: none; gap: 2px;

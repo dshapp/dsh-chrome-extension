@@ -11,7 +11,7 @@ import { mountHistoryDrawer } from "./sidepanel-overlays.js";
 import { createSidebarState } from "./sidebar-state.js";
 import { mountSidebarRail } from "./sidebar-rail.js";
 import { mountSidebarResize } from "./sidebar-resize.js";
-import { itemTitle } from "./session-drawer-view.js";
+import { itemTitle, sessionRowDecorHtml } from "./session-drawer-view.js";
 import { mountSettings } from "./settings/settings-root.js";
 import { mountMainSurfaces } from "./main-surfaces.js";
 import { mountAutomationsPage } from "../../features/automations/index.js";
@@ -1486,14 +1486,28 @@ export function createSidepanelApp(root, deps, options = {}) {
     }).map((item) => item.sessionId);
   }
   /// 图标栏「最近会话」:同列表的过滤口径(不含归档 / 子代理 / 空白行),按更新时间新到旧。
+  /// 每行带上与抽屉行同一套的行首状态灯与行尾徽章/时间(sessionRowDecorHtml)。
   function recentSessions(limit) {
+    const decorCtx = {
+      listStore: deps.sessions.listStore,
+      pinnedStore: deps.pinnedStore ?? null,
+      activeSessionId: state.sessionId ?? null
+    };
     return visibleSessions(deps.sessions.listStore.get(), {
       archivedIds: deps.sessions?.archivedSessionIds?.() ?? deps.workspaces?.archivedSessionIds ?? [],
       activeSessionId: null
     })
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
       .slice(0, limit)
-      .map((item) => ({ id: item.sessionId, title: itemTitle(item) }));
+      .map((item) => {
+        const decor = sessionRowDecorHtml(item, decorCtx);
+        return {
+          id: item.sessionId,
+          title: itemTitle(item),
+          leadingHtml: decor.leading,
+          trailingHtml: decor.trailing
+        };
+      });
   }
   function stepSession(delta) {
     const list = sidebarOrderIds();
@@ -1903,6 +1917,9 @@ export function createSidepanelApp(root, deps, options = {}) {
       onPick: (sessionId) => { void openSession(sessionId); },
       shortcutLabels
     });
+    // 弹层开着时跟着会话状态(运行 / 徽章 / 置顶)就地重画;关着时 refreshRecents 自己跳过。
+    deps.sessions?.listStore?.subscribe?.(() => sidebarRail?.refreshRecents());
+    deps.pinnedStore?.subscribe?.(() => sidebarRail?.refreshRecents());
     // 设置页需要 showToast 报告写失败,而 deps 是纯组装层拿不到它 —— 就地补一个。
     settingsView = mountSettings(
       // 语言切换要重画整个界面(静态标签 + 各 pane),所以把 app 的 relabel 交给设置页。
