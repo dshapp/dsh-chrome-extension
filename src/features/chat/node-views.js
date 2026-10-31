@@ -736,16 +736,22 @@ function syncBreathePhase(el) {
   el.style.setProperty("--breathe-delay", `${-(now % BREATHE_PERIOD_MS)}ms`);
 }
 
-/// 思考块:对齐 Mac 的 ThinkRow —— 图标 + 思考文本的**第一行**作摘要,单行截断;
-/// 完整全文仍只在详情弹窗里(无流式预览,思考就是一张和工具行同构的普通卡行)。
+/// 思考块:对齐 web ReasoningRow —— 图标 + "思考" 标题,有摘要时再接 "· 摘要";
+/// 完整全文仍只在详情弹窗里(思考就是一张和工具行同构的普通卡行)。
 function createReasoningBlock() {
   const wrap = el("div", "thinking-bubble");
   const header = el("button", "thinking-header");
   header.type = "button";
   const thinkingIcon = el("span", "thinking-icon");
   thinkingIcon.append(lucideIcon("brain", { size: 13 }));
-  header.append(thinkingIcon, el("span", "thinking-title", ""));
-  // 可读名称 = "思考过程" + 摘要,与 Mac 的 accessibilityRowLabel 一致。
+  // 标题 + 分隔点 + 摘要同属一个 label:思考中整段一起扫光(web TextShimmer 包住
+  // title 与 collapsedContent,图标不在其内)。
+  const label = el("span", "thinking-label");
+  const sep = el("span", "thinking-sep");
+  sep.setAttribute("aria-hidden", "true");
+  label.append(el("span", "thinking-name", t("thinking.row")), sep, el("span", "thinking-title", ""));
+  header.append(thinkingIcon, label);
+  // 可读名称 = "思考" + 摘要。
   header.addEventListener("click", () => openChunkedTextDetail({
     title: t("thinking"), text: wrap.__text ?? "", className: "thinking-body"
   }));
@@ -753,39 +759,49 @@ function createReasoningBlock() {
   return wrap;
 }
 
-/// running:思考中的块与运行中的工具行同一呼吸态,摘要随段落前进、尾部渐隐不加省略号。
+/// running:思考中标题整段扫光(web TextShimmer),摘要随段落轮动、尾部渐隐不加省略号。
+/// 摘要为空时只显示 "思考",分隔点与摘要一并隐藏(web data-preview)。
 function updateReasoningBlock(wrap, text, running) {
   wrap.__text = text;
   wrap.classList.toggle("running", running);
-  if (running) syncBreathePhase(wrap);
   const summary = thinkingSummary(text, running);
-  wrap.querySelector(".thinking-title").textContent = summary;
-  wrap.querySelector(".thinking-header").setAttribute("aria-label", [t("thinking"), summary].filter(Boolean).join(" "));
+  wrap.classList.toggle("has-preview", summary !== "");
+  const title = wrap.querySelector(".thinking-title");
+  if (title.textContent !== summary) title.textContent = summary;
+  wrap.querySelector(".thinking-header").setAttribute("aria-label", [t("thinking.row"), summary].filter(Boolean).join(" "));
 }
 
-/// 对齐 web ReasoningRow / Mac ThinkRow.summary:结束后取第一行非空白内容;
-/// 思考中取最新一段已写完的首行,还没有就退回正在写的第一行。
-/// 整段都是空白时返回空串,行退化为只有图标(标签兜底交给 aria)。
-function thinkingSummary(text, running) {
+/// 逐字对齐 web ReasoningRow:思考中取最新一段**首行已写完**的段落首行
+/// (每写完一段的首行就轮换一次,还没有就为空、只显示标题);
+/// 结束后取全文第一行。最后剥掉 markdown 粗体标记(replaceAll('**','')),
+/// 摘要行不解析 markdown,留着 ** 只会露出标记本身。
+export function thinkingSummary(text, running) {
   const value = String(text ?? "");
-  const line = (running ? latestParagraphLead(value) : null)
-    ?? value.split("\n").map((l) => l.trim()).find(Boolean);
-  // 剥掉 markdown 粗体标记(web ReasoningRow 的 replaceAll('**','')):
-  // 摘要行不解析 markdown,留着 ** 只会露出标记本身。
-  return (line ?? "").replace(/\*\*/g, "");
+  return (running ? latestCompletedParagraphFirstLine(value) : firstLine(value)).replace(/\*\*/g, "");
 }
 
-/// 最新一段的首行,且该行后面已出现换行(web latestCompletedParagraphFirstLine)。
-/// 段落以空白行分隔;最后一片是仍在写的行,不计入。
-function latestParagraphLead(text) {
-  let lead = null;
-  let paragraphStart = true;
-  for (const line of text.split("\n").slice(0, -1)) {
-    const trimmed = line.trim();
-    if (!trimmed) paragraphStart = true;
-    else if (paragraphStart) { lead = trimmed; paragraphStart = false; }
+function firstLine(text) {
+  const newline = text.indexOf("\n");
+  return newline === -1 ? text : text.slice(0, newline);
+}
+
+/// web latestCompletedParagraphFirstLine:段落以(可含空白的)空行分隔;某段首行后
+/// 已出现换行才算写完,取其 trim 后的内容;最新一个写完的非空首行胜出。
+function latestCompletedParagraphFirstLine(text) {
+  let summary = "";
+  let paragraphStart = 0;
+  const separator = /\r?\n(?:[\t ]*\r?\n)+/g;
+  while (true) {
+    const nextParagraph = separator.exec(text);
+    const paragraphEnd = nextParagraph === null ? text.length : nextParagraph.index + nextParagraph[0].indexOf("\n");
+    const newline = text.indexOf("\n", paragraphStart);
+    if (newline !== -1 && newline <= paragraphEnd) {
+      const candidate = text.slice(paragraphStart, newline).trim();
+      if (candidate !== "") summary = candidate;
+    }
+    if (nextParagraph === null) return summary;
+    paragraphStart = nextParagraph.index + nextParagraph[0].length;
   }
-  return lead;
 }
 
 // ---------- 工具行 ----------
