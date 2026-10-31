@@ -979,6 +979,25 @@
 #perm-confirm .toggle-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
 
+/* 通用二次确认(confirm-dialog.js,如归档会话)。外观与 #perm-confirm 一致;
+   它懒建在会话抽屉里,但 showModal 进 top layer,不受抽屉 transform 影响。 */
+dialog.confirm-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-xl);
+  background: var(--bg-input); color: var(--text);
+  padding: 1rem; inline-size: min(22rem, 90vw);
+  box-shadow: var(--shadow-pop);
+}
+dialog.confirm-dialog::backdrop { background: rgba(0,0,0,0.4); }
+.confirm-dialog-title { font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.5rem; }
+.confirm-dialog-body {
+  font-size: 0.8125rem; color: var(--text-dim); line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.confirm-dialog .dialog-actions { margin-top: 0.875rem; }
+
 
 /* ══ 新增:会话停靠区(目标条 / 待办 / 上下文与统计)══ */
 

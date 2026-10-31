@@ -1206,12 +1206,13 @@ export function createSidepanelApp(root, deps, options = {}) {
   /// 注意 options 必须防御非对象:这个函数直接当过 click 监听器,
   /// 那时传进来的是 MouseEvent。
   /// draft:预填到新会话输入框的文字,打开后聚焦并把光标放在末尾(自动化页「新建」用)。
+  /// keepDrawer:不收起会话抽屉(在抽屉里归档当前会话后接替进新会话时用)。
   async function newSession(options) {
+    const { _retried = false, agentPreset = null, draft = "", keepDrawer = false } = (options && typeof options === "object" && !("target" in options))
+      ? options : {};
     mainSurfaces?.close();
     settingsView?.close();
-    historyDrawer?.hide?.();
-    const { _retried = false, agentPreset = null, draft = "" } = (options && typeof options === "object" && !("target" in options))
-      ? options : {};
+    if (!keepDrawer) historyDrawer?.hide?.();
     const workspace = workspaceMenu?.selected() ?? await prepareDefaultWorkspace();
     // agentPreset 只在"用创造模式创作"那条路径上传:宿主在 create 时就按它组装
     // agent,比先建再 select 少一次重建(select 是斜杠命令,会重启一次 agent)。
@@ -1226,7 +1227,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     try {
       const sessionId = await deps.sessions.create(input);
       setDraft(sessionId, draft);
-      const opened = await openSession(sessionId, { fresh: true, _retried });
+      const opened = await openSession(sessionId, { fresh: true, _retried, keepDrawer });
       if (draft && opened === sessionId) {
         elements.input.focus();
         elements.input.setSelectionRange(draft.length, draft.length);
@@ -1271,10 +1272,10 @@ export function createSidepanelApp(root, deps, options = {}) {
   // 会话打开竞态令牌:快速切换时迟到的历史加载不得覆盖新会话。
   let openSessionToken = 0;
 
-  async function openSession(sessionId, { fresh = false, _retried = false } = {}) {
+  async function openSession(sessionId, { fresh = false, _retried = false, keepDrawer = false } = {}) {
     mainSurfaces?.close();
     settingsView?.close();
-    historyDrawer?.hide?.();
+    if (!keepDrawer) historyDrawer?.hide?.();
     const token = ++openSessionToken;
     // 离开当前会话前存草稿。
     setDraft(state.sessionId, elements.input.value);
@@ -1320,7 +1321,7 @@ export function createSidepanelApp(root, deps, options = {}) {
     } catch (error) {
       if (!_retried && isSessionUnopenable(error)) {
         showToast(format(error));
-        return newSession({ _retried: true });
+        return newSession({ _retried: true, keepDrawer });
       }
       showToast(format(error));
       // service.open 失败时它仍停在之前的会话；UI 若继续保留目标 id，后续旧

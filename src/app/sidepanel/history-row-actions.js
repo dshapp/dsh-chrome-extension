@@ -11,9 +11,10 @@ import { t } from "../../shared/i18n.js";
  * @param {object} options.sessions 会话服务(fork / rename / archive / unarchive)。
  * @param {object|null} options.pinnedStore 置顶账本。
  * @param {() => string|null} options.activeSessionId 当前会话。
+ * @param {{confirm: Function}|null} [options.confirmDialog] 确认框(./confirm-dialog.js);缺省退回 window.confirm。
  * @param {object} options.hooks hide / openSession / newSession / refresh / paint / showToast / formatErrorDetails。
  */
-export function createHistoryRowActions({ list, sessions, pinnedStore, activeSessionId, hooks }) {
+export function createHistoryRowActions({ list, sessions, pinnedStore, activeSessionId, confirmDialog = null, hooks }) {
   const { hide, openSession, newSession, refresh, paint, showToast, formatErrorDetails } = hooks;
   // 正在跑 fork/rename/archive 的会话 id:同一行的操作按钮在往返期间禁用。
   const rowBusy = new Set();
@@ -51,17 +52,18 @@ export function createHistoryRowActions({ list, sessions, pinnedStore, activeSes
         }
         paint();
       } else if (action === "archive") {
+        // 行尾的归档按钮紧挨着置顶/分叉/重命名,很容易误点:先弹窗确认。
+        if (!await confirmArchive(row)) return;
         // 归档不是删除:宿主保留日志,只是从活动列表移出。
         const archived = await sessions.archive(sessionId, { confirmStop: confirmArchiveActive });
         if (archived === null) return;
         if (sessionId === activeSessionId()) {
           // 当前转录已经不属于活动列表；继续停在这里会留下一个标题仍选中、
-          // 但列表里找不到的幽灵会话。与 Mac 一致，归档当前项后进入新会话。
-          hide();
-          await newSession();
-        } else {
-          refresh();
+          // 但列表里找不到的幽灵会话。与 Mac 一致，归档当前项后进入新会话 ——
+          // 但抽屉留着:用户只是把一行移走,列表本身不该跟着收起。
+          await newSession({ keepDrawer: true });
         }
+        refresh();
       }
     } catch (error) {
       // 与全局一致用 toast:alert 会阻塞 UI 线程,且和应用其余部分的报错风格不符。
@@ -73,9 +75,28 @@ export function createHistoryRowActions({ list, sessions, pinnedStore, activeSes
     }
   }
 
+  /// 归档前的防误触确认。
+  function confirmArchive(row) {
+    const title = row.querySelector(".h-title")?.textContent?.trim() || t("new_session");
+    return ask({
+      title: t("session.archiveConfirmTitle"),
+      body: t("session.archiveConfirmBody", { title }),
+      confirmLabel: t("session.archiveConfirmAction")
+    });
+  }
+
   /// 归档一个还在跑的会话前的确认(0.1.7 workspace/session-active)。
   function confirmArchiveActive() {
-    return Promise.resolve(window.confirm(t("session.archiveActiveConfirm")));
+    return ask({
+      title: t("session.archiveActiveTitle"),
+      body: t("session.archiveActiveConfirm"),
+      confirmLabel: t("session.archiveActiveAction")
+    });
+  }
+
+  function ask({ title, body, confirmLabel }) {
+    if (!confirmDialog) return Promise.resolve(window.confirm(`${title}\n${body}`));
+    return confirmDialog.confirm({ title, body, confirmLabel, cancelLabel: t("session.archiveCancel") });
   }
 
   /// 整行的操作按钮统一进入/退出在途态。

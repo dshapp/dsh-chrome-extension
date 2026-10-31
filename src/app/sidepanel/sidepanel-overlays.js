@@ -15,6 +15,7 @@ import { renderSections, renderResultRows, renderLoading, SECTION_HEAD_ID } from
 import { mountHistoryViewOptions } from "./history-view-options.js";
 import { createRepaintHold } from "../../features/sessions/history-repaint-hold.js";
 import { createHistoryRowActions } from "./history-row-actions.js";
+import { createConfirmDialog } from "./confirm-dialog.js";
 import { mountHeaderTitleEdit } from "./header-title-edit.js";
 
 export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels = null, {
@@ -51,6 +52,9 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   let revealPending = false;
   // 按住 / 拖拽期间不重画,原因见 history-repaint-hold.js。
   const hold = createRepaintHold(list, (options) => { if (isOpen()) paint(options); });
+  // 行操作的二次确认(归档)。挂在抽屉里:点弹窗按钮/backdrop 时事件路径仍在抽屉内,
+  // 不会触发下面「点抽屉外就收起」。
+  const confirmDialog = createConfirmDialog(() => drawer);
 
   function isOpen() { return drawer.classList.contains("open"); }
 
@@ -81,6 +85,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
 
   function hide({ restoreFocus = false } = {}) {
     if (!isOpen()) return;
+    // 抽屉被别的路径收起(快捷键、打开别的页面)时,悬着的确认按取消结算。
+    confirmDialog.cancel();
     drawer.classList.remove("open");
     scrim.classList.remove("open");
     document.body.classList.remove("session-drawer-open");
@@ -261,7 +267,7 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   });
 
   const rowActions = createHistoryRowActions({
-    list, sessions: deps.sessions, pinnedStore, activeSessionId: () => activeSessionId,
+    list, sessions: deps.sessions, pinnedStore, activeSessionId: () => activeSessionId, confirmDialog,
     hooks: { hide, openSession, newSession, refresh, paint, showToast, formatErrorDetails: deps.formatErrorDetails }
   });
 
@@ -312,6 +318,8 @@ export function mountHistoryDrawer(deps, openSession, newSession, shortcutLabels
   /// 供搜索框与全局快捷键复用。返回 true 表示按键已被消费。
   function handleKeyDown(event) {
     if (!isOpen()) return false;
+    // 确认框开着:方向键/回车/Esc 归它(Esc 由 <dialog> 原生取消),列表不抢。
+    if (confirmDialog.isOpen()) return false;
     // 输入法组字确认候选时也会派发 Enter/上下键:那是选字,不是操作列表。
     if (event.isComposing) return false;
     switch (event.key) {
